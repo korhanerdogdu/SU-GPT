@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+myenv/
+env/
+
+# Backend secrets and runtime data
+server/.env
+server/uploaded_pdfs/
+server/uploaded_documents/
+server/chroma_store/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.local
+frontend/.env.*.local
+
+# Logs
+*.log
+
+# Local project notes / generated summaries
+codebase_tech_stack_summary.txt
+llm_message_flow.txt
+prompt_vs_messages_explanation.txt
+summary.txt
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json

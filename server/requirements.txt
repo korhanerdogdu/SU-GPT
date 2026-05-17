@@ -1,0 +1,45 @@
+# Web Framework
+fastapi
+uvicorn[standard]
+python-multipart
+
+# LangChain & Ecosystem
+langchain
+langchain-chroma
+langchain-community
+langchain-core
+langchain-classic
+langchain-groq
+langchain-huggingface
+langchain-text-splitters
+
+# Vectorstore
+chromadb
+
+# Embeddings
+sentence-transformers
+
+# Document Parsing
+PyPDF  # backend for PyPDFLoader via langchain_community
+python-pptx  # PPTX slide extraction (Section 2)
+python-docx  # DOCX paragraph extraction (Section 2)
+
+# Environment Variables
+python-dotenv
+
+# Typing & Utilities
+pydantic
+requests
+
+# Logging (optional but recommended)
+loguru
+
+# File Uploads
+aiofiles
+
+# Process
+tqdm
+
+
+
+# pip install -r requirements.txt
