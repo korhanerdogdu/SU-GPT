@@ -10,10 +10,12 @@ myenv/
 env/
 
 # Backend secrets and runtime data
+.env
 server/.env
 server/uploaded_pdfs/
 server/uploaded_documents/
 server/chroma_store/
+sources/
 
 # Frontend
 frontend/node_modules/

@@ -82,6 +82,7 @@ def _records_to_chunks(records: list[dict]) -> tuple[list[Document], list[str]]:
 
         for index, piece in enumerate(splitter.split_text(cleaned)):
             metadata = {
+                **base_metadata,
                 "source": base_metadata.get("source"),
                 "file_name": base_metadata.get("source"),  # back-compat alias
                 "document_type": base_metadata.get("document_type"),

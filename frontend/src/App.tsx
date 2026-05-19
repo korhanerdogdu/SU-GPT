@@ -1,7 +1,6 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { useAuth } from "./contexts/AuthContext";
 import LoginPage from "./pages/LoginPage";
-import SignupPage from "./pages/SignupPage";
 import ChatPage from "./pages/ChatPage";
 
 function RequireAuth({ children }: { children: JSX.Element }) {
@@ -27,14 +26,7 @@ export default function App() {
           </RedirectIfAuthed>
         }
       />
-      <Route
-        path="/signup"
-        element={
-          <RedirectIfAuthed>
-            <SignupPage />
-          </RedirectIfAuthed>
-        }
-      />
+      <Route path="/signup" element={<Navigate to="/login" replace />} />
       <Route
         path="/"
         element={

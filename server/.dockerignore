@@ -1,0 +1,9 @@
+.venv
+myenv
+venv
+__pycache__
+*.pyc
+chroma_store
+uploaded_documents
+uploaded_pdfs
+.env

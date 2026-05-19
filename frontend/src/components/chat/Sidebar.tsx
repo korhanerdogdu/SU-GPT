@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { SUPPORTED_EXTENSIONS, uploadDocuments } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
+import CourseSelector from "./CourseSelector";
 
 function formatSize(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
@@ -149,6 +150,8 @@ export default function Sidebar() {
             <>Upload to SU-GPT</>
           )}
         </Button>
+
+        <CourseSelector />
       </div>
 
       {/* User / logout */}

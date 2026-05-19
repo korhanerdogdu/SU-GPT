@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { login } from "@/lib/api";
 
 interface AuthUser {
   username: string;
@@ -8,7 +9,7 @@ interface AuthUser {
 interface AuthContextValue {
   user: AuthUser | null;
   isAuthenticated: boolean;
-  signIn: (username: string) => void;
+  signIn: (username: string, password: string) => Promise<void>;
   signUp: (username: string, email: string) => void;
   signOut: () => void;
 }
@@ -38,7 +39,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const value: AuthContextValue = {
     user,
     isAuthenticated: !!user,
-    signIn: (username) => persist({ username }),
+    signIn: async (username, password) => {
+      const result = await login(username, password);
+      persist({ username: result.username });
+    },
     signUp: (username, email) => persist({ username, email }),
     signOut: () => persist(null),
   };

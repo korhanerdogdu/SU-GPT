@@ -15,13 +15,24 @@ Each loader returns a list of normalized records:
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, Callable
 
 from langchain_community.document_loaders import PyPDFLoader
 
 
-SUPPORTED_EXTENSIONS = {".pdf", ".pptx", ".docx", ".md", ".txt"}
+SUPPORTED_EXTENSIONS = {
+    ".pdf",
+    ".pptx",
+    ".docx",
+    ".md",
+    ".txt",
+    ".html",
+    ".htm",
+    ".ipynb",
+    ".json",
+}
 
 
 def _record(text: str, source: str, document_type: str, **extra: Any) -> dict:
@@ -156,12 +167,133 @@ def load_txt(file_path: str) -> list[dict]:
     return [_record(text, source, "txt")]
 
 
+def load_html(file_path: str) -> list[dict]:
+    from bs4 import BeautifulSoup  # imported lazily
+
+    source = Path(file_path).name
+    raw = _read_text_file(file_path)
+    soup = BeautifulSoup(raw, "html.parser")
+    for tag in soup(["script", "style", "noscript"]):
+        tag.decompose()
+
+    records: list[dict] = []
+    current_section: str | None = None
+    buffer: list[str] = []
+
+    def flush() -> None:
+        if not buffer:
+            return
+        text = "\n".join(buffer).strip()
+        if text:
+            records.append(_record(text, source, "html", section=current_section))
+        buffer.clear()
+
+    for node in soup.find_all(["h1", "h2", "h3", "h4", "p", "li", "pre", "code"]):
+        text = node.get_text(" ", strip=True)
+        if not text:
+            continue
+        if node.name in {"h1", "h2", "h3", "h4"}:
+            flush()
+            current_section = text
+        else:
+            buffer.append(text)
+    flush()
+
+    if not records:
+        text = soup.get_text("\n", strip=True)
+        if text:
+            records.append(_record(text, source, "html"))
+    return records
+
+
+def load_ipynb(file_path: str) -> list[dict]:
+    source = Path(file_path).name
+    notebook = json.loads(_read_text_file(file_path))
+    records: list[dict] = []
+    current_section: str | None = None
+    buffer: list[str] = []
+
+    def cell_source(cell: dict[str, Any]) -> str:
+        raw = cell.get("source", "")
+        if isinstance(raw, list):
+            return "".join(str(part) for part in raw).strip()
+        return str(raw).strip()
+
+    def flush() -> None:
+        if not buffer:
+            return
+        text = "\n\n".join(buffer).strip()
+        if text:
+            records.append(_record(text, source, "ipynb", section=current_section))
+        buffer.clear()
+
+    for cell in notebook.get("cells", []):
+        if not isinstance(cell, dict):
+            continue
+        text = cell_source(cell)
+        if not text:
+            continue
+        cell_type = cell.get("cell_type", "cell")
+        first_line = text.splitlines()[0].strip()
+        if cell_type == "markdown" and first_line.startswith("#"):
+            flush()
+            current_section = first_line.lstrip("#").strip() or current_section
+            remaining = "\n".join(text.splitlines()[1:]).strip()
+            if remaining:
+                buffer.append(remaining)
+        else:
+            prefix = "Code example" if cell_type == "code" else "Notebook note"
+            buffer.append(f"{prefix}:\n{text}")
+    flush()
+
+    if not records:
+        text = "\n\n".join(
+            cell_source(cell)
+            for cell in notebook.get("cells", [])
+            if isinstance(cell, dict)
+        ).strip()
+        if text:
+            records.append(_record(text, source, "ipynb"))
+    return records
+
+
+def load_json(file_path: str) -> list[dict]:
+    source = Path(file_path).name
+    data = json.loads(_read_text_file(file_path))
+    records: list[dict] = []
+
+    if isinstance(data, list):
+        group_size = 25
+        for start in range(0, len(data), group_size):
+            group = data[start : start + group_size]
+            text = json.dumps(group, ensure_ascii=False, indent=2)
+            records.append(
+                _record(
+                    text,
+                    source,
+                    "json",
+                    section=f"items {start + 1}-{start + len(group)}",
+                )
+            )
+    elif isinstance(data, dict):
+        for key, value in data.items():
+            text = json.dumps(value, ensure_ascii=False, indent=2)
+            records.append(_record(text, source, "json", section=str(key)))
+    else:
+        records.append(_record(json.dumps(data, ensure_ascii=False, indent=2), source, "json"))
+    return records
+
+
 _LOADERS: dict[str, Callable[[str], list[dict]]] = {
     ".pdf": load_pdf,
     ".pptx": load_pptx,
     ".docx": load_docx,
     ".md": load_markdown,
     ".txt": load_txt,
+    ".html": load_html,
+    ".htm": load_html,
+    ".ipynb": load_ipynb,
+    ".json": load_json,
 }
 
 

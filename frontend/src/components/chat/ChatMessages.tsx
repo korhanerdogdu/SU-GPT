@@ -1,5 +1,7 @@
 import { useEffect, useRef } from "react";
 import { Loader2, Sparkles } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 export interface Message {
   id: string;
@@ -57,8 +59,10 @@ function MessageBubble({ message }: { message: Message }) {
             <Loader2 className="h-4 w-4 animate-spin" />
             <span>SU-GPT is thinking…</span>
           </div>
-        ) : (
+        ) : isUser ? (
           <div className="whitespace-pre-wrap">{message.content}</div>
+        ) : (
+          <MarkdownMessage content={message.content} />
         )}
 
         {!message.pending && message.sources && message.sources.length > 0 && (
@@ -81,6 +85,37 @@ function MessageBubble({ message }: { message: Message }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function MarkdownMessage({ content }: { content: string }) {
+  return (
+    <div className="space-y-2">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          p: ({ children }) => <p className="leading-relaxed">{children}</p>,
+          strong: ({ children }) => (
+            <strong className="font-semibold text-foreground">{children}</strong>
+          ),
+          ul: ({ children }) => (
+            <ul className="ml-5 list-disc space-y-1">{children}</ul>
+          ),
+          ol: ({ children }) => (
+            <ol className="ml-5 list-decimal space-y-1">{children}</ol>
+          ),
+          li: ({ children }) => <li className="pl-1">{children}</li>,
+          hr: () => <div className="my-3 border-t border-border/70" />,
+          code: ({ children }) => (
+            <code className="rounded bg-background/70 px-1.5 py-0.5 text-[0.85em] text-primary">
+              {children}
+            </code>
+          ),
+        }}
+      >
+        {content}
+      </ReactMarkdown>
     </div>
   );
 }

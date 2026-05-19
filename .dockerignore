@@ -1,0 +1,10 @@
+.git
+server/.venv
+server/myenv
+server/chroma_store
+server/uploaded_documents
+server/uploaded_pdfs
+frontend/node_modules
+frontend/dist
+*.log
+.DS_Store

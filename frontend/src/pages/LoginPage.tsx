@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { Eye, EyeOff, Lock, User } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -13,15 +13,23 @@ export default function LoginPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
-  function handleSubmit(e: FormEvent) {
+  async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (!username.trim() || !password.trim()) {
       toast.error("Please enter both a username and a password.");
       return;
     }
-    signIn(username.trim());
-    navigate("/", { replace: true });
+    setSubmitting(true);
+    try {
+      await signIn(username.trim(), password);
+      navigate("/", { replace: true });
+    } catch {
+      toast.error("Invalid credentials. Use admin / admin for this demo.");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -54,7 +62,7 @@ export default function LoginPage() {
                 <Input
                   id="username"
                   autoComplete="username"
-                  placeholder="Enter your username"
+                  placeholder="admin"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   className="pl-9"
@@ -70,7 +78,7 @@ export default function LoginPage() {
                   id="password"
                   type={showPassword ? "text" : "password"}
                   autoComplete="current-password"
-                  placeholder="Enter your password"
+                  placeholder="admin"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   className="pl-9 pr-9"
@@ -90,19 +98,13 @@ export default function LoginPage() {
               </div>
             </div>
 
-            <Button type="submit" size="xl" className="w-full">
-              Sign in
+            <Button type="submit" size="xl" className="w-full" disabled={submitting}>
+              {submitting ? "Signing in..." : "Sign in"}
             </Button>
           </form>
 
           <p className="mt-5 text-center text-sm text-muted-foreground">
-            Don't have an account?{" "}
-            <Link
-              to="/signup"
-              className="font-semibold text-foreground hover:underline"
-            >
-              Sign up
-            </Link>
+            Demo credentials: <span className="font-semibold text-foreground">admin / admin</span>
           </p>
 
           <p className="mt-6 text-center text-xs text-muted-foreground/70">

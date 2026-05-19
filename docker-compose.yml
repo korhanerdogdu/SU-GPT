@@ -1,0 +1,49 @@
+services:
+  mongo:
+    image: mongo:7
+    container_name: sugpt-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./server
+    container_name: sugpt-backend
+    env_file:
+      - .env
+    environment:
+      MONGO_URI: mongodb://mongo:27017
+      CHROMA_PERSIST_DIR: /app/chroma_store
+      SOURCES_DIR: /app/sources
+      CATALOG_DATA_DIR: /app/data
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./server/chroma_store:/app/chroma_store
+      - ./server/uploaded_documents:/app/uploaded_documents
+      - ${SOURCES_DIR_HOST:-./sources}:/app/sources:ro
+      - ${CATALOG_DATA_DIR_HOST:-./data}:/app/data:ro
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: sugpt-frontend
+    environment:
+      VITE_API_URL: ${VITE_API_URL:-http://127.0.0.1:8000}
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+
+volumes:
+  mongo_data:

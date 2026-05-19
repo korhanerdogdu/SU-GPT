@@ -16,6 +16,10 @@ langchain-text-splitters
 # Vectorstore
 chromadb
 
+# Database
+motor
+pymongo
+
 # Embeddings
 sentence-transformers
 
@@ -23,6 +27,7 @@ sentence-transformers
 PyPDF  # backend for PyPDFLoader via langchain_community
 python-pptx  # PPTX slide extraction (Section 2)
 python-docx  # DOCX paragraph extraction (Section 2)
+beautifulsoup4  # HTML source material extraction
 
 # Environment Variables
 python-dotenv
@@ -30,6 +35,9 @@ python-dotenv
 # Typing & Utilities
 pydantic
 requests
+pandas
+scikit-learn
+joblib
 
 # Logging (optional but recommended)
 loguru
