@@ -13,6 +13,7 @@ from langchain_huggingface import HuggingFaceEmbeddings
 
 from modules.catalog_data_loader import iter_catalog_documents
 from modules.config import CHROMA_COLLECTION_NAME, CHROMA_PERSIST_DIR, EMBEDDING_MODEL_NAME
+from modules.load_vectorstore import upsert_documents
 
 
 def parse_args() -> argparse.Namespace:
@@ -86,7 +87,7 @@ def main() -> None:
         if not batch:
             return
         if vectorstore is not None:
-            vectorstore.add_documents(documents=batch, ids=ids)
+            upsert_documents(vectorstore, batch, ids)
         batch.clear()
         ids.clear()
 

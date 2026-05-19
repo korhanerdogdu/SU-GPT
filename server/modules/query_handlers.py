@@ -20,15 +20,22 @@ def query_chain(chain, user_input: str):
         logger.debug(f"Running chain for input: {user_input}")
         result = chain({"query": user_input})
         sources = []
+        source_chunk_ids = []
         seen = set()
+        seen_chunks = set()
         for doc in result.get("source_documents", []):
             label = _format_source(doc.metadata)
             if label and label not in seen:
                 sources.append(label)
                 seen.add(label)
+            chunk_id = (doc.metadata or {}).get("chunk_id") or (doc.metadata or {}).get("chunkId")
+            if chunk_id and chunk_id not in seen_chunks:
+                source_chunk_ids.append(chunk_id)
+                seen_chunks.add(chunk_id)
         response = {
             "response": result["result"],
             "sources": sources,
+            "source_chunk_ids": source_chunk_ids,
         }
         logger.debug(f"Chain response: {response}")
         return response

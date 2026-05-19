@@ -1,7 +1,6 @@
 from langchain_classic.chains import RetrievalQA
 from langchain_core.prompts import PromptTemplate
 from langchain_groq import ChatGroq
-from langchain_mistralai import ChatMistralAI
 
 from modules.config import (
     GROQ_API_KEY,
@@ -15,6 +14,8 @@ from modules.config import (
 
 def _build_llm():
     if LLM_PROVIDER == "mistral":
+        from langchain_mistralai import ChatMistralAI
+
         return ChatMistralAI(
             api_key=require_env("MISTRAL_API_KEY", MISTRAL_API_KEY),
             model=MISTRAL_MODEL_NAME,
@@ -49,6 +50,8 @@ MOD SEÇİMİ
 - Cevap modunu yalnızca User Question metnine göre seç. RAG Context veya MongoDB profile içinde mezuniyet/kredi bilgisi geçmesi, tek başına mezuniyet audit cevabı vermek için sebep değildir.
 - Kullanıcı açıkça mezuniyet, kredi, kalan ders, degree evaluation, audit, kategori dağılımı veya "hangi derslerim sayıldı" gibi bir şey sorarsa SADECE mezuniyet audit cevabı ver.
 - Kullanıcı "hangi dersleri alayım", "ders öner", "gelecek dönem", "program öner", "NLP", "Web", "Data", "kolay/zor ders", "schedule" gibi ders seçimi/öneri niyeti gösterirse MEZUNİYET AUDIT YAPMA. Bu durumda MongoDB geçmişini sadece alınmış dersleri elemek ve kişiselleştirmek için kullan.
+- Intent "review" ise sadece öğrenci/hoca yorum kaynaklarından gelen eğilimleri özetle; resmi bilgi gibi kesin hüküm kurma.
+- Intent "exam" ise sadece sınav/PDF kaynaklarında geçen soru, konu ve formatları kullan; kaynakta yoksa açıkça yok de.
 - Kullanıcı sadece kısa bir ilgi alanı yazarsa, örn. "NLP", "Web", "Data", bunu ders öneri modu için ilgi alanı cevabı kabul et; mezuniyet durumu anlatma.
 - Audit cevabında ASLA "Ders Önerileri", "Çalışma Tavsiyeleri" veya yeni ders listesi ekleme. Kullanıcı açıkça ders programı/öneri isterse ancak o zaman öneri moduna geç.
 - Kullanıcı sadece mezuniyet/kredi durumunu sorduyse çalışma tavsiyesi verme.

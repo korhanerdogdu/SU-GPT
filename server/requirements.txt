@@ -11,6 +11,7 @@ langchain-core
 langchain-classic
 langchain-groq
 langchain-huggingface
+langchain-mistralai
 langchain-text-splitters
 
 # Vectorstore

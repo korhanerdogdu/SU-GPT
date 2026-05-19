@@ -1,0 +1,8 @@
+{
+  "scripts": {
+    "ingest:all": "bash server/scripts/run_python.sh server/scripts/bulk_ingest.py --target all",
+    "ingest:courses": "bash server/scripts/run_python.sh server/scripts/bulk_ingest.py --target courses",
+    "ingest:reviews": "bash server/scripts/run_python.sh server/scripts/bulk_ingest.py --target reviews",
+    "ingest:exams": "bash server/scripts/run_python.sh server/scripts/bulk_ingest.py --target exams"
+  }
+}

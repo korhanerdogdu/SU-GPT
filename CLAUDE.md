@@ -50,6 +50,218 @@ You are working inside an existing project, not starting from scratch. The proje
 - Stable chunk IDs with rich metadata (source, document_type, page, slide, section, chunk_id)
 - Environment variable configuration through `server/modules/config.py`
 
+## Production RAG Architecture Update (2026-05-20)
+
+This section records the new production-ready RAG backbone without deleting the older course-section roadmap below. Some older checklist items still describe the pre-production architecture; treat this update as the current implemented state for MongoDB/Chroma/ingestion/router behavior.
+
+### Implemented Production Backbone
+
+- MongoDB is now the source of truth for durable application data.
+- ChromaDB is now a reproducible vector index, not the canonical data store.
+- The active Chroma collection name is `su_knowledge`.
+- Data type separation is done through Chroma metadata field `documentType`, not multiple Chroma collections.
+- `documentType` values are:
+  - `course`
+  - `review`
+  - `exam`
+- Raw uploaded files currently live under local `DOCUMENT_STORAGE_DIR`, but every source document stores a `storageKey` so this can be moved to MinIO/S3 later without changing the ingestion/RAG contract.
+- Upload, bulk ingest, PDF/exam ingest, and WhatsApp review ingest now share the same deterministic ingestion path as much as possible.
+- `/ask/` now uses an intent-aware RAG router before vector search.
+- API responses now include `source_chunk_ids` in addition to human-readable `sources`.
+
+### New/Updated Backend Files
+
+- `server/modules/source_of_truth.py`
+  - Sync MongoDB helpers for `sourceDocuments`, `ingestionJobs`, `uploadBatches`, `instructorReviews`, `exams`, and `embeddingCache`.
+  - Deterministic helpers for `contentHash`, `sourceId`, and `embeddingCache` key shape.
+- `server/modules/load_vectorstore.py`
+  - Unified file/text ingestion helpers.
+  - Deterministic chunk IDs.
+  - Chroma upsert instead of append-only writes.
+  - `documentType` metadata normalization.
+- `server/modules/rag_router.py`
+  - Routes review/exam/graduation/recommendation/general queries to the correct metadata filter.
+- `server/modules/file_lifecycle.py`
+  - WhatsApp pending upload and approval flow.
+  - Exam/PDF upload flow.
+  - Cascade source deletion across MongoDB, file storage, and ChromaDB.
+- `server/scripts/bulk_ingest.py`
+  - Idempotent CLI for all/course/review/exam ingest.
+- Root `package.json`
+  - Adds `npm run ingest:all`, `npm run ingest:courses`, `npm run ingest:reviews`, and `npm run ingest:exams`.
+
+### MongoDB Source-of-Truth Collections
+
+The following collections are part of the production model:
+
+- `users`
+- `courses`
+- `instructorReviews`
+- `exams`
+- `uploadBatches`
+- `sourceDocuments`
+- `ingestionJobs`
+- `embeddingCache`
+
+Important `sourceDocuments` fields:
+
+```json
+{
+  "sourceId": "exam:9f0f8d1d0b77c0b7a8f2a41b",
+  "type": "exam",
+  "fileName": "CS412-final-2024.pdf",
+  "storageKey": "server/uploaded_documents/exams/9f0f8d1d0b77c0b7-CS412-final-2024.pdf",
+  "contentHash": "9f0f8d1d0b77c0b7a8f2a41b4e...",
+  "status": "indexed",
+  "createdBy": "admin",
+  "chunksCreated": 14
+}
+```
+
+Important `ingestionJobs` fields:
+
+```json
+{
+  "jobId": "exam:9f0f8d1d0b77c0b7a8f2a41b:20260520001340000123",
+  "sourceId": "exam:9f0f8d1d0b77c0b7a8f2a41b",
+  "status": "indexed",
+  "chunksCreated": 14,
+  "error": "",
+  "startedAt": "2026-05-20T00:13:40Z",
+  "finishedAt": "2026-05-20T00:13:48Z"
+}
+```
+
+Embedding cache keys should use:
+
+```text
+provider_model_textHash
+```
+
+Example:
+
+```text
+hf_sentence-transformers/all-MiniLM-L12-v2_2cf24dba5fb0a30e26e83b2ac5b9e29e1b161...
+```
+
+### Deterministic Chunk and Chroma Shape
+
+Chunk IDs use:
+
+```text
+sourceId:chunkIndex:contentHashPrefix
+```
+
+Example deterministic chunk ID:
+
+```text
+review:1e0f3b1c9d4a5e6f7a8b9c0d:3:a7719f2db2e4c19a
+```
+
+Example ChromaDB upsert payload:
+
+```json
+{
+  "collection": "su_knowledge",
+  "id": "review:1e0f3b1c9d4a5e6f7a8b9c0d:3:a7719f2db2e4c19a",
+  "document": "Yücel hoca projelerde zorlayabiliyor ama dersin içeriği faydalı...",
+  "metadata": {
+    "documentType": "review",
+    "document_type": "review",
+    "sourceId": "review:1e0f3b1c9d4a5e6f7a8b9c0d",
+    "contentHash": "a7719f2db2e4c19a7b8f5d7d6c9f0...",
+    "chunk_id": "review:1e0f3b1c9d4a5e6f7a8b9c0d:3:a7719f2db2e4c19a",
+    "chunkIndex": 3,
+    "source": "whatsapp-export.txt",
+    "file_name": "whatsapp-export.txt",
+    "storageKey": "server/uploaded_documents/whatsapp/1e0f3b1c9d4a5e6f-whatsapp-export.txt",
+    "createdBy": "admin",
+    "uploadBatchId": "whatsapp:1e0f3b1c9d4a5e6f7a8b9c0d",
+    "reviewStatus": "approved"
+  }
+}
+```
+
+Course/exam chunks use the same schema and change only `documentType`, source metadata, and file-specific metadata such as page, section, courseCode, year, semester, or examType.
+
+### Unified Ingestion Flow
+
+```text
+source file
+-> sourceDocuments / uploadBatches / ingestionJobs in MongoDB
+-> local file storage via storageKey (MinIO/S3-ready)
+-> normalize
+-> PII clean where needed
+-> chunk
+-> embed
+-> Chroma upsert into su_knowledge
+-> MongoDB status update
+```
+
+Important behavior:
+
+- WhatsApp uploads do not go directly to Chroma.
+- WhatsApp exports first become `uploadBatches.status=pending`.
+- Admin confirmation updates `instructorReviews` and triggers `documentType=review` ingest.
+- Exam/PDF uploads save the file, create/update `sourceDocuments` and `exams`, then ingest as `documentType=exam`.
+- Cascade delete soft-deletes the Mongo source, removes the local stored file, and deletes all Chroma chunks with `where={"sourceId": sourceId}`.
+
+### Intent Detection and Ask Pipeline
+
+The classifier in `server/modules/intent_detector.py` is still TF-IDF + Logistic Regression for these 7 base intents:
+
+- `mezuniyet_durumu`
+- `ders_onerisi`
+- `calisma_plani`
+- `major_secimi`
+- `alanda_ozellesme`
+- `ders_ayrintisi`
+- `diger`
+
+The router in `server/modules/rag_router.py` adds deterministic regex guards:
+
+- `Bu hoca nasıl?`, `Yücel Saygın zor mu?` -> `intent=review`, Chroma filter `{documentType: "review"}`
+- `CS412 final soruları var mı?` -> `intent=exam`, Chroma filter `{documentType: "exam"}`
+- `Mezuniyetime ne kadar kaldı?` -> `intent=mezuniyet_durumu`, Chroma filter `{documentType: "course"}`
+- Ders önerisi / NLP / Data / Web / AI style questions -> `intent=ders_onerisi`, Chroma filter `{documentType: "course"}`
+- Unclear academic questions can multi-search `course`, `exam`, and `review`, then CrossEncoder reranks the combined candidates.
+
+Current `/ask/` flow:
+
+```text
+question
+-> get_intent()
+-> _resolve_intent()
+-> route_query()
+-> retrieve_documents(..., metadata_filter=route.metadata_filter)
+-> multi-search if route is uncertain
+-> rerank_documents()
+-> source-labeled context docs
+-> get_llm_chain()
+-> query_chain()
+-> response + sources + source_chunk_ids + intent
+```
+
+### Bulk Script Commands
+
+Run from repo root:
+
+```bash
+npm run ingest:all
+npm run ingest:courses
+npm run ingest:reviews
+npm run ingest:exams
+```
+
+The root scripts call `server/scripts/run_python.sh`, which prefers `server/.venv/bin/python` and falls back to `PYTHON` or `python3`.
+
+### Current Known Gaps / Next Work
+
+- Add real syllabus documents to the corpus.
+- Improve final answer quality and prompt behavior for review/exam/course modes.
+- Build a benchmark set and collect retrieval/answer metrics.
+- Evaluation/benchmark work must not fabricate results. Only report measured results from actual runs.
+
 The goal is to continue transforming SU-GPT section by section.
 
 Do not rebuild the project from scratch.

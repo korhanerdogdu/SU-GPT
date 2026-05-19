@@ -19,6 +19,12 @@ db = client[MONGO_DB_NAME]
 users = db["users"]
 courses = db["courses"]
 user_courses = db["user_courses"]
+upload_batches = db["uploadBatches"]
+source_documents = db["sourceDocuments"]
+ingestion_jobs = db["ingestionJobs"]
+instructor_reviews = db["instructorReviews"]
+exams = db["exams"]
+embedding_cache = db["embeddingCache"]
 
 
 FALLBACK_COURSES = [
@@ -38,6 +44,23 @@ async def ensure_database() -> None:
     await courses.create_index([("subject", ASCENDING), ("number", ASCENDING)])
     await user_courses.create_index([("user_id", ASCENDING), ("course_id", ASCENDING)], unique=True)
     await user_courses.create_index([("user_id", ASCENDING)])
+    await upload_batches.create_index([("batchId", ASCENDING)], unique=True)
+    await upload_batches.create_index([("sourceId", ASCENDING)])
+    await upload_batches.create_index([("status", ASCENDING)])
+    await source_documents.create_index([("sourceId", ASCENDING)], unique=True)
+    await source_documents.create_index([("type", ASCENDING), ("status", ASCENDING)])
+    await source_documents.create_index([("contentHash", ASCENDING)])
+    await source_documents.create_index([("storageKey", ASCENDING)])
+    await ingestion_jobs.create_index([("jobId", ASCENDING)], unique=True)
+    await ingestion_jobs.create_index([("sourceId", ASCENDING), ("startedAt", ASCENDING)])
+    await instructor_reviews.create_index([("reviewId", ASCENDING)], unique=True)
+    await instructor_reviews.create_index([("sourceId", ASCENDING)])
+    await instructor_reviews.create_index([("instructorName", ASCENDING)])
+    await instructor_reviews.create_index([("courseCode", ASCENDING)])
+    await exams.create_index([("examId", ASCENDING)], unique=True)
+    await exams.create_index([("sourceId", ASCENDING)])
+    await exams.create_index([("courseCode", ASCENDING)])
+    await embedding_cache.create_index([("cacheKey", ASCENDING)], unique=True)
     await ensure_user(ADMIN_USERNAME)
 
 

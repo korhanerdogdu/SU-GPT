@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from modules.document_loaders import SUPPORTED_EXTENSIONS, load_document
-from modules.load_vectorstore import _records_to_chunks, get_vectorstore
+from modules.load_vectorstore import _records_to_chunks, get_vectorstore, upsert_documents
 
 
 SOURCE_BATCH_SIZE = 512
@@ -40,6 +40,7 @@ def ingest_source_directory(sources_dir: str) -> int:
             metadata["source_path"] = rel_path
             metadata["source_collection"] = "sources"
             metadata["module"] = module
+            metadata["documentType"] = "course"
         chunks, ids = _records_to_chunks(records)
         all_chunks.extend(chunks)
         all_ids.extend(ids)
@@ -50,7 +51,7 @@ def ingest_source_directory(sources_dir: str) -> int:
     vectorstore = get_vectorstore()
     for start in range(0, len(all_chunks), SOURCE_BATCH_SIZE):
         end = start + SOURCE_BATCH_SIZE
-        vectorstore.add_documents(documents=all_chunks[start:end], ids=all_ids[start:end])
+        upsert_documents(vectorstore, all_chunks[start:end], all_ids[start:end])
     return len(all_chunks)
 
 

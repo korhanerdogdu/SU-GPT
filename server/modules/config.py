@@ -15,12 +15,14 @@ LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq").strip().lower()
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 MISTRAL_MODEL_NAME = os.getenv("MISTRAL_MODEL_NAME", "mistral-small-latest")
 CHROMA_PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", "./chroma_store")
-CHROMA_COLLECTION_NAME = os.getenv("CHROMA_COLLECTION_NAME", "ragbot_documents")
+CHROMA_COLLECTION_NAME = os.getenv("CHROMA_COLLECTION_NAME", "su_knowledge")
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "sugpt")
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin")
 SOURCES_DIR = os.getenv("SOURCES_DIR", str(PROJECT_ROOT / "sources"))
+REVIEWS_DIR = os.getenv("REVIEWS_DIR", str(PROJECT_ROOT / "sources" / "reviews"))
+EXAMS_DIR = os.getenv("EXAMS_DIR", str(PROJECT_ROOT / "sources" / "exams"))
 CATALOG_DATA_DIR = os.getenv("CATALOG_DATA_DIR", str(Path.home() / "data"))
 AUTO_INGEST_SOURCES = os.getenv("AUTO_INGEST_SOURCES", "false").lower() == "true"
 AUTO_SEED_COURSES = os.getenv("AUTO_SEED_COURSES", "true").lower() == "true"
@@ -38,6 +40,10 @@ RERANK_TOP_K = int(os.getenv("RERANK_TOP_K", "6"))
 # Chunking (Section 2)
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "1000"))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "150"))
+DOCUMENT_STORAGE_DIR = os.getenv(
+    "DOCUMENT_STORAGE_DIR",
+    str(SERVER_ROOT / "uploaded_documents"),
+)
 
 
 def require_env(name: str, value: str | None) -> str:

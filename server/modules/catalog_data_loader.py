@@ -780,6 +780,7 @@ def _document(
         "source": source,
         "source_path": source_path,
         "document_type": kind,
+        "documentType": "course",
         "record_line": line_no,
         "chunk_id": doc_id,
     }

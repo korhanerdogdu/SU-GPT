@@ -60,7 +60,12 @@ ACADEMIC_TERM_RE = re.compile(
 )
 
 
-def retrieve_documents(vectorstore: Any, query: str, k: int) -> List[Document]:
+def retrieve_documents(
+    vectorstore: Any,
+    query: str,
+    k: int,
+    metadata_filter: dict[str, Any] | None = None,
+) -> List[Document]:
     """Retrieve with light structured filters before falling back to dense search.
 
     The catalog corpus has many near-identical rows. Pure dense search can
@@ -69,7 +74,12 @@ def retrieve_documents(vectorstore: Any, query: str, k: int) -> List[Document]:
     document type, course code, term, program, and requirement category.
     """
 
-    filters = _candidate_filters(query)
+    filters = [
+        _combine_filter(metadata_filter, where)
+        for where in _candidate_filters(query)
+    ]
+    if metadata_filter and not filters:
+        filters = [metadata_filter]
     documents: list[Document] = []
 
     for where in filters:
@@ -80,7 +90,10 @@ def retrieve_documents(vectorstore: Any, query: str, k: int) -> List[Document]:
             continue
 
     if not documents:
-        documents.extend(vectorstore.similarity_search(query, k=k))
+        if metadata_filter:
+            documents.extend(vectorstore.similarity_search(query, k=k, filter=metadata_filter))
+        else:
+            documents.extend(vectorstore.similarity_search(query, k=k))
 
     ranked = _lexical_rank(query, _dedupe(documents))
     return ranked[: max(k, 1)]
@@ -300,6 +313,15 @@ def _where(parts: list[dict[str, Any]]) -> dict[str, Any]:
     if len(parts) == 1:
         return parts[0]
     return {"$and": parts}
+
+
+def _combine_filter(
+    metadata_filter: dict[str, Any] | None,
+    candidate_filter: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if metadata_filter and candidate_filter:
+        return _where([metadata_filter, candidate_filter])
+    return metadata_filter or candidate_filter or {}
 
 
 def _exact_get(vectorstore: Any, where: dict[str, Any], limit: int) -> list[Document]:

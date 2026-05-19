@@ -15,6 +15,12 @@ from modules.load_vectorstore import (
     load_vectorstore,
     load_vectorstore_multi,
 )
+from modules.file_lifecycle import (
+    cascade_delete_source,
+    confirm_whatsapp_batch,
+    create_pending_whatsapp_batch,
+    ingest_exam_upload,
+)
 from modules.intent_detector import get_intent
 from modules.llm import get_llm_chain
 from modules.query_handlers import query_chain
@@ -39,6 +45,7 @@ from modules.mongodb import (
     set_user_courses,
 )
 from modules.reranker import rerank_documents
+from modules.rag_router import route_query
 from modules.source_indexer import ensure_sources_indexed
 from logger import logger
 
@@ -327,6 +334,10 @@ def _recommendation_retrieval_query(question: str) -> str:
 
 
 def _retrieval_query_for_intent(question: str, intent: str) -> str:
+    if intent == "review":
+        return f"{question} instructor professor review workload grading difficulty course experience"
+    if intent == "exam":
+        return f"{question} exam final midterm quiz past questions solutions assessment"
     if intent == "ders_onerisi":
         return _recommendation_retrieval_query(question)
     if intent == "mezuniyet_durumu":
@@ -371,6 +382,18 @@ def _intent_context_document(intent: str, taken_codes: list[str] | None = None) 
             "[Source: Request intent]\n"
             "Detected intent: ders_ayrintisi / course detail. Answer the requested course detail "
             "such as instructor, schedule, syllabus, prerequisite or workload. Do not produce graduation audit."
+        )
+    elif intent == "review":
+        text = (
+            "[Source: Request intent]\n"
+            "Detected intent: review / instructor or course review. Use only instructor review chunks "
+            "and clearly separate retrieved student sentiment from official course facts."
+        )
+    elif intent == "exam":
+        text = (
+            "[Source: Request intent]\n"
+            "Detected intent: exam / past exam or assessment question. Use exam chunks and course context; "
+            "do not invent unavailable questions or answers."
         )
     elif intent == "major_secimi":
         text = (
@@ -617,6 +640,40 @@ def _format_for_context(docs: List[Document]) -> List[Document]:
         )
     return formatted
 
+
+def _dedupe_documents(docs: List[Document]) -> List[Document]:
+    seen = set()
+    deduped: List[Document] = []
+    for doc in docs:
+        meta = doc.metadata or {}
+        key = meta.get("chunk_id") or meta.get("chunkId") or (meta.get("source"), doc.page_content[:120])
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(doc)
+    return deduped
+
+
+def _retrieve_for_route(vectorstore, route, retrieval_query: str) -> List[Document]:
+    if route.use_multi_search:
+        docs: List[Document] = []
+        for document_type in route.document_types:
+            docs.extend(
+                retrieve_documents(
+                    vectorstore,
+                    retrieval_query,
+                    k=RETRIEVAL_CANDIDATE_K,
+                    metadata_filter={"documentType": document_type},
+                )
+            )
+        return _dedupe_documents(docs)
+    return retrieve_documents(
+        vectorstore,
+        retrieval_query,
+        k=RETRIEVAL_CANDIDATE_K,
+        metadata_filter=route.metadata_filter,
+    )
+
 # allow frontend
 
 app.add_middleware(
@@ -690,6 +747,67 @@ async def upload_documents(files: List[UploadFile] = File(...)):
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 
+@app.post("/admin/whatsapp/upload")
+async def upload_whatsapp_chat(
+    file: UploadFile = File(...),
+    username: str = Form("admin"),
+):
+    try:
+        return create_pending_whatsapp_batch(file, uploaded_by=username)
+    except Exception as e:
+        logger.exception("Error during WhatsApp pending upload")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.post("/admin/whatsapp/{batch_id}/confirm")
+async def confirm_whatsapp_upload(
+    batch_id: str,
+    approved: bool = Form(True),
+    username: str = Form("admin"),
+):
+    try:
+        return confirm_whatsapp_batch(batch_id, approved=approved, approved_by=username)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception("Error during WhatsApp confirmation")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.post("/admin/exams/upload")
+async def upload_exam_pdf(
+    file: UploadFile = File(...),
+    course_code: str = Form(""),
+    year: str = Form(""),
+    semester: str = Form(""),
+    exam_type: str = Form(""),
+    username: str = Form("admin"),
+):
+    try:
+        return ingest_exam_upload(
+            file,
+            course_code=course_code,
+            year=year,
+            semester=semester,
+            exam_type=exam_type,
+            uploaded_by=username,
+        )
+    except Exception as e:
+        logger.exception("Error during exam upload")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.delete("/sources/{source_id}")
+async def delete_source_document(source_id: str, hard: bool = False):
+    try:
+        return cascade_delete_source(source_id, hard=hard)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception("Error during source cascade delete")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
 @app.post("/auth/login")
 async def login(payload: LoginPayload):
     if payload.username != ADMIN_USERNAME or payload.password != ADMIN_PASSWORD:
@@ -722,11 +840,17 @@ async def ask_question(question: str = Form(...), username: str | None = Form(No
         logger.info(f"user query: {question}")
 
         detected_intent = get_intent(question)
-        intent = _resolve_intent(question, detected_intent)
-        logger.info("detected intent=%s resolved intent=%s", detected_intent, intent)
-
-        if intent == "diger":
-            return {"response": NON_ACADEMIC_FALLBACK, "sources": []}
+        resolved_intent = _resolve_intent(question, detected_intent)
+        route = route_query(question, resolved_intent)
+        intent = route.intent
+        logger.info(
+            "detected intent=%s resolved intent=%s route intent=%s document_types=%s confidence=%.3f",
+            detected_intent,
+            resolved_intent,
+            intent,
+            route.document_types,
+            route.confidence,
+        )
 
         graduation_intent = intent == "mezuniyet_durumu"
         recommendation_intent = intent == "ders_onerisi"
@@ -734,12 +858,16 @@ async def ask_question(question: str = Form(...), username: str | None = Form(No
             return {
                 "response": "Hangi alana ilgilisin? Örn: NLP, Web, Data, Systems, AI, Security.",
                 "sources": [],
+                "source_chunk_ids": [],
+                "intent": intent,
             }
 
         vectorstore = get_vectorstore()
         effective_question = _expanded_recommendation_question(question) if recommendation_intent else question
         retrieval_query = _retrieval_query_for_intent(effective_question, intent)
-        candidate_docs = retrieve_documents(vectorstore, retrieval_query, k=RETRIEVAL_CANDIDATE_K)
+        candidate_docs = _retrieve_for_route(vectorstore, route, retrieval_query)
+        if intent == "diger" and not candidate_docs:
+            return {"response": NON_ACADEMIC_FALLBACK, "sources": [], "source_chunk_ids": [], "intent": intent}
         reranked_docs = rerank_documents(retrieval_query, candidate_docs, top_k=RERANK_TOP_K)
         context_docs = _format_for_context(reranked_docs)
 
@@ -771,6 +899,7 @@ async def ask_question(question: str = Form(...), username: str | None = Form(No
         result = query_chain(chain, llm_question)
         if recommendation_intent:
             result = _clean_recommendation_response(result)
+        result["intent"] = intent
 
         logger.info("query successful")
         return result
