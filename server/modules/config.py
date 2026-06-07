@@ -37,6 +37,16 @@ CROSS_ENCODER_MODEL_NAME = os.getenv(
 RETRIEVAL_CANDIDATE_K = int(os.getenv("RETRIEVAL_CANDIDATE_K", "20"))
 RERANK_TOP_K = int(os.getenv("RERANK_TOP_K", "6"))
 
+# Retrieval modes (Section 3): llm_only, bm25, dense, dense_rerank, hybrid, hybrid_rerank
+DEFAULT_RETRIEVAL_MODE = os.getenv("DEFAULT_RETRIEVAL_MODE", "hybrid_rerank")
+BM25_TOP_K = int(os.getenv("BM25_TOP_K", "10"))
+DENSE_TOP_K = int(os.getenv("DENSE_TOP_K", "10"))
+HYBRID_TOP_K = int(os.getenv("HYBRID_TOP_K", "10"))
+# Caps how many chunks the BM25 index covers (0 = index the full Chroma corpus).
+# Building the index is a lazy, in-memory, one-time-per-process cost; capping it
+# only matters for fast local iteration on very large corpora.
+BM25_MAX_CORPUS_SIZE = int(os.getenv("BM25_MAX_CORPUS_SIZE", "0"))
+
 # Chunking (Section 2)
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "1000"))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "150"))

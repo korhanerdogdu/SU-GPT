@@ -1,5 +1,6 @@
 import json
 import re
+import unicodedata
 from functools import lru_cache
 from pathlib import Path
 
@@ -190,6 +191,7 @@ INTEREST_AREAS = {
 
 COURSE_CODE_RE = re.compile(r"\b[A-Z]{2,5}\s*\d{3,5}\b", re.IGNORECASE)
 RECOMMENDATION_TERM = "202502"
+DEFAULT_DEGREE_PROGRAM = "CS"
 
 INTEREST_COURSE_HINTS = {
     "nlp": ["CS445", "CS455", "CS412", "CS415", "DSA440", "EE417", "ECON494", "CS460", "CS48004"],
@@ -354,6 +356,380 @@ def _retrieval_query_for_intent(question: str, intent: str) -> str:
     return question
 
 
+def _structured_context_documents(
+    intent: str,
+    question: str,
+    taken_codes: list[str],
+) -> list[Document] | None:
+    """Fast paths for intents that are better served by structured data.
+
+    These modes avoid broad Chroma scans over the full course/source corpus.
+    Chroma remains available for source-heavy questions, but graduation,
+    recommendation, and missing-source review/exam intents get compact context
+    directly from Mongo/catalog files or from an explicit general-knowledge guard.
+    """
+
+    if intent == "mezuniyet_durumu":
+        return _graduation_support_documents(DEFAULT_DEGREE_PROGRAM)
+    if intent == "ders_onerisi":
+        return _recommendation_support_documents(question, taken_codes)
+    if intent == "review":
+        return [
+            *_instructor_schedule_support_documents(question),
+            _general_knowledge_mode_document(intent),
+        ]
+    if intent == "exam":
+        return [
+            *_course_detail_support_documents(question),
+            _general_knowledge_mode_document(intent),
+        ]
+    if intent == "ders_ayrintisi" and _syllabus_like(question):
+        return [
+            *_course_detail_support_documents(question),
+            _general_knowledge_mode_document("syllabus"),
+        ]
+    return None
+
+
+@lru_cache(maxsize=4)
+def _degree_requirement_rows(program: str) -> tuple[dict, ...]:
+    path = Path(CATALOG_DATA_DIR) / "degree_requirements" / f"{program.upper()}.jsonl"
+    if not path.exists():
+        return ()
+    rows: list[dict] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if line.strip():
+                rows.append(json.loads(line))
+    return tuple(rows)
+
+
+def _graduation_support_documents(program: str) -> list[Document]:
+    rows = _degree_requirement_rows(program)
+    docs: list[Document] = []
+    for index, row in enumerate(rows):
+        record_type = str(row.get("record_type") or f"record_{index}")
+        source = _degree_source_label(row, program)
+        docs.append(
+            Document(
+                page_content=_format_degree_requirement_row(row),
+                metadata={
+                    "source": source,
+                    "document_type": record_type,
+                    "program": program,
+                    "chunk_id": f"structured:degree_requirements:{program}:{record_type}:{index}",
+                    "source_authority": row.get("source_authority") or "official_degree_requirements",
+                },
+            )
+        )
+    if not docs:
+        docs.append(
+            Document(
+                page_content=(
+                    "No local structured degree requirement file is configured. "
+                    "Use the MongoDB student profile if present; otherwise say the "
+                    "official degree requirement source is missing."
+                ),
+                metadata={
+                    "source": f"{program} degree requirements missing",
+                    "document_type": "degree_requirement_missing",
+                    "chunk_id": f"structured:degree_requirements:{program}:missing",
+                },
+            )
+        )
+    return docs
+
+
+def _degree_source_label(row: dict, program: str) -> str:
+    record_type = str(row.get("record_type") or "degree_requirement")
+    if record_type == "official_degree_evaluation_projection":
+        return f"{program}/BSCS official degree evaluation projection"
+    if record_type == "degree_requirement_profile":
+        return f"{program}/BSCS degree requirement profile"
+    category = row.get("category_label_tr") or row.get("category")
+    if category:
+        return f"{program}/BSCS degree requirement pool {category}"
+    return f"{program}/BSCS {record_type}"
+
+
+def _format_degree_requirement_row(row: dict) -> str:
+    record_type = row.get("record_type")
+    if record_type == "degree_requirement_profile":
+        minima = "; ".join(
+            _format_category_minimum(item)
+            for item in row.get("category_minima", [])
+            if isinstance(item, dict)
+        )
+        rules = "; ".join(str(rule) for rule in row.get("rules", []))
+        return (
+            "Record type: degree requirement profile.\n"
+            f"Program: {row.get('program')} / {row.get('degree_code')} - {row.get('program_name_tr') or row.get('program_name_en')}.\n"
+            f"Requirement term: {row.get('program_requirements_term_label')}.\n"
+            f"Total minimum: {row.get('total_min_su_credits')} SU credits, {row.get('total_min_ects')} ECTS.\n"
+            f"Category minima: {minima}.\n"
+            f"Rules: {rules}."
+        )
+    if record_type == "degree_requirement_category_pool":
+        category = row.get("category_label_tr") or row.get("category")
+        courses = _degree_course_codes(row.get("courses") or row.get("courses_representative") or [])
+        choice_pools = []
+        for pool in row.get("choice_pools", []) or []:
+            if not isinstance(pool, dict):
+                continue
+            choice_pools.append(
+                f"{pool.get('name')} choose {pool.get('choose')}: {_degree_course_codes(pool.get('courses') or [])}"
+            )
+        return (
+            "Record type: degree requirement category pool.\n"
+            f"Program: {row.get('program')} / {row.get('degree_code')}.\n"
+            f"Category: {category}.\n"
+            f"Minimum: {_format_category_minimum(row)}.\n"
+            f"Selection rule: {row.get('selection_rule') or row.get('full_pool_note') or ''}\n"
+            f"Courses: {courses}.\n"
+            f"Choice pools: {'; '.join(choice_pools) if choice_pools else 'none'}."
+        )
+    if record_type == "official_degree_evaluation_projection":
+        categories = []
+        for category in row.get("categories", []) or []:
+            if not isinstance(category, dict):
+                continue
+            courses = _degree_course_codes(category.get("courses") or [])
+            categories.append(
+                f"{category.get('label_tr') or category.get('category')}: "
+                f"{category.get('completed_su_credits')}/{category.get('min_su_credits')} SU, "
+                f"{category.get('course_count')} courses, courses [{courses}]"
+            )
+        return (
+            "Record type: official degree evaluation projection.\n"
+            f"Authority: {row.get('source_authority')}.\n"
+            f"Applies to: {row.get('applies_to')}.\n"
+            f"Evaluation term: {row.get('evaluation_term_label')}.\n"
+            f"Result: {row.get('result')}.\n"
+            f"Completed total: {row.get('completed_total_su_credits')}/125 SU credits, {row.get('completed_total_ects')} ECTS.\n"
+            f"GPA: program {row.get('program_gpa')}, cumulative {row.get('cumulative_gpa')}.\n"
+            f"Category allocations: {'; '.join(categories)}."
+        )
+    return json.dumps(row, ensure_ascii=False, separators=(",", ":"))
+
+
+def _format_category_minimum(item: dict) -> str:
+    pieces = [str(item.get("label_tr") or item.get("category") or "category")]
+    if item.get("min_su_credits") is not None:
+        pieces.append(f"min {item.get('min_su_credits')} SU")
+    if item.get("min_courses") is not None:
+        pieces.append(f"min {item.get('min_courses')} courses")
+    if item.get("min_ects") is not None:
+        pieces.append(f"min {item.get('min_ects')} ECTS")
+    return " ".join(pieces)
+
+
+def _degree_course_codes(courses: list[dict]) -> str:
+    codes: list[str] = []
+    for course in courses:
+        if not isinstance(course, dict):
+            continue
+        code = course.get("code")
+        credits = course.get("su_credits")
+        if code and credits is not None:
+            codes.append(f"{code} ({credits} SU)")
+        elif code:
+            codes.append(str(code))
+    return ", ".join(codes) if codes else "none"
+
+
+def _syllabus_like(question: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(syllabus|outline|weekly plan|haftalık plan|haftalik plan|içerik|icerik|notlandırma|notlandirma)\b",
+            question or "",
+            re.IGNORECASE,
+        )
+    )
+
+
+def _course_detail_support_documents(question: str) -> list[Document]:
+    docs: list[Document] = []
+    for raw_code in COURSE_CODE_RE.findall(question or "")[:3]:
+        cleaned = _clean_code(raw_code)
+        display = _display_code(cleaned)
+        catalog = _course_catalog_row(cleaned)
+        schedules = _schedule_rows_for_term(RECOMMENDATION_TERM).get(cleaned, [])
+        if not catalog and not schedules:
+            continue
+        title = (catalog or schedules[0]).get("title") or (catalog or schedules[0]).get("Course_Name") or ""
+        details = [
+            f"Course: {display} - {title}",
+            f"Schedule {RECOMMENDATION_TERM}: {_meeting_summary(schedules) if schedules else 'not found in loaded schedule context'}",
+        ]
+        if catalog:
+            details.extend(
+                [
+                    f"SU credits: {catalog.get('su_credits')}",
+                    f"ECTS: {catalog.get('ects')}",
+                    f"Prerequisites: {catalog.get('prerequisites') or 'not listed'}",
+                    f"Corequisites: {catalog.get('corequisites') or 'not listed'}",
+                    f"Catalog description: {catalog.get('description') or 'not listed'}",
+                    f"Source URL: {catalog.get('source_url') or 'not listed'}",
+                ]
+            )
+        docs.append(
+            Document(
+                page_content="\n".join(details),
+                metadata={
+                    "source": f"structured course detail {display}",
+                    "document_type": "structured_course_detail",
+                    "course_code": display,
+                    "chunk_id": f"structured:course_detail:{cleaned}",
+                },
+            )
+        )
+    return docs
+
+
+def _instructor_schedule_support_documents(question: str) -> list[Document]:
+    tokens = _instructor_query_tokens(question)
+    if not tokens:
+        return []
+
+    docs: list[Document] = []
+    seen: set[str] = set()
+    for course_rows in _schedule_rows_for_term(RECOMMENDATION_TERM).values():
+        for row in course_rows:
+            instructor_text = " ".join(
+                str(meeting.get("instructors") or "")
+                for meeting in row.get("meetings") or []
+                if isinstance(meeting, dict)
+            )
+            normalized_instructor = _normalize_match_text(instructor_text)
+            if not all(token in normalized_instructor for token in tokens):
+                continue
+            course_id = _display_code(_clean_code(str(row.get("course_id") or "")))
+            key = f"{course_id}:{row.get('section')}:{row.get('crn')}"
+            if key in seen:
+                continue
+            seen.add(key)
+            text = (
+                f"Term: {RECOMMENDATION_TERM}.\n"
+                f"Instructor match: {re.sub(r'\\s+', ' ', instructor_text).replace('( P )', '').strip()}.\n"
+                f"Course: {course_id} - {row.get('title') or ''}.\n"
+                f"Component/section: {row.get('component') or ''} {row.get('section') or ''}.\n"
+                f"Schedule: {_meeting_summary([row]) or 'not listed'}.\n"
+                "This is official schedule/catalog context only, not a student review."
+            )
+            docs.append(
+                Document(
+                    page_content=text,
+                    metadata={
+                        "source": f"structured instructor schedule {course_id}",
+                        "document_type": "structured_instructor_schedule",
+                        "course_code": course_id,
+                        "term_code": RECOMMENDATION_TERM,
+                        "chunk_id": f"structured:instructor_schedule:{RECOMMENDATION_TERM}:{_clean_code(course_id)}:{row.get('section') or 'section'}",
+                    },
+                )
+            )
+            if len(docs) >= 6:
+                return docs
+    return docs
+
+
+def _instructor_query_tokens(question: str) -> list[str]:
+    stop_words = {
+        "hoca",
+        "hocam",
+        "prof",
+        "professor",
+        "zor",
+        "kolay",
+        "nasil",
+        "nasıl",
+        "mi",
+        "mu",
+        "mı",
+        "mü",
+        "yorum",
+        "review",
+        "ders",
+        "course",
+    }
+    tokens = []
+    for token in re.findall(r"[A-Za-zÇĞİÖŞÜçğıöşü]+", question or ""):
+        normalized = _normalize_match_text(token)
+        if len(normalized) > 2 and normalized not in stop_words:
+            tokens.append(normalized)
+    return tokens[:3]
+
+
+def _normalize_match_text(value: str) -> str:
+    decomposed = unicodedata.normalize("NFKD", value or "")
+    ascii_text = decomposed.encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"\s+", " ", ascii_text.lower()).strip()
+
+
+@lru_cache(maxsize=1024)
+def _course_catalog_row(cleaned_code: str) -> dict:
+    path = Path(CATALOG_DATA_DIR) / "all_coursepage_info.jsonl"
+    if not path.exists():
+        return {}
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            row_code = _clean_code(row.get("course_id") or f"{row.get('subj_code', '')}{row.get('crse_numb', '')}")
+            if row_code == cleaned_code:
+                return row
+    return {}
+
+
+def _general_knowledge_mode_document(intent: str) -> Document:
+    practical_next_steps = (
+        "Practical next steps to suggest (in the user's language): (1) check course/department "
+        "WhatsApp or Telegram groups for what current/past students say, and (2) email the "
+        "instructor directly with a short note about the student's background and ask whether "
+        "the course is a good fit -- offer to draft a short sample email with placeholders "
+        "such as [DERS KODU] / [Hoca Adı] / [Adınız]. Be upfront that this system is still in "
+        "development and has no local archive for this, and frame any general observation as a "
+        "general, non-official, person-dependent opinion -- never as a Sabanci-specific fact."
+    )
+    if intent == "review":
+        text = (
+            "No local instructor review archive is configured for this deployment "
+            "(development-stage system without a review dataset). Answer from general academic "
+            "advising knowledge and any course facts in the question. Do not claim that the answer "
+            "is based on Sabanci student review data, and avoid precise claims about a specific "
+            "instructor's grading, workload, personality, or past sentiment. " + practical_next_steps
+        )
+        source = "general knowledge review mode"
+    elif intent == "exam":
+        text = (
+            "No local past exam/PDF archive is configured for this deployment "
+            "(development-stage system without an exam dataset). Answer from general academic and "
+            "course-topic knowledge about what kinds of topics or question styles such a course "
+            "typically covers. Do not invent exact past exam questions, dates, or official "
+            "solutions; clearly say that no local exam archive was used. " + practical_next_steps
+        )
+        source = "general knowledge exam mode"
+    else:
+        text = (
+            "No local syllabus archive is configured for this deployment "
+            "(development-stage system without a syllabus dataset). Use available catalog/schedule "
+            "details if present, then answer from general academic knowledge about what such a "
+            "course typically covers. Do not claim access to an official syllabus unless it "
+            "appears in context. " + practical_next_steps
+        )
+        source = "general knowledge syllabus mode"
+    return Document(
+        page_content=text,
+        metadata={
+            "source": source,
+            "document_type": "general_knowledge_mode",
+            "intent": intent,
+            "chunk_id": f"structured:general_knowledge:{intent}",
+        },
+    )
+
+
 def _intent_context_document(intent: str, taken_codes: list[str] | None = None) -> Document:
     if intent == "ders_onerisi":
         taken = ", ".join(taken_codes or []) if taken_codes else "none"
@@ -386,14 +762,22 @@ def _intent_context_document(intent: str, taken_codes: list[str] | None = None) 
     elif intent == "review":
         text = (
             "[Source: Request intent]\n"
-            "Detected intent: review / instructor or course review. Use only instructor review chunks "
-            "and clearly separate retrieved student sentiment from official course facts."
+            "Detected intent: review / instructor or course review. If local review chunks are present, "
+            "lead with them as grounded student sentiment, and you may add a brief (1-2 sentence) "
+            "supplementary tip to also check WhatsApp/Telegram groups or email the instructor. If the "
+            "context says no local review archive is configured, follow the general-knowledge mode "
+            "guidance: be transparent, then suggest WhatsApp/Telegram groups and offer a short draft "
+            "email to the instructor."
         )
     elif intent == "exam":
         text = (
             "[Source: Request intent]\n"
-            "Detected intent: exam / past exam or assessment question. Use exam chunks and course context; "
-            "do not invent unavailable questions or answers."
+            "Detected intent: exam / past exam or assessment question. If local exam chunks are present, "
+            "lead with them as grounded evidence, and you may add a brief (1-2 sentence) supplementary "
+            "tip to also check WhatsApp/Telegram groups or email the instructor. If the context says no "
+            "local exam archive is configured, follow the general-knowledge mode guidance: be "
+            "transparent, then suggest WhatsApp/Telegram groups and offer a short draft email to the "
+            "instructor, without inventing exact past questions."
         )
     elif intent == "major_secimi":
         text = (
@@ -519,6 +903,7 @@ def _recommendation_support_documents(question: str, taken_codes: list[str]) -> 
             metadata={
                 "source": "Course recommendation strategy",
                 "document_type": "course_recommendation_strategy",
+                "chunk_id": f"structured:recommendation:{interest_key}:strategy",
             },
         )
     )
@@ -558,6 +943,7 @@ def _recommendation_support_documents(question: str, taken_codes: list[str]) -> 
                     "document_type": "course_recommendation_candidate",
                     "course_code": _display_code(cleaned),
                     "recommendation_status": status,
+                    "chunk_id": f"structured:recommendation:{interest_key}:{cleaned}",
                 },
             )
         )
@@ -862,14 +1248,8 @@ async def ask_question(question: str = Form(...), username: str | None = Form(No
                 "intent": intent,
             }
 
-        vectorstore = get_vectorstore()
         effective_question = _expanded_recommendation_question(question) if recommendation_intent else question
         retrieval_query = _retrieval_query_for_intent(effective_question, intent)
-        candidate_docs = _retrieve_for_route(vectorstore, route, retrieval_query)
-        if intent == "diger" and not candidate_docs:
-            return {"response": NON_ACADEMIC_FALLBACK, "sources": [], "source_chunk_ids": [], "intent": intent}
-        reranked_docs = rerank_documents(retrieval_query, candidate_docs, top_k=RERANK_TOP_K)
-        context_docs = _format_for_context(reranked_docs)
 
         taken_codes: list[str] = []
         if recommendation_intent and username:
@@ -878,6 +1258,18 @@ async def ask_question(question: str = Form(...), username: str | None = Form(No
             user_context = _compact_recommendation_user_context(username, selected_courses)
         else:
             user_context = await get_user_course_context(username)
+
+        structured_docs = _structured_context_documents(intent, effective_question, taken_codes)
+        if structured_docs is None:
+            vectorstore = get_vectorstore()
+            candidate_docs = _retrieve_for_route(vectorstore, route, retrieval_query)
+            if intent == "diger" and not candidate_docs:
+                return {"response": NON_ACADEMIC_FALLBACK, "sources": [], "source_chunk_ids": [], "intent": intent}
+            reranked_docs = rerank_documents(retrieval_query, candidate_docs, top_k=RERANK_TOP_K)
+        else:
+            reranked_docs = structured_docs
+
+        context_docs = _format_for_context(reranked_docs)
         if user_context:
             context_docs.insert(
                 0,
@@ -889,7 +1281,7 @@ async def ask_question(question: str = Form(...), username: str | None = Form(No
                     },
                 ),
             )
-        if recommendation_intent:
+        if recommendation_intent and structured_docs is None:
             context_docs = _recommendation_support_documents(effective_question, taken_codes) + context_docs
         context_docs.insert(0, _intent_context_document(intent, taken_codes))
 
