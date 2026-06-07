@@ -1,0 +1,71 @@
+# Ablation experiment configuration (Section 6.2)
+#
+# Declarative description of the ablation grid SU-GPT can sweep over for the
+# CS455 final report. `ablation_runner.py` loads this file and runs the listed
+# combinations through the existing, working retrieval/generation pipeline
+# (`modules.retrieval_modes.run_retrieval_mode`) -- it does not re-implement
+# retrieval or evaluation logic.
+#
+# IMPORTANT — current implementation status (do not misrepresent in the report):
+#   - chunk_sizes / chunk_overlaps: re-running these requires re-chunking and
+#     re-embedding the corpus (a full `bulk_ingest` pass per combination), which
+#     `ablation_runner.py` does NOT automate yet. They are listed here as the
+#     *intended* sweep values from CLAUDE.md Section 6.2; running them is a
+#     manual/future step (see ablation_runner.py TODOs).
+#   - top_k_values / modes: directly runnable today via run_retrieval_mode --
+#     these are "retrieval-only" ablations (no re-ingestion needed).
+#   - prompt_strategies: `basic` is implemented (see modules/llm.py /
+#     server/main.py). `few_shot` and `expert_routed` are NOT implemented yet
+#     (CLAUDE.md Section 4 prompts.py / query_router.py do not exist). They are
+#     listed here, labeled `implemented: false`, so the runner can SKIP them
+#     with an explicit "not implemented yet" note rather than fabricating
+#     results for prompt strategies that cannot run.
+#
+# Never fabricate metrics for a combination that did not actually execute --
+# the runner must record `status: skipped` (with a reason) for anything it
+# cannot run for real.
+
+experiment_name: "su_gpt_section6_ablation_grid"
+description: >
+  Chunking, retrieval-mode, top-k, and prompt-strategy ablation grid for
+  comparing SU-GPT configurations on the data/benchmark/questions.jsonl set.
+
+# --- Chunking ablations (require re-ingestion; not auto-run by ablation_runner.py yet) ---
+chunk_sizes: [300, 500, 600]       # CLAUDE.md default is 500; current production CHUNK_SIZE=1000
+chunk_overlaps: [30, 50, 100]      # CLAUDE.md default is 50; current production CHUNK_OVERLAP=150
+
+# --- Retrieval ablations (directly runnable today via run_retrieval_mode) ---
+top_k_values: [3, 5, 10]
+modes:
+  - bm25
+  - dense
+  - hybrid
+  - hybrid_rerank
+
+# --- Prompt-strategy ablations ---
+# `implemented: false` entries must be skipped by the runner with a clear
+# "not implemented yet" status -- never run a stand-in prompt and report it
+# as that strategy's result.
+prompt_strategies:
+  - name: basic
+    implemented: true
+    notes: "Implemented in modules/llm.py + server/main.py (PromptTemplate + source-labeled context)."
+  - name: few_shot
+    implemented: false
+    notes: "Section 4 modules/prompts.py (few-shot templates) does not exist yet. Skip until implemented."
+  - name: expert_routed
+    implemented: false
+    notes: "Section 4 modules/query_router.py + expert prompts do not exist yet. Skip until implemented."
+
+# --- Runner behavior knobs ---
+runner:
+  # Keep ablation runtime manageable (CLAUDE.md 6.3: "keep runtime manageable").
+  # `max_questions_per_combo` caps how many benchmark questions each retrieval
+  # combination is evaluated against; raise it for a fuller (slower) sweep.
+  max_questions_per_combo: 5
+  # Where per-combination JSON outputs are written. The runner skips a
+  # combination if its output file already exists (CLAUDE.md 6.3: "avoid
+  # rerunning expensive experiments unnecessarily if outputs already exist").
+  output_dir: "outputs/evaluation_runs/ablations"
+  # Benchmark file to draw questions from (read-only; never modified here).
+  benchmark_path: "data/benchmark/questions.jsonl"

@@ -1,0 +1,3 @@
+mode,num_rows,avg_latency_ms,avg_retrieval_latency_ms,avg_rerank_latency_ms,avg_generation_latency_ms,total_estimated_cost_usd
+dense,10,20052.806,18359.922,0.0,1691.429,0.00052968
+hybrid_rerank,10,42220.538,36604.044,3350.343,2245.947,0.00052668

@@ -1,0 +1,3 @@
+mode,num_rows,answer_correctness_avg,citation_correctness_avg,faithfulness_avg,answer_relevancy_avg,hallucination_flag_rate,note
+dense,10,,,,,,Manual/automated answer grading not run yet; blank fields are not fabricated.
+hybrid_rerank,10,,,,,,Manual/automated answer grading not run yet; blank fields are not fabricated.

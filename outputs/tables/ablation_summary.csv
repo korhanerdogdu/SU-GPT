@@ -1,0 +1,5 @@
+file,status,mode,top_k,limit,num_questions,avg_recall_at_k,avg_mrr_at_k,avg_ndcg_at_k,hit_rate,avg_latency_ms,note
+mode-bm25__topk-3__limit-2.json,completed,bm25,3,2,2,1.0,1.0,1.0,1.0,42425.17,Measured by ablation_runner.py.
+mode-dense__topk-3__limit-1.json,completed,dense,3,1,1,0.0,0.0,0.0,0.0,16580.08,Measured by ablation_runner.py.
+mode-dense__topk-3__limit-2.json,completed,dense,3,2,2,0.5,0.5,0.5,0.5,14421.345,Measured by ablation_runner.py.
+mode-hybrid_rerank__topk-3__limit-2.json,completed,hybrid_rerank,3,2,2,0.0,0.0,0.0,0.0,52436.605,Measured by ablation_runner.py.

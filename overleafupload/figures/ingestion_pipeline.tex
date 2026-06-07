@@ -1,0 +1,27 @@
+\begin{figure}[H]
+\centering
+\resizebox{0.94\linewidth}{!}{%
+\begin{tikzpicture}[
+  font=\scriptsize,
+  node distance=0.74cm and 0.85cm,
+  stage/.style={draw, rounded corners=2pt, align=center, text width=2.75cm, minimum height=0.78cm, fill=purple!6, inner sep=4pt},
+  arrow/.style={-{Latex[length=2mm]}, thick}
+]
+\node[stage] (src) {JSONL / PDF / WhatsApp\\source file};
+\node[stage, right=of src] (mongo) {Mongo source record\\status + hash};
+\node[stage, right=of mongo] (norm) {Normalize\\and clean};
+\node[stage, below=of norm] (chunk) {Chunk\\deterministic IDs};
+\node[stage, left=of chunk] (embed) {Embed\\MiniLM};
+\node[stage, left=of embed] (upsert) {Upsert to Chroma\\\texttt{documentType}};
+\node[stage, below=of embed] (status) {Mongo status\\indexed / failed};
+\draw[arrow] (src) -- (mongo);
+\draw[arrow] (mongo) -- (norm);
+\draw[arrow] (norm) -- (chunk);
+\draw[arrow] (chunk) -- (embed);
+\draw[arrow] (embed) -- (upsert);
+\draw[arrow] (upsert) |- (status);
+\end{tikzpicture}
+}
+\caption{Unified ingestion backbone. MongoDB stores durable source-of-truth metadata; ChromaDB is treated as a reproducible index.}
+\label{fig:ingestion}
+\end{figure}
