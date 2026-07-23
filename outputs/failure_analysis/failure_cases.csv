@@ -1,0 +1,157 @@
+query_id,question,mode,prompt_strategy,expert_mode,model_output,reference_answer,retrieved_sources,error_type,root_cause,proposed_fix,before_after_evidence
+q003,"In the CS 202401 curriculum, which requirement category does ACC 301 belong to?",llm_only,basic,auto,"Maalesef, elimde resmi kaynak veya müfredat bilgisi olmadığı için CS 202401 ders müfredatını veya ACC 301 dersinin hangi gereklilik kategorisine ait olduğunu kesin olarak bilmiyorum. Sabancı Üniversitesi'nin müfredat yapısı hakkında genel bir fikrim olabilir, ancak bu konuda net bir bilgi veremem. ACC 301 dersinin hangi gereklilik kategorisine ait olduğunu öğrenmek için, resmi Sabancı Üniversitesi kaynaklarına veya öğrenci bilgi sistemine başvurmanız gerekebilir.",ACC 301 belongs to the free electives pool of the CS 202401 curriculum.,,insufficient_context,,,
+q005,How many SU credits and ECTS does ACC 301 carry in the CS 202401 curriculum?,llm_only,basic,auto,"Özgün bir cevap verebilmem için daha fazla bilgiye ihtiyaç duyuyorum. Sabancı Üniversitesi'nin müfredatını ve kredilerini tam olarak bilmem mümkün değil, zira resmi kaynaklara erişemem. ACC 301 dersini ve CS 202401 müfredatını da içerir bu durum. SU kredisi ve ECTS puanları genellikle dersin niteliğine, kapsamına ve üniversitenin eğitim politikalarına bağlı olarak değişebilir. Eğer ACC 301 dersi ile ilgili kesin bir sayı vermem gerekirse, bunu yapabilmem için daha spesifik ve güncel bilgilere ihtiyaç duyuyorum.",ACC 301 carries 3 SU credits and 6 ECTS.,,generation_hallucination,,,
+q006,What is the minimum total number of SU credits required to graduate from the CS 202401 curriculum?,llm_only,basic,auto,"Öğrencinin Sabancı Üniversitesi'nden (SU) Bilgisayar Bilimi (CS) bölümünden mezun olabilmesi için gereken minimum toplam kredi sayısını tam olarak bilmiyorum. Ancak genel olarak, birçok üniversitede, öğrencilerin mezun olabilmeleri için belirli bir kredi sayısını tamamlamaları gerekir ve bu sayı genellikle 120-140 kredi arasında değişir. Sabancı Üniversitesi'nin CS 202401 müfredatının özel gereksinimlerini tam olarak bilmemem nedeniyle, bu konuda kesin bir sayı veremem. Eğer doğru ve güncel bilgiye ulaşmak istiyorsanız, Sabancı Üniversitesi'nin resmi web sitesini ziyaret etmenizi veya doğrudan üniversiteyle iletişime geçmenizi öneririm.",125 SU credits.,,generation_hallucination,,,
+q007,What is the minimum total ECTS required for the CS 202401 curriculum?,llm_only,basic,auto,"Özür dilerim, ancak Sabancı Üniversitesi'nin CS 202401 müfredatına ilişkin minimum toplam ECTS (Avrupa Kredi Transfer Sistem) gereksinimlerini bilmiyorum. Bu bilgi, üniversitenin resmi kaynaklarında veya müfredat belgelerinde bulunabilir. size önerim, Sabancı Üniversitesi'nin resmi web sitesini ziyaret etmek veya akademik danışmanınıza danışmaktır.",240 ECTS.,,generation_hallucination,,,
+q008,How many SU credits of area electives are required in the CS 202401 curriculum?,llm_only,basic,auto,"Maalesef, Sabancı Üniversitesi'nin CS 202401 müfredatının detaylarına ilişkin resmi bir kaynağım yok. Dolayısıyla, bu program için gerekli olan alan seçmeli (area electives) derslerinin kredi sayısını kesin olarak söyleyemem. Sabancı Üniversitesi'nin müfredatını ve kredi dağılımını öğrenmek için, resmi kaynaklara veya üniversite web sitesine başvurmanızı öneririm.",9 SU credits of area electives.,,generation_hallucination,,,
+q009,How many SU credits of core electives are required in the CS 202401 curriculum?,llm_only,basic,auto,"Maalesef, Sabancı Üniversitesi'nin CS 202401 müfredatına ilişkin resmi bir kaynağım veya güncel bilgim yok. Dolayısıyla, CS 202401 müfredatında gereken çekirdek seçmeli derslerin kredilerini kesin olarak söyleyemem. Sabancı Üniversitesi'nin müfredat detayları ve kredi gereklilikleri hakkında en güncel ve doğru bilgi için, üniversitenin resmi web sitesini veya akademik danışmanlarını kontrol etmenizi öneririm.",31 SU credits of core electives.,,generation_hallucination,,,
+q010,How many SU credits of free electives are required in the CS 202401 curriculum?,llm_only,basic,auto,"Öğrenci kayıtları veya müfredat kaynaklarına erişimi olmadığını dikkate alarak, Sabancı Üniversitesi'nin bilgisayar bilimi (CS) bölümünün 202401 müfredatını kesin olarak bilmiyorum. Ancak, genel olarak birçok üniversitede olduğu gibi, bilgisayar bilimi bölümlerinde belirli bir miktar serbest seçimlik ders (free electives) zorunluluğu bulunabilir.
+
+Sabancı Üniversitesi'nin bilgisayar bilimi bölümü için 202401 müfredatında kaç kredi serbest seçimlik ders gerektiği konusunda net bir bilgiye sahip değilim. Bu bilgiyi kesin olarak öğrenmek için, resmi Sabancı Üniversitesi kaynaklarına veya akademik danışmanlara başvurmak en doğru yol olacaktır.",15 SU credits of free electives.,,insufficient_context,,,
+q011,How many SU credits of required courses are required in the CS 202401 curriculum?,llm_only,basic,auto,"I'm not familiar with the specific details of the CS 202401 curriculum at Sabancı University, as I don't have access to official sources or up-to-date information. The credit requirements for required courses can vary depending on the program and the university's policies. If you're looking for accurate information, I recommend checking the official Sabancı University website, contacting their admissions office, or consulting with an academic advisor who has access to the most current curriculum details.",29 SU credits of required courses.,,generation_hallucination,,,
+q013,CS 202401 müfredatında mezun olmak için gereken minimum toplam SU kredisi kaçtır?,llm_only,basic,auto,"Maalesef, Sabancı Üniversitesi'nin CS 202401 müfredatında mezun olmak için gereken minimum toplam SU kredisi hakkında net bir bilgiye sahip değilim. Bu tür具体 bir soru için resmi kaynaklara veya güncel müfredat bilgisine ihtiyaç vardır. Eğer mümkünse, Sabancı Üniversitesi'nin resmi web sitesini veya akademik danışmanlarınızı kontrol etmenizi öneririm.",125 SU kredisi.,,insufficient_context,,,
+q014,ACC 301 dersi CS 202401 müfredatında kaç SU kredisidir?,llm_only,basic,auto,"Maalesef, elimde resmi kaynak veya müfredat bilgisi olmadığı için ACC 301 dersinin CS 202401 müfredatında kaç SU kredisini kesin olarak söyleyemiyorum. Sabancı Üniversitesi'nin müfredatını veya ders kredisini belirleyen spesifik kuralları hakkında yeterli bilgiye sahip değilim. Bu bilgi için resmi Sabancı Üniversitesi kaynaklarına veya akademik danışmanlara başvurmanız daha doğru olacaktır.",ACC 301 dersi 3 SU kredisidir.,,insufficient_context,,,
+q015,What are the requirements of the Mathematics minor programme?,llm_only,basic,auto,"I'm not familiar with the specific requirements of the Mathematics minor programme at Sabancı University, as I don't have access to the official curriculum or course catalog. Typically, a minor programme in Mathematics would require a set of core courses in mathematics, as well as elective courses that allow students to explore different areas of mathematics. However, I couldn't provide the exact requirements without referring to the official university sources. If you're interested in learning more, I recommend checking the university's website or contacting the mathematics department directly for the most up-to-date and accurate information.","Minor degree requirement profile for Mathematics Minor Undergraduate Program (MATH-MINOR), admit/curriculum term Fall 2024-2025 (202401). Total minimum SU credits: 21. Total minimum ECTS: None. Sections: required courses (9 SU, 3 courses in pool), core electives (12 SU, 14 courses in pool). Diploma area advisors: Mohammad Sadek.",,generation_hallucination,,,
+q016,What is the minimum total number of SU credits required for the IE 202401 curriculum?,llm_only,basic,auto,"Öğrenci kaydı veya müfredat kaynağı olmadan, Sabancı Üniversitesi'nin IE 202401 müfredatının gerektirdiği minimum toplam SU kredisi sayısını kesin olarak söyleyemem. Genellikle üniversitelerde her bölüm ve müfredat için farklı kredi sayıları uygulanabilir ve bu sayılar zaman içinde güncellenebilir. Eğer bu bilgiye ihtiyaç duyuyorsanız, Sabancı Üniversitesi'nin resmi web sitesini veya akademik danışmanlık hizmetlerini kontrol etmenizi öneririm.",125 SU credits.,,generation_hallucination,,,
+q017,"What time does CS 455 meet on Mondays, and in which classroom?",llm_only,basic,auto,"Özür dilerim, ancak resmi kaynaklara veya güncel bilgilerime erişimim olmadığı için CS 455 dersinin Pazartesi günleri hangi saatlerde ve hangi sınıfında yapılacağına ilişkin bilgi veremem. Sabancı Üniversitesi'nin ders programı ve sınıf bilgileri genellikle üniversitenin resmi web sitesinde veya öğrenci bilgi sistemlerinde bulunur, ancak bu bilgilere erişimim yok. Bu tür spesifik sorular için, lütfen üniversitenin resmi kaynaklarına veya akademik danışmanınıza başvurunuz.",The available curriculum data does not contain this information.,,unsupported_answer,,,
+q018,Who is the instructor teaching CS 412 next semester?,llm_only,basic,auto,"Özür dilerim, ancak resmi kaynaklara veya güncellenmiş bilgiye erişemediğim için CS 412 dersinin gelecek dönemdeki öğretim üyesini belirleyemem. Sabancı Üniversitesi'nin akademik kadrosu ve ders dağılımları hakkında güncel ve kesin bilgi için üniversitenin resmi web sitesini veya akademik danışmanlık hizmetlerini öneririm.",The available curriculum data does not contain this information.,,unsupported_answer,,,
+q019,How many students were enrolled in CS 455 last year?,llm_only,basic,auto,"Özür dilerim, ancak Sabancı Üniversitesi'ne ilişkin resmi kaynaklara veya güncel verilere erişimim yok. Dolayısıyla, CS 455 dersine geçen yıl kaç öğrenci kaydolduğunu kesin olarak bilemem. Eğer bu bilgiye ihtiyacınız varsa, Sabancı Üniversitesi'nin resmi web sitesini ziyaret etmek veya üniversite yetkilileriyle iletişime geçmek en iyi seçenek olacaktır.",The available curriculum data does not contain this information.,,unsupported_answer,,,
+q020,What was the midterm average in CS 300 last spring?,llm_only,basic,auto,"Maalesef, CS 300 dersinin geçen bahar dönemi için sınav ortalamasına ilişkin resmi bir bilgiye veya kaynağa erişimim yok. Bu nedenle, bu konuya ilişkin net bir cevap veremem. Eğer bu bilgiye ihtiyacınız varsa, muhtemelen Sabancı Üniversitesi'nin ilgili akademik birimlerine veya öğrenci kayıt sistemi aracılığıyla ulaşabilirsiniz.",The available curriculum data does not contain this information.,,unsupported_answer,,,
+q021,Is CS 999 a required course in the CS 202401 curriculum?,llm_only,basic,auto,"Özür dilerim, ancak CS 202401 müfredatına ilişkin resmi bir bilgiye veya kaynaklara erişimi olmadığımdan, CS 999'ın bu müfredatta zorunlu bir ders olup olmadığını belirleyemem. Sabancı Üniversitesi'nin müfredat detayları hakkında bilgi sahibi olmadığım için, bu soruya kesin bir cevap veremem.",CS 999 does not exist in the curriculum; the premise is false.,,unsupported_answer,,,
+q022,"Since the CS 202401 curriculum requires 200 SU credits, how many do I have left after 100?",llm_only,basic,auto,"Sabancı Üniversitesi'nin CS 202401 müfredatını ve kredilerini tanımlayan resmi bir kaynak olmadan, bu soruyu kesin bir şekilde cevaplamak zor. Genel olarak, bir üniversitenin müfredatına ve kredilere ilişkin bilgilerin üniversitenin kendi web sitesinde veya akademik katalogunda bulunabileceğini varsayabiliriz.
+
+Ancak, verdiğiniz bilgiye dayanarak, CS 202401 müfredatının 200 SU kredisi gerektirdiğini ve sizin 100 kredisi tamamladığınızı varsayarsak, geriye kalan kredilerin sayısını hesaplayabiliriz.
+
+200 SU kredisi (gereken) - 100 SU kredisi (tamamlandı) = 100 SU kredisi (kalan)
+
+Bu hesaplamaya göre, 100 SU kredisi kaldı. Lütfen bu hesabın resmi kaynaklara dayanmadığı ve sadece verdiğiniz bilgilere göre yapıldığını unutmayınız.","The premise is false: the CS 202401 curriculum requires 125 SU credits, not 200.",,unsupported_answer,,,
+q001,"In the CS 202401 curriculum, which requirement category does CS 414 belong to?",bm25,basic,auto,"CS 414 - Network Science dersi, Molecular Biology, Genetics and Bioengineering (BSBIO) Undergraduate Program (202401) için free electives kategorisine aittir. 
+
+Sources:
+1. degree_requirements/BIO/202401.jsonl",CS 414 belongs to the area electives pool of the CS 202401 curriculum.,Request intent | degree_requirements/BIO/202401.jsonl | degree_requirements/BIO/202201.jsonl | degree_requirements/BIO/202301.jsonl | degree_requirements/BIO/202501.jsonl,retrieval_miss,,,
+q002,"In the CS 202401 curriculum, which requirement category does BIO 310 belong to?",bm25,basic,auto,"BIO 310 - Introduction to Bioinformatics dersi, Molecular Biology, Genetics and Bioengineering (BSBIO) programının core electives poolunda yer almaktadır. CS 202401 müfredatında, BIO 310 dersi core electives kategorisine aittir.
+
+Sources:
+1. degree_requirements/BIO/202401.jsonl
+2. degree_requirements/BIO/202301.jsonl 
+3. degree_requirements/BIO/202201.jsonl",BIO 310 belongs to the core electives pool of the CS 202401 curriculum.,Request intent | degree_requirements/BIO/202401.jsonl | degree_requirements/BIO/202301.jsonl | degree_requirements/BIO/202201.jsonl,retrieval_miss,,,
+q003,"In the CS 202401 curriculum, which requirement category does ACC 301 belong to?",bm25,basic,auto,"ACC 301 - Managerial Accounting dersi, ücretsiz seçmeli (free electives) havuzuna aittir.
+
+Sources:
+1. degree_requirements/BIO/202401.jsonl
+2. degree_requirements/BIO/202201.jsonl",ACC 301 belongs to the free electives pool of the CS 202401 curriculum.,Request intent | degree_requirements/BIO/202401.jsonl | degree_requirements/BIO/202501.jsonl | degree_requirements/BIO/202301.jsonl | degree_requirements/BIO/202201.jsonl,retrieval_miss,,,
+q004,"In the CS 202401 curriculum, which requirement category does CS 300 belong to?",bm25,basic,auto,"CS 300 - Data Structures (3 SU credits) dersi, Molecular Biology, Genetics and Bioengineering (BSBIO) Undergraduate Program (202401) için core electives pooluna aittir. 
+
+[Source: degree_requirements/BIO/202401.jsonl]",CS 300 belongs to the required courses pool of the CS 202401 curriculum.,Request intent | degree_requirements/BIO/202401.jsonl | degree_requirements/BIO/202201.jsonl | degree_requirements/BIO/202301.jsonl | degree_requirements/BIO/202501.jsonl,retrieval_miss,,,
+q005,How many SU credits and ECTS does ACC 301 carry in the CS 202401 curriculum?,bm25,basic,auto,"ACC 301 - Managerial Accounting dersi, CS 202401 müfredatında 3 SU kredisi ve 6 ECTS kredisi taşır.
+
+Sources:
+1. degree_requirements/BIO/202401.jsonl",ACC 301 carries 3 SU credits and 6 ECTS.,Request intent | degree_requirements/BIO/202401.jsonl | degree_requirements/BIO/202501.jsonl | degree_requirements/BIO/202301.jsonl | degree_requirements/BIO/202201.jsonl,retrieval_miss,,,
+q008,How many SU credits of area electives are required in the CS 202401 curriculum?,bm25,basic,auto,"9 SU kredisi alan seçmeli dersleri bulunmaktadır. 
+
+Sources:
+1. degree_requirements/CS/202401.jsonl",9 SU credits of area electives.,Request intent | degree_requirements/CS/202401.jsonl,retrieval_miss,,,
+q009,How many SU credits of core electives are required in the CS 202401 curriculum?,bm25,basic,auto,"Core Electives Durumu: Alınanlar:  | Toplam: 0/31 SU | Durum: 31 Kredi Eksik
+
+GENEL MEZUNİYET DURUMU: Bu bilgi için yeterli veri bulunmamaktadır.
+
+Sources:
+1. degree_requirements/CS/202401.jsonl",31 SU credits of core electives.,Request intent | degree_requirements/CS/202401.jsonl,insufficient_context,,,
+q010,How many SU credits of free electives are required in the CS 202401 curriculum?,bm25,basic,auto,"Free Electives Durumu: Alınanlar: [Liste verilmemektedir] | Toplam: 0/15 SU | Durum: 15 SU Kredisi Eksik
+
+GENEL MEZUNİYET DURUMU: Tamamlanan: 0/125 SU Kredisi | Kalan: 125 SU Kredisi.
+
+Sources:
+1. degree_requirements/CS/202401.jsonl",15 SU credits of free electives.,Request intent | degree_requirements/CS/202401.jsonl,retrieval_miss,,,
+q013,CS 202401 müfredatında mezun olmak için gereken minimum toplam SU kredisi kaçtır?,bm25,basic,auto,"GENEL MEZUNİYET DURUMU: Tamamlanan: 125/125 SU Kredisi | Kalan: 0 SU Kredisi.
+
+Sources:
+1. degree_requirements/CS/202401.jsonl",125 SU kredisi.,Request intent | degree_requirements/CS/202401.jsonl,retrieval_miss,,,
+q014,ACC 301 dersi CS 202401 müfredatında kaç SU kredisidir?,bm25,basic,auto,"ACC 301 - Managerial Accounting dersi, 202401 müfredatında 3 SU kredisine sahiptir.
+
+Sources:
+1. degree_requirements/BIO/202401.jsonl",ACC 301 dersi 3 SU kredisidir.,Request intent | degree_requirements/BIO/202401.jsonl | degree_requirements/BIO/202201.jsonl | degree_requirements/BIO/202301.jsonl | degree_requirements/BIO/202501.jsonl,retrieval_miss,,,
+q015,What are the requirements of the Mathematics minor programme?,bm25,basic,auto,"Mathematics minor programının gereksinimleri hakkında bilgi veremem, çünkü sağlanan RAG Context'te Mathematics minor programı ile ilgili bilgi bulunmuyor. Sadece FIN-MINOR ve PHIL-MINOR programlarının gereksinimleri hakkında bilgi verilebilir.
+
+Eğer Mathematics minor programı hakkında bilgi almak istiyorsanız, lütfen ilgili programın kaynaklarını kontrol edin. 
+
+Sources:
+1. minors/FIN-MINOR/202201.jsonl
+2. minors/FIN-MINOR/202301.jsonl
+3. minors/FIN-MINOR/202401.jsonl
+4. minors/FIN-MINOR/202501.jsonl
+5. minors/PHIL-MINOR/202201.jsonl
+6. minors/PHIL-MINOR/202301.jsonl","Minor degree requirement profile for Mathematics Minor Undergraduate Program (MATH-MINOR), admit/curriculum term Fall 2024-2025 (202401). Total minimum SU credits: 21. Total minimum ECTS: None. Sections: required courses (9 SU, 3 courses in pool), core electives (12 SU, 14 courses in pool). Diploma area advisors: Mohammad Sadek.",Request intent | minors/FIN-MINOR/202201.jsonl | minors/FIN-MINOR/202301.jsonl | minors/FIN-MINOR/202401.jsonl | minors/FIN-MINOR/202501.jsonl | minors/PHIL-MINOR/202201.jsonl | minors/PHIL-MINOR/202301.jsonl,retrieval_miss,,,
+q019,How many students were enrolled in CS 455 last year?,bm25,basic,auto,"[Source: Request intent]
+Detected intent: ders_ayrintisi / course detail. Answer the requested course detail such as instructor, schedule, syllabus, prerequisite or workload. Do not produce graduation audit.
+
+Öğrenci sayısı bilgisi RAG Context'te verilmemiştir. 
+Sources:
+1. [Source: Request intent]",The available curriculum data does not contain this information.,Request intent | degree_requirements/BIO/202201.jsonl | degree_requirements/BIO/202301.jsonl | degree_requirements/BIO/202401.jsonl | degree_requirements/BIO/202501.jsonl,unsupported_answer,,,
+q022,"Since the CS 202401 curriculum requires 200 SU credits, how many do I have left after 100?",bm25,basic,auto,"Öncelikle mezuniyet durumunuzu kontrol edelim. 
+
+Molecular Biology, Genetics and Bioengineering (BSBIO) programı için mezuniyet durumu hesaplanırken, yalnızca SU kredileri kullanılır. 
+
+Tamamlanan: 100 SU Kredisi
+Toplam Mezuniyet Kredisi: 200 SU Kredisi (Not: Bu bilgi verilen RAG Context'te bulunmuyor, ancak User Question'da bahsediliyor.)
+Kalan: 100 SU Kredisi
+
+GENEL MEZUNİYET DURUMU: Kalan: 100 SU Kredisi.
+
+Sources:
+1. degree_requirements/BIO/202401.jsonl 
+2. User Question","The premise is false: the CS 202401 curriculum requires 125 SU credits, not 200.",Request intent | degree_requirements/BIO/202401.jsonl | degree_requirements/BIO/202501.jsonl | degree_requirements/BIO/202301.jsonl | degree_requirements/BIO/202201.jsonl,unsupported_answer,,,
+q001,"In the CS 202401 curriculum, which requirement category does CS 414 belong to?",dense,basic,auto,"CS 414 dersi hakkında bilgi bulunmamaktadır. Sadece CS 302 ve CS 455 dersleri hakkında bilgi mevcuttur. 
+
+[Source: degree_requirements/CS/202401.jsonl]
+CS 302 - Formal Languages and Automata Theory (3 SU credits, 6 ECTS, FENS) core electives pool'una aittir. 
+CS 455 - Large Language Models: Theoretical Foundations and Practical Applications (3 SU credits, 6 ECTS, FENS) area electives pool'una aittir.
+
+Sources:
+1. degree_requirements/CS/202401.jsonl 
+2. degree_requirements/CS/202501.jsonl 
+3. degree_requirements/CS/202301.jsonl 
+4. degree_requirements/CS/202201.jsonl",CS 414 belongs to the area electives pool of the CS 202401 curriculum.,Request intent | degree_requirements/CS/202401.jsonl | degree_requirements/CS/202501.jsonl | degree_requirements/CS/202301.jsonl | degree_requirements/CS/202201.jsonl,retrieval_miss,,,
+q002,"In the CS 202401 curriculum, which requirement category does BIO 310 belong to?",dense,basic,auto,"BIO 310 - Introduction to Bioinformatics dersi, CS 202401 müfredatında core electives pool'una aittir.
+
+Sources:
+1. [Source: degree_requirements/CS/202301.jsonl]
+2. [Source: degree_requirements/CS/202501.jsonl]",BIO 310 belongs to the core electives pool of the CS 202401 curriculum.,Request intent | degree_requirements/BIO/202501.jsonl | degree_requirements/BIO/202301.jsonl | degree_requirements/BIO/202201.jsonl | degree_requirements/BIO/202401.jsonl | degree_requirements/CS/202301.jsonl | degree_requirements/CS/202501.jsonl,retrieval_miss,,,
+q003,"In the CS 202401 curriculum, which requirement category does ACC 301 belong to?",dense,basic,auto,"ACC 301 dersi, Sabancı Üniversitesi'nin CS 202401 müfredatında bulunmamaktadır. RAG Context'te verilen bilgiler doğrultusunda, ACC 301 dersine ilişkin bir bilgiye ulaşılamamıştır. 
+
+CS 301 - Algorithms dersi, required courses pool içinde yer alan bir derstir ve 3 SU kredilik bir derstir. 
+
+ACC 301 dersine ilişkin bilgi bulunmadığından, bu dersin hangi kategoriye ait olduğu hakkında bir cevap verilememektedir.
+
+Sources:
+1. [Source: degree_requirements/CS/202401.jsonl]",ACC 301 belongs to the free electives pool of the CS 202401 curriculum.,Request intent | degree_requirements/CS/202401.jsonl | degree_requirements/CS/202301.jsonl | degree_requirements/CS/202201.jsonl | degree_requirements/CS/202501.jsonl | degree_requirements/DSA/202501.jsonl | degree_requirements/DSA/202301.jsonl,retrieval_miss,,,
+q005,How many SU credits and ECTS does ACC 301 carry in the CS 202401 curriculum?,dense,basic,auto,,ACC 301 carries 3 SU credits and 6 ECTS.,,retrieval_miss,,,
+q006,What is the minimum total number of SU credits required to graduate from the CS 202401 curriculum?,dense,basic,auto,,125 SU credits.,,retrieval_miss,,,
+q007,What is the minimum total ECTS required for the CS 202401 curriculum?,dense,basic,auto,,240 ECTS.,,retrieval_miss,,,
+q008,How many SU credits of area electives are required in the CS 202401 curriculum?,dense,basic,auto,,9 SU credits of area electives.,,retrieval_miss,,,
+q009,How many SU credits of core electives are required in the CS 202401 curriculum?,dense,basic,auto,,31 SU credits of core electives.,,retrieval_miss,,,
+q010,How many SU credits of free electives are required in the CS 202401 curriculum?,dense,basic,auto,,15 SU credits of free electives.,,retrieval_miss,,,
+q011,How many SU credits of required courses are required in the CS 202401 curriculum?,dense,basic,auto,,29 SU credits of required courses.,,retrieval_miss,,,
+q013,CS 202401 müfredatında mezun olmak için gereken minimum toplam SU kredisi kaçtır?,dense,basic,auto,,125 SU kredisi.,,retrieval_miss,,,
+q014,ACC 301 dersi CS 202401 müfredatında kaç SU kredisidir?,dense,basic,auto,,ACC 301 dersi 3 SU kredisidir.,,retrieval_miss,,,
+q016,What is the minimum total number of SU credits required for the IE 202401 curriculum?,dense,basic,auto,,125 SU credits.,,retrieval_miss,,,
+q001,"In the CS 202401 curriculum, which requirement category does CS 414 belong to?",hybrid,basic,auto,,CS 414 belongs to the area electives pool of the CS 202401 curriculum.,,retrieval_miss,,,
+q003,"In the CS 202401 curriculum, which requirement category does ACC 301 belong to?",hybrid,basic,auto,,ACC 301 belongs to the free electives pool of the CS 202401 curriculum.,,retrieval_miss,,,
+q006,What is the minimum total number of SU credits required to graduate from the CS 202401 curriculum?,hybrid,basic,auto,,125 SU credits.,,retrieval_noise,,,
+q008,How many SU credits of area electives are required in the CS 202401 curriculum?,hybrid,basic,auto,,9 SU credits of area electives.,,retrieval_noise,,,
+q010,How many SU credits of free electives are required in the CS 202401 curriculum?,hybrid,basic,auto,,15 SU credits of free electives.,,retrieval_miss,,,
+q013,CS 202401 müfredatında mezun olmak için gereken minimum toplam SU kredisi kaçtır?,hybrid,basic,auto,,125 SU kredisi.,,retrieval_miss,,,
+q001,"In the CS 202401 curriculum, which requirement category does CS 414 belong to?",hybrid_rerank,basic,auto,,CS 414 belongs to the area electives pool of the CS 202401 curriculum.,,retrieval_miss,,,
+q003,"In the CS 202401 curriculum, which requirement category does ACC 301 belong to?",hybrid_rerank,basic,auto,,ACC 301 belongs to the free electives pool of the CS 202401 curriculum.,,retrieval_miss,,,
+q007,What is the minimum total ECTS required for the CS 202401 curriculum?,hybrid_rerank,basic,auto,,240 ECTS.,,retrieval_noise,,,
+q008,How many SU credits of area electives are required in the CS 202401 curriculum?,hybrid_rerank,basic,auto,,9 SU credits of area electives.,,retrieval_noise,,,
+q009,How many SU credits of core electives are required in the CS 202401 curriculum?,hybrid_rerank,basic,auto,,31 SU credits of core electives.,,retrieval_noise,,,
+q010,How many SU credits of free electives are required in the CS 202401 curriculum?,hybrid_rerank,basic,auto,,15 SU credits of free electives.,,retrieval_miss,,,
+q011,How many SU credits of required courses are required in the CS 202401 curriculum?,hybrid_rerank,basic,auto,"Gerekli Dersler Durumu: Alınanlar: [Dersler] | Toplam: 29/29 SU | Durum: Tamamlandı 
+
+GENEL MEZUNİYET DURUMU: Tamamlanan: 125/125 SU Kredisi | Kalan: 0 SU Kredisi.
+
+Sources:
+1. degree_requirements/CS/202401.jsonl",29 SU credits of required courses.,Request intent | degree_requirements/CS/202401.jsonl,retrieval_noise,,,
+q013,CS 202401 müfredatında mezun olmak için gereken minimum toplam SU kredisi kaçtır?,hybrid_rerank,basic,auto,,125 SU kredisi.,,retrieval_miss,,,
+q016,What is the minimum total number of SU credits required for the IE 202401 curriculum?,hybrid_rerank,basic,auto,,125 SU credits.,,retrieval_noise,,,

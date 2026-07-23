@@ -10,15 +10,34 @@ from pymongo import ASCENDING, MongoClient
 from modules.config import MONGO_DB_NAME, MONGO_URI
 
 
-mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
-sync_db = mongo_client[MONGO_DB_NAME]
+# Lazy client: constructing a MongoClient against a mongodb+srv:// URI resolves the SRV
+# record eagerly and blocks ~20s (then errors) when Mongo/DNS is unreachable. Importing
+# this module must never do that, or the whole app fails to boot. So we build the client
+# on first actual DB use and expose collections as thin lazy proxies.
+_mongo_client: MongoClient | None = None
 
-source_documents = sync_db["sourceDocuments"]
-ingestion_jobs = sync_db["ingestionJobs"]
-upload_batches = sync_db["uploadBatches"]
-instructor_reviews = sync_db["instructorReviews"]
-exams = sync_db["exams"]
-embedding_cache = sync_db["embeddingCache"]
+
+def _db():
+    global _mongo_client
+    if _mongo_client is None:
+        _mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
+    return _mongo_client[MONGO_DB_NAME]
+
+
+class _LazyCollection:
+    def __init__(self, name: str) -> None:
+        self._name = name
+
+    def __getattr__(self, item):
+        return getattr(_db()[self._name], item)
+
+
+source_documents = _LazyCollection("sourceDocuments")
+ingestion_jobs = _LazyCollection("ingestionJobs")
+upload_batches = _LazyCollection("uploadBatches")
+instructor_reviews = _LazyCollection("instructorReviews")
+exams = _LazyCollection("exams")
+embedding_cache = _LazyCollection("embeddingCache")
 
 
 def utc_now() -> datetime:

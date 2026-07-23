@@ -22,7 +22,7 @@ from modules.file_lifecycle import (
     ingest_exam_upload,
 )
 from modules.intent_detector import get_intent
-from modules.llm import get_llm_chain
+from modules.llm import answer_without_context, detect_language, get_llm_chain
 from modules.query_handlers import query_chain
 from modules.config import (
     ADMIN_PASSWORD,
@@ -30,26 +30,36 @@ from modules.config import (
     AUTO_INGEST_SOURCES,
     AUTO_SEED_COURSES,
     CATALOG_DATA_DIR,
+    DEFAULT_EXPERT_MODE,
+    DEFAULT_PROMPT_STRATEGY,
+    DEFAULT_RETRIEVAL_MODE,
     RERANK_TOP_K,
     RETRIEVAL_CANDIDATE_K,
     SOURCES_DIR,
 )
+from modules import retrieval_modes
 from modules.catalog_retriever import retrieve_documents
 from modules.mongodb import (
     ensure_database,
     ensure_user,
+    get_academic_profile,
+    get_completed_course_codes,
     get_user_course_context,
     get_user_courses,
     list_courses,
     seed_courses_from_catalog,
+    set_academic_profile,
     set_user_courses,
 )
-from modules.reranker import rerank_documents
 from modules.rag_router import route_query
+from modules import curriculum_registry
+from modules import degree_audit
+from modules import conversation_memory
+from modules.retrieval_policy import build_metadata_filter, check_profile
 from modules.source_indexer import ensure_sources_indexed
 from logger import logger
 
-app = FastAPI(title="SU-GPT — Course-Aware RAG Assistant")
+app = FastAPI(title="adviSU — Retrieval-Augmented Academic Advising System")
 
 
 class StaticRetriever(BaseRetriever):
@@ -66,6 +76,16 @@ class LoginPayload(BaseModel):
 
 class CourseSelectionPayload(BaseModel):
     course_ids: list[str] = Field(default_factory=list)
+    # optional per-course status: completed | enrolled | failed | withdrawn | transfer | exempted
+    statuses: dict[str, str] = Field(default_factory=dict)
+
+
+class AcademicProfilePayload(BaseModel):
+    major: str | None = None
+    degree_code: str | None = None
+    admission_term: str | None = None
+    curriculum_term: str | None = None
+    minor_codes: list[str] | None = None
 
 
 GRADUATION_INTENT_RE = re.compile(
@@ -120,6 +140,11 @@ SPECIALIZATION_INTENT_RE = re.compile(
     r"özelleş|ozelles|uzmanlaş|uzmanlas|alt dal|yönel|yonel|"
     r"nlp mi|security mi|data alanında|data alaninda|yapay zeka alanında|yapay zeka alaninda"
     r")",
+    re.IGNORECASE,
+)
+
+MINOR_INTENT_RE = re.compile(
+    r"\b(minor|yandal|yan dal|yan-dal)\b",
     re.IGNORECASE,
 )
 
@@ -271,6 +296,8 @@ def _is_course_detail_like(question: str) -> bool:
 
 
 def _resolve_intent(question: str, detected_intent: str) -> str:
+    if MINOR_INTENT_RE.search(question or ""):
+        return "minor"
     if _is_graduation_intent(question) and not _is_course_detail_like(question):
         return "mezuniyet_durumu"
     if _is_course_detail_like(question):
@@ -333,16 +360,19 @@ def _recommendation_retrieval_query(question: str) -> str:
     )
 
 
-def _retrieval_query_for_intent(question: str, intent: str) -> str:
+def _retrieval_query_for_intent(question: str, intent: str, program: str | None = None) -> str:
     if intent == "review":
         return f"{question} instructor professor review workload grading difficulty course experience"
     if intent == "exam":
         return f"{question} exam final midterm quiz past questions solutions assessment"
+    if intent == "minor":
+        return f"{question} minor program required courses core electives area electives"
     if intent == "ders_onerisi":
         return _recommendation_retrieval_query(question)
     if intent == "mezuniyet_durumu":
+        prog = (program or "").strip()
         return (
-            f"{question} official degree evaluation BSCS graduation requirements "
+            f"{question} {prog} degree requirements graduation "
             "university courses required courses core electives area electives free electives"
         )
     if intent == "calisma_plani":
@@ -415,6 +445,21 @@ def _intent_context_document(intent: str, taken_codes: list[str] | None = None) 
     return Document(
         page_content=text,
         metadata={"source": "Request intent", "document_type": "request_intent", "intent": intent},
+    )
+
+
+def _audit_context_document(audit_result: dict) -> Document:
+    """Wrap the deterministic degree-audit object as an authoritative, non-negotiable context source."""
+    text = (
+        "[Source: Deterministic degree audit engine (authoritative)]\n"
+        "The following graduation audit was computed in backend code from the official "
+        "requirement file and the student's completed courses. Treat these numbers as final; "
+        "do NOT recompute or contradict them. Explain them clearly to the student.\n"
+        + json.dumps(audit_result, ensure_ascii=False, indent=2)
+    )
+    return Document(
+        page_content=text,
+        metadata={"source": "Deterministic degree audit", "document_type": "degree_audit_result"},
     )
 
 
@@ -831,18 +876,99 @@ async def get_selected_courses(username: str):
 
 @app.put("/users/{username}/courses")
 async def save_selected_courses(username: str, payload: CourseSelectionPayload):
-    return {"courses": await set_user_courses(username, payload.course_ids)}
+    return {"courses": await set_user_courses(username, payload.course_ids, payload.statuses)}
+
+
+@app.get("/users/{username}/profile")
+async def get_profile(username: str):
+    return {"profile": await get_academic_profile(username)}
+
+
+@app.put("/users/{username}/profile")
+async def put_profile(username: str, payload: AcademicProfilePayload):
+    updated = await set_academic_profile(username, payload.model_dump(exclude_none=True))
+    return {"profile": updated}
+
+
+@app.get("/curricula/")
+async def get_curricula():
+    """Valid curriculum choices for the frontend selector (roadmap section 20)."""
+    return {
+        "programs": curriculum_registry.list_major_programs(),
+        "majors": curriculum_registry.majors(),
+        "minors": curriculum_registry.minors(),
+    }
+
+
+@app.get("/curricula/{program}")
+async def get_program_curricula(program: str):
+    return {"program": program.upper(), "curricula": curriculum_registry.curricula_for_program(program)}
+
+
+@app.get("/users/{username}/degree-audit")
+async def degree_audit_endpoint(username: str):
+    """Deterministic degree audit for the student's confirmed profile (roadmap section 14)."""
+    profile = await get_academic_profile(username)
+    program = (profile.get("major") or "").strip().upper()
+    term = (profile.get("curriculum_term") or "").strip()
+    if not program or not term:
+        raise HTTPException(status_code=400, detail="Academic profile (major + curriculum_term) is not set.")
+    completed = await get_completed_course_codes(username)
+    return degree_audit.audit(program, term, completed)
 
 
 @app.post("/ask/")
-async def ask_question(question: str = Form(...), username: str | None = Form(None)):
+async def ask_question(
+    question: str = Form(...),
+    username: str | None = Form(None),
+    session_id: str | None = Form(None),
+    # Section 3. All four are optional: a client that posts only `question` keeps the
+    # previous behaviour (hybrid_rerank). prompt_strategy/expert_mode are accepted and
+    # echoed now, but stay inert until Section 4 implements the prompts module.
+    mode: str | None = Form(None),
+    top_k: int | None = Form(None),
+    prompt_strategy: str | None = Form(None),
+    expert_mode: str | None = Form(None),
+):
+    retrieval_mode = retrieval_modes.normalize_mode(mode or DEFAULT_RETRIEVAL_MODE)
+    context_top_k = max(int(top_k), 1) if top_k else RERANK_TOP_K
+    prompt_strategy = (prompt_strategy or DEFAULT_PROMPT_STRATEGY).strip().lower()
+    expert_mode = (expert_mode or DEFAULT_EXPERT_MODE).strip().lower()
+
+    def _stamp(payload: dict) -> dict:
+        """Every /ask response reports the configuration that produced it (needed by Section 5)."""
+        payload.setdefault("mode", retrieval_mode)
+        payload.setdefault("top_k", context_top_k)
+        payload.setdefault("prompt_strategy", prompt_strategy)
+        payload.setdefault("expert_mode", expert_mode)
+        return payload
+
     try:
-        logger.info(f"user query: {question}")
+        logger.info(f"user query: {question} (mode={retrieval_mode}, top_k={context_top_k})")
+
+        # LLM-only baseline: no retrieval, no student data, no sources, no profile gate.
+        # It answers from model knowledge alone so the evaluation can measure what RAG adds.
+        if retrieval_mode == "llm_only":
+            answer = answer_without_context(question)
+            await conversation_memory.append_turn(
+                session_id, username=username, question=question, answer=answer, intent="llm_only"
+            )
+            return _stamp({
+                "response": answer,
+                "sources": [],
+                "source_chunk_ids": [],
+                "intent": "llm_only",
+                "warning": retrieval_modes.LLM_ONLY_WARNING,
+            })
+
+        # Bounded session memory: resolve "this course" style follow-ups (roadmap section 19).
+        working_context = await conversation_memory.get_working_context(session_id)
+        question = conversation_memory.resolve_reference(question, working_context)
 
         detected_intent = get_intent(question)
         resolved_intent = _resolve_intent(question, detected_intent)
         route = route_query(question, resolved_intent)
-        intent = route.intent
+        intent = resolved_intent if resolved_intent == "minor" else route.intent
         logger.info(
             "detected intent=%s resolved intent=%s route intent=%s document_types=%s confidence=%.3f",
             detected_intent,
@@ -852,24 +978,79 @@ async def ask_question(question: str = Form(...), username: str | None = Form(No
             route.confidence,
         )
 
+        # Student academic profile (roadmap section 8) drives profile-scoped retrieval.
+        profile = await get_academic_profile(username) if username else {}
+        program = (profile.get("major") or "").strip().upper()
+
         graduation_intent = intent == "mezuniyet_durumu"
         recommendation_intent = intent == "ders_onerisi"
         if recommendation_intent and not _has_interest_area(question):
-            return {
+            return _stamp({
                 "response": "Hangi alana ilgilisin? Örn: NLP, Web, Data, Systems, AI, Security.",
                 "sources": [],
                 "source_chunk_ids": [],
                 "intent": intent,
-            }
+            })
+
+        # Missing-data / missing-profile safety for authoritative intents (roadmap section 15).
+        gate = check_profile(intent, profile)
+        if not gate.ok:
+            return _stamp({
+                "response": gate.message,
+                "sources": [],
+                "source_chunk_ids": [],
+                "intent": intent,
+                "profile_required": bool(gate.missing_fields),
+                "curriculum_unavailable": gate.data_unavailable,
+            })
 
         vectorstore = get_vectorstore()
         effective_question = _expanded_recommendation_question(question) if recommendation_intent else question
-        retrieval_query = _retrieval_query_for_intent(effective_question, intent)
-        candidate_docs = _retrieve_for_route(vectorstore, route, retrieval_query)
-        if intent == "diger" and not candidate_docs:
-            return {"response": NON_ACADEMIC_FALLBACK, "sources": [], "source_chunk_ids": [], "intent": intent}
-        reranked_docs = rerank_documents(retrieval_query, candidate_docs, top_k=RERANK_TOP_K)
-        context_docs = _format_for_context(reranked_docs)
+        retrieval_query = _retrieval_query_for_intent(effective_question, intent, program=program)
+
+        # Profile-aware retrieval: scope by data_role (+ program/curriculum_term) BEFORE rerank,
+        # so e.g. a CS student never sees IE requirements. Falls back to the documentType route
+        # for review/exam/diger where no policy applies.
+        policy_filter = build_metadata_filter(intent, profile)
+        active_filter = policy_filter if policy_filter is not None else getattr(route, "metadata_filter", None)
+
+        def _hybrid_search() -> List[Document]:
+            """The production fused path (structured get + dense + BM25), already scoped."""
+            if policy_filter is not None:
+                return retrieve_documents(
+                    vectorstore, retrieval_query, k=RETRIEVAL_CANDIDATE_K, metadata_filter=policy_filter
+                )
+            return _retrieve_for_route(vectorstore, route, retrieval_query)
+
+        # Section 3: the selected mode decides which retrievers run. Every mode gets the same
+        # `active_filter`, so ablating a retriever never widens the corpus beyond the student's
+        # program/term scope.
+        outcome = retrieval_modes.retrieve(
+            retrieval_mode,
+            vectorstore=vectorstore,
+            query=retrieval_query,
+            top_k=context_top_k,
+            candidate_k=RETRIEVAL_CANDIDATE_K,
+            metadata_filter=active_filter,
+            hybrid_search=_hybrid_search,
+        )
+        if intent == "diger" and not outcome.documents:
+            return _stamp({
+                "response": NON_ACADEMIC_FALLBACK,
+                "sources": [],
+                "source_chunk_ids": [],
+                "intent": intent,
+            })
+        context_docs = _format_for_context(outcome.documents)
+
+        # Deterministic degree audit: compute the numbers in code, inject as authoritative context.
+        if graduation_intent and program and profile.get("curriculum_term"):
+            try:
+                completed = await get_completed_course_codes(username) if username else []
+                audit_result = degree_audit.audit(program, profile["curriculum_term"], completed)
+                context_docs.insert(0, _audit_context_document(audit_result))
+            except Exception:
+                logger.exception("degree audit failed")
 
         taken_codes: list[str] = []
         if recommendation_intent and username:
@@ -894,19 +1075,79 @@ async def ask_question(question: str = Form(...), username: str | None = Form(No
         context_docs.insert(0, _intent_context_document(intent, taken_codes))
 
         retriever = StaticRetriever(documents=context_docs)
-        chain = get_llm_chain(retriever, intent=intent)
+        # Answer in the language the student wrote in. Decided here rather than left to a rule
+        # inside the (Turkish) system prompt, which the model was not reliably honouring.
+        chain = get_llm_chain(retriever, intent=intent, language=detect_language(question))
         llm_question = _recommendation_question_for_llm(effective_question, taken_codes) if recommendation_intent else question
         result = query_chain(chain, llm_question)
         if recommendation_intent:
             result = _clean_recommendation_response(result)
         result["intent"] = intent
+        result = _stamp(result)
+        result["reranked"] = outcome.reranked
+        result["num_retrieved_chunks"] = outcome.candidate_count
+        result["num_final_context_chunks"] = len(outcome.documents)
+
+        # Update bounded session memory (best-effort).
+        await conversation_memory.append_turn(
+            session_id,
+            username=username,
+            question=question,
+            answer=result.get("response", ""),
+            intent=intent,
+            course_id=conversation_memory.extract_course_code(question)
+            or (working_context.get("last_course_id") if working_context else None),
+            term_code=profile.get("curriculum_term"),
+            sources=result.get("sources") or [],
+        )
 
         logger.info("query successful")
         return result
 
     except Exception as e:
         logger.exception("Error processing question")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        # Never surface the raw provider payload: it carries the organisation id and quota
+        # internals, and reads as a crash to the student. The full error is in the server log.
+        detail = str(e)
+        if "rate_limit" in detail or "429" in detail:
+            message = (
+                "The language model is temporarily rate limited, so I can't answer right now. "
+                "Please try again in a few minutes — your profile and course history are unaffected."
+            )
+        else:
+            message = (
+                "Something went wrong while answering that. Please try again; if it keeps "
+                "happening, check the backend logs."
+            )
+        return _stamp({
+            "response": message,
+            "sources": [],
+            "source_chunk_ids": [],
+            "intent": "error",
+            "error": True,
+        })
+
+
+@app.get("/users/{username}/conversations")
+async def list_conversations(username: str, limit: int = 50):
+    """Chat history for the sidebar: newest first, titles only."""
+    return {"conversations": await conversation_memory.list_conversations(username, limit)}
+
+
+@app.get("/conversations/{session_id}")
+async def get_conversation(session_id: str):
+    conversation = await conversation_memory.get_conversation(session_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return conversation
+
+
+@app.delete("/conversations/{session_id}")
+async def delete_conversation(session_id: str):
+    deleted = await conversation_memory.delete_conversation(session_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"deleted": True}
 
 
 @app.get("/test")

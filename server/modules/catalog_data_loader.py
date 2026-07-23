@@ -40,10 +40,14 @@ REQUIREMENT_LABELS = {
 }
 
 
-def iter_catalog_documents(data_dir: str | Path) -> Iterator[Document]:
+def iter_catalog_documents(
+    data_dir: str | Path,
+    term_codes: Iterable[str] | None = None,
+) -> Iterator[Document]:
     root = Path(data_dir).expanduser().resolve()
     if not root.exists():
         raise FileNotFoundError(f"Catalog data directory does not exist: {root}")
+    selected_terms = set(term_codes or [])
 
     for path in _existing_files(
         [
@@ -61,6 +65,8 @@ def iter_catalog_documents(data_dir: str | Path) -> Iterator[Document]:
             yield from _iter_degree_requirement_source_file(path, root)
 
     for term_dir in sorted(p for p in root.iterdir() if p.is_dir() and _is_term_code(p.name)):
+        if selected_terms and term_dir.name not in selected_terms:
+            continue
         for path in sorted(term_dir.glob("*.jsonl")):
             yield from _iter_requirement_file(
                 path=path,
@@ -81,6 +87,8 @@ def iter_catalog_documents(data_dir: str | Path) -> Iterator[Document]:
                 term_code=None,
             )
         for term_dir in sorted(p for p in minors_dir.iterdir() if p.is_dir() and _is_term_code(p.name)):
+            if selected_terms and term_dir.name not in selected_terms:
+                continue
             for path in sorted(term_dir.glob("*.jsonl")):
                 yield from _iter_requirement_file(
                     path=path,
@@ -93,6 +101,8 @@ def iter_catalog_documents(data_dir: str | Path) -> Iterator[Document]:
     schedule_dir = root / "schedule"
     if schedule_dir.exists():
         for path in sorted(schedule_dir.glob("*.jsonl")):
+            if selected_terms and path.stem not in selected_terms:
+                continue
             yield from _iter_schedule_file(path, root)
 
 

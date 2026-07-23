@@ -15,7 +15,8 @@ langchain-mistralai
 langchain-text-splitters
 
 # Vectorstore
-chromadb
+# Tested minimum supported by the current langchain-chroma integration.
+chromadb==1.3.5
 
 # Database
 motor

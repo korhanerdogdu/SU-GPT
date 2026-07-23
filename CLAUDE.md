@@ -1,8 +1,17 @@
-# CLAUDE.md — SU-GPT Incremental Implementation Guide
+# CLAUDE.md — adviSU Implementation Guide
+
+> **CURRENT STATE:** the project is now **adviSU — Retrieval-Augmented Academic Advising
+> System**. For what is actually built and running (data corpus, ChromaDB, MongoDB,
+> profile-aware retrieval, deterministic degree audit, endpoints, frontend), read
+> **"adviSU — Final Implemented State (2026-07-20)"** further down. Everything above that
+> section (original SU-GPT name, section-by-section roadmap, `documentType`-only model) is
+> historical context — keep it, but the Final Implemented State section is authoritative.
 
 # Project Name
 
-SU-GPT: An Evaluation of Retrieval, Hallucination and Efficiency for a Course-Aware RAG Assistant
+adviSU — Retrieval-Augmented Academic Advising System (Sabancı University).
+Originally: "SU-GPT: An Evaluation of Retrieval, Hallucination and Efficiency for a
+Course-Aware RAG Assistant".
 
 # Team
 
@@ -19,20 +28,25 @@ CS 455
 
 You are working inside an existing project, not starting from scratch. The project was originally RagBot 2.0 and is now SU-GPT.
 
-## Current State (as of last update)
+## Current State (updated 2026-07-22)
 
 **Implemented**
-- Sections 1 and 2 are complete.
+- Sections 1, 2, **3, 5, 6 and 7** are complete. See each section's own Status block for detail.
+- A **product/UX round** followed the evaluation work: new brand assets + design system, redesigned
+  login and chat, a Course History page, chat history, language consistency, and removal of the
+  retrieval picker. **See "I. Product / UX round" — it is the authoritative description of the
+  current UI and supersedes older frontend notes in this file.**
 - Section 4 has a partial bleed-through: the LLM prompt has been softened, made citation-aware, and the `/ask/` handler now passes source-labeled context to the model. The dedicated `prompts.py` module, query router, and few-shot/expert prompts are NOT yet implemented — those still belong to Section 4 proper.
 - Retrieval pipeline was tuned (CHUNK_SIZE=1000, CHUNK_OVERLAP=150, RETRIEVAL_CANDIDATE_K=20, RERANK_TOP_K=6, source-labeled context).
 - Frontend was migrated from Streamlit (deleted) to a React + Vite + shadcn/ui + Tailwind app under `frontend/`. A visual-only login/signup gate (localStorage-backed) exists at `/login` and `/signup`; the main chat lives at `/`.
+- Beyond the numbered sections, the whole **adviSU advising system** was built — see "adviSU — Final Implemented State" below, which is the authoritative description.
 
 **Not yet implemented**
-- Section 3 (retrieval modes: LLM-only, BM25, Dense, Hybrid, Hybrid+Rerank)
-- Section 4 proper (prompts module, query router, expert routing, few-shot)
-- Section 5 (benchmark + evaluation pipeline)
-- Section 6 (efficiency logging, ablations, failure analysis)
-- Section 7 (README, prompt log, experiment log, demo script)
+- **Section 4 proper** (prompts module, query router, expert routing, few-shot). `/ask/` accepts `prompt_strategy` and `expert_mode` but they are inert, so no prompt-strategy comparison exists.
+
+**Implemented but incomplete**
+- Answer-side evaluation covers only 2 of 5 modes fully (`bm25`, `llm_only`); `dense` 18%, `hybrid_rerank` 5%, `hybrid` 0%. Cause is Groq's 100k tokens/day free-tier cap, not a code defect. Retrieval metrics are complete and reproduce exactly across three runs.
+- Section 7.6 (clean-machine reproducibility check) was not performed.
 
 ## What the project currently has
 
@@ -267,6 +281,310 @@ The goal is to continue transforming SU-GPT section by section.
 Do not rebuild the project from scratch.
 
 Preserve the existing working functionality and extend it section by section.
+
+---
+
+## adviSU — Final Implemented State (2026-07-20)
+
+**The project is now `adviSU` — "Retrieval-Augmented Academic Advising System | Sabancı
+University".** This is the authoritative description of what is actually built and running.
+It supersedes the older `documentType`-only production notes above where they conflict. It
+follows `ACADEMIC_ADVISING_DATA_ROADMAP.md`; `GEREKLI_DATALAR.txt` was deleted. The old
+document-upload / exam / instructor-review RAG flows are preserved but are not the focus.
+
+### A. Where the data comes from — exact source links
+
+Program-code map: CS=`BSCS`, IE=`BSMS`, BIO=`BSBIO`, ME=`BSME`, EE=`BSEE`, PSY=`BAPSY`,
+ECON=`BAECON`, DSA=`BSDSA`, MAT=`BSMAT`. Admit/curriculum terms: `202201 202301 202401 202501`.
+Everything is scraped from the public Sabancı prospective-students site.
+
+1. **Major degree requirements (main page)** — totals, University + Required course lists,
+   category minimums (SU/ECTS/courses), and links to the elective/faculty pools:
+   `https://www.sabanciuniv.edu/en/prospective-students/degree-detail?SU_DEGREE.p_degree_detail?P_TERM=<TERM>&P_PROGRAM=<CODE>&P_SUBMIT=&P_LANG=EN&P_LEVEL=UG`
+2. **Elective / faculty course pools** — the enumerated course lists behind "Click for …":
+   `...?SU_DEGREE.p_list_courses?P_TERM=<TERM>&P_AREA=<AREA>&P_PROGRAM=<CODE>&P_LANG=EN&P_LEVEL=UG`
+   where `<AREA>` = `<CODE>_CEL` (core), `<CODE>_AEL` (area), `<CODE>_FEL` (free), or the faculty
+   pools `FC_FENS`(+`&P_FAC=E`) / `FC_FASS`(+`&P_FAC=S`) / `FC_SOM`(+`&P_FAC=M`).
+   **Pool-code quirks:** EE uses `BSEE_CEL/ARE/FRE`; PSY uses `BAPSY_COR/ARE/FRE`. Each course row
+   in these pages is `[marker, code, name, ECTS, SU, faculty]` and the **code links to that
+   course's catalog page** (see #5).
+3. **Minor list:** `https://suis.sabanciuniv.edu/prod/SU_DEGREE.p_list_degree?P_LEVEL=UG&P_LANG=EN&P_PRG_TYPE=MINOR`
+   → 17 minors with codes like `MATH-MINOR`, `FIN-MINOR`, …
+4. **Minor requirements:** the same `p_degree_detail` URL with `P_PROGRAM=<CODE>-MINOR`. Minors list
+   their Required + Core/Area courses inline; 3 (ENTREP/MKTG/DECB) put Area electives behind an
+   external `p_list_courses` pool (`P_AREA=ENTREP_ARE` / `MKTG_AEL` / `DECB_ARE`).
+5. **Per-course engineering / basic-science ECTS** — the split needed for the graduation Eng≥90 /
+   Basic-Science≥60 rules. Found on each course's catalog page (the link embedded in every pool row
+   in #2), e.g. NS 101 shows `6 ECTS (ENGINEERING:0 / BASIC:6)`, CS 303 shows `ENGINEERING:6 / BASIC:1`:
+   `https://www.sabanciuniv.edu/en/prospective-students/degree-detail?sabanci_www.p_get_courses?levl_code=UG&subj_code=<SUBJ>&crse_numb=<NUM>&lang=eng`
+
+### B. Offline generation pipeline (`server/scripts/degree_gen/` + a few scripts)
+
+Run once (or when re-scraping); the running app never calls these. `curl` downloads raw HTML,
+Python regex-parses it (WebFetch truncates the big free-elective lists, so raw parse is used).
+1. `parse_pools.py <pages_dir> <out.json>` — pool HTML → `{catalog, pools}`.
+2. `gen_degree_reqs.py <config_<PROG>.json> <parsed.json> <out_dir>` — emits
+   `data/degree_requirements/<PROG>/<TERM>.jsonl` (CS used the older `gen_cs_degree_reqs.py`). Each
+   `config_<PROG>.json` carries the program's University/Required lists + per-term flags
+   (math choices, `pool_suffix`, `hum_min_courses`, `extra_pools`, `faculty_rule`, `eng_ects`/`bsci_ects`).
+3. `build_minors.py <minor_pages> data/minors <external_pools>` — minors.
+4. `build_curricula_registry.py` (`npm run registry`) → `data/curricula/registry.jsonl`.
+5. `build_course_catalog.py` (`npm run catalog`) → `data/course_catalog/current.jsonl` (union of all
+   `*_pool_course` rows → 816 courses; eng/basic left null).
+6. `scrape_course_credits.py` (`npm run scrape:credits`) — fetches source #5 for all 816 courses
+   (urllib + threadpool, cached in `data/course_catalog/credits_cache.json`), fills
+   `engineering_ects`/`basic_science_ects` in `current.jsonl`. **816/816 filled** (211 eng>0, 153 basic>0).
+
+### C. What is stored WHERE (storage map)
+
+**On disk — `data/` (pre-chunked JSONL, the offline output, committed):**
+- `degree_requirements/<PROG>/<TERM>.jsonl` — 9 majors × 4 terms = **36 files**, `data_role="curriculum_requirement"`.
+- `minors/<CODE>/<TERM>.jsonl` — 17 minors × 4 terms = **68 files**, `data_role="minor_requirement"`.
+- `curricula/registry.jsonl` — 104 rows (which program×term exist).
+- `course_catalog/current.jsonl` — **816 courses** (code/title/su_credits/ects/faculty/engineering_ects/basic_science_ects).
+- Each requirement row is one retrieval chunk: `text` + stable `chunk_id` + flat metadata
+  (`program`, `curriculum_term`, `requirement_category`, `course_id`, `su_credits`, `ects`, `faculty`,
+  `document_type` ∈ {..._profile, ..._category_pool, ..._pool_course, ..._rule}).
+
+**ChromaDB — collection `su_knowledge` (`server/chroma_store`):** ONLY the requirement/minor
+retrieval chunks are embedded here (**~30,343 vectors**). Ingested by
+`ingest_degree_requirements.py` (`npm run ingest:degrees[:reset]`), which reads the JSONL directly,
+scalarizes metadata (lists→JSON string, None dropped), adds aliases (`documentType`="course"/"minor",
+`term_code`=`curriculum_term`), and upserts. **NOT in Chroma:** the course catalog as standalone
+docs (its pool_course rows are already in Chroma as requirement chunks), student profiles, course
+history — those live only in MongoDB. Chroma is a reproducible index, not the source of truth.
+
+**MongoDB — db `advisu` (source of truth for per-student + catalog data):**
+- `users` — each has `academic_profile` (major, degree_code, admission_term, curriculum_term,
+  minor_codes, profile_status). **`current_term` was removed 2026-07-22** — it was collected by the
+  profile form but never read; retrieval scoping and the audit both key off `curriculum_term`.
+- `courses` — the ~816-course catalog seeded from `course_catalog/current.jsonl` (`npm run seed:courses`),
+  with `su_credits`, `ects`, `engineering_ects`, `basic_science_ects`, `faculty`. This is what the
+  frontend course-picker searches (`/courses/`).
+- `user_courses` — the student's course history **with per-course status** (completed/enrolled/
+  failed/withdrawn/transfer/exempted); `get_completed_course_codes` returns only credit-eligible
+  (completed/transfer/exempted).
+- `conversations` — bounded session memory (last 5 turns + working context).
+- Legacy source-of-truth collections (`sourceDocuments`, `ingestionJobs`, `uploadBatches`,
+  `instructorReviews`, `exams`, `embeddingCache`) still exist for the upload/exam/review flows.
+- **Lazy Mongo:** `source_of_truth.py` builds the pymongo client on first use (was constructed at
+  import → hung ~20s on an unreachable Atlas SRV). App boots in ~12s (model load only).
+
+### D. Runtime `/ask` flow — step by step (and exactly what the LLM receives)
+
+`POST /ask/` (form: `question`, optional `username`, `session_id`) — `server/main.py`:
+1. **Session memory:** `conversation_memory.get_working_context(session_id)`; `resolve_reference`
+   rewrites "can I take it next semester?" → appends the last course code.
+2. **Intent:** `get_intent` (TF-IDF/LogReg) → `_resolve_intent` regex guards (adds `minor`) → `route_query`.
+3. **Profile:** `get_academic_profile(username)` from MongoDB (major, curriculum_term, …).
+4. **Policy + gate:** `retrieval_policy.build_metadata_filter(intent, profile)` and `check_profile`.
+   For an authoritative graduation question with no profile / no official file → return a safe
+   limitation message (never a cross-program/term fallback).
+5. **Retrieval (profile-scoped, hybrid):** `catalog_retriever.retrieve_documents(vs, query, k,
+   metadata_filter={data_role, program, curriculum_term})` — vector (Chroma) + dependency-free BM25
+   over the same scoped subset, fused — then `rerank_documents` (CrossEncoder). Result: the exact
+   requirement chunks for THIS student's program+term.
+6. **Deterministic audit (graduation intents):** `degree_audit.audit(program, curriculum_term,
+   get_completed_course_codes(username))` — computed in code (see E). Injected as a context Document
+   `[Source: Deterministic degree audit engine (authoritative)]` containing the audit JSON.
+7. **Student context Document:** `get_user_course_context(username)` (or a compact recommendation
+   variant) is injected as `[Source: MongoDB student profile]` — the student's completed-course list
+   and credit totals in natural language.
+8. **LLM:** all context Documents (retrieved requirement chunks + the audit JSON block + the MongoDB
+   student-profile block + an intent-guidance block) are passed via a `StaticRetriever` into
+   `get_llm_chain` (LangChain RetrievalQA, chain_type `stuff`) → Groq Llama. `query_chain` returns
+   `{response, sources, source_chunk_ids, intent}`.
+9. `conversation_memory.append_turn(...)` stores the turn.
+
+**Do we give MongoDB details to the LLM?** Yes — the student's **derived academic data** (their
+`academic_profile` fields, their completed-course list, credit totals, and the deterministic audit,
+which itself is computed from the MongoDB course history) are embedded into the prompt as the
+`[Source: MongoDB student profile]` and `[Source: Deterministic degree audit]` context blocks.
+The system prompt (`modules/llm.py`) tells the model to **explain** these authoritative numbers and
+**not recompute or contradict** them. The raw connection string / credentials are NEVER sent — only
+the derived per-student facts. So numbers come from code + Mongo; the LLM only phrases the answer.
+
+### E. Deterministic degree audit (`degree_audit.py`)
+
+Reads exactly one official file `degree_requirements/<PROG>/<TERM>.jsonl` + the student's completed
+codes. Computes, in code (the LLM never does this):
+- **SU categories** — university / required / core / area / free with greedy overflow (extra
+  core→area→free), choice pools (e.g. MATH 201 *or* MATH 212 — 212 not flagged missing when 201 done),
+  and missing-required detection.
+- **Engineering / Basic-Science ECTS** — loads per-course eng/basic ECTS from
+  `course_catalog/current.jsonl` (`_course_credit_catalog`) and sums the student's completed courses
+  vs the program's Eng≥90 / Basic≥60 requirement → `ects_requirements` (completed/required/remaining).
+  Returns `engineering_basic_science: "computed"`.
+- Returns `{status, reliability:"authoritative", total_min_su_credits, completed_su_credits,
+  categories[], ects_requirements[], missing_required_courses[], warnings[]}`.
+  (**Note:** the audit reads eng/basic from `current.jsonl`, not Mongo — restart the backend after a
+  re-scrape so the lru_cache reloads.)
+
+### F. Endpoints (advising) + Frontend
+
+New endpoints: `GET/PUT /users/{u}/profile`, `GET /curricula/`, `GET /curricula/{program}`,
+`GET /users/{u}/degree-audit`; `PUT /users/{u}/courses` now takes per-course `statuses`.
+Chat history (2026-07-22): `GET /users/{u}/conversations`, `GET /conversations/{id}`,
+`DELETE /conversations/{id}`. **17 paths / 24 routes total.**
+Frontend: see **section I** below for the current UI (the 2026-07-22 UX round superseded the
+earlier logo/header/sidebar arrangement described in older revisions of this file). Core pieces:
+a Profile & Degree-Audit page (`/profile`) that loads `/curricula/`, saves the profile and renders
+the audit (SU category table + Eng/Basic ECTS lines + missing required); a Course History page
+(`/courses`); the chat at `/`; and a `session_id` sent with each `/ask`.
+
+### G. Config / tooling / tests
+
+Single root `.env` (no `.env.example`; `.env` gitignored): `GROQ_API_KEY` (chat) +
+`MONGO_URI` / `MONGO_DB_NAME=advisu` (profile/audit). `DEGREE_DATA_DIR` must stay unset (absolute
+`<project>/data` default — a relative value resolves to `server/data` and breaks curricula/audit).
+`DEFAULT_RETRIEVAL_MODE` defaults to **`hybrid`** (evidence-based, see §I/§15); the UI does not
+expose a picker.
+npm: `registry`, `catalog`, `scrape:credits`, `ingest:degrees[:reset]`, `seed:courses`,
+`validate:data`, `test:advising`, plus the evaluation scripts `benchmark:build`, `eval`,
+`eval:retrieval`, `eval:ablate`, `eval:tables`.
+`validate_degree_data.py` = validation + coverage report (0 errors).
+`server/tests/test_advising.py` = **18** unit + integration invariants (scope isolation,
+missing-data gate, audit choices/overflow/eng-basic, bm25, memory, status, and 4 retrieval-mode
+invariants: normalization/fallback, llm_only retrieves nothing, hybrid skips rerank but keeps scope
+and top_k, bm25 narrowing-gate default) — all pass.
+
+**Python environment on the dev machine is `server/myenv/`** (not `.venv`); `run_python.sh` prefers
+`server/.venv/bin/python` so npm scripts may need `PYTHON=server/myenv/Scripts/python.exe`.
+On Windows, set `PYTHONIOENCODING=utf-8` before running scripts that print Turkish text, or the
+cp1252 console encoder raises `UnicodeEncodeError` (the JSONL files themselves are UTF-8 and fine).
+
+### H. Roadmap status — done vs. NOT done (honest, keep updated)
+
+The **core advising roadmap is implemented**: clean per-program/term data + minors + course
+catalog (with eng/basic ECTS), ChromaDB ingestion, MongoDB profile + course-history-with-status,
+intent→policy retrieval scoping, missing-data safety, hybrid (vector+BM25) retrieval, deterministic
+degree audit (SU categories + engineering/basic-science ECTS), conversation memory, endpoints,
+frontend profile+audit page, validation + coverage report, and an automated invariant test suite.
+
+**NOT done / to improve later (roadmap items still open):**
+
+Data:
+- **Schedules** (`data/schedules/<TERM>.jsonl`) and **program-term classifications**
+  (`data/program_classifications/<TERM>/<PROG>.jsonl`) are NOT ingested → so schedule questions
+  (offerings, CRN, instructor, timetable) and full **course recommendation** are not backed by real
+  data. `main.py`'s legacy recommendation reads (`CATALOG_DATA_DIR/<term>/CS.jsonl`,
+  `.../schedule/…`) find nothing and are effectively dead; recommendation currently leans on the
+  requirement corpus only.
+- **`data/rules/`** (course_equivalencies, category_allocation, program_transitions) not created.
+- Only **9 majors + 17 minors × 4 admit terms**. More programs/terms require adding their config +
+  re-running the offline pipeline.
+
+Audit engine (`degree_audit.py`):
+- **Course equivalencies / double-count prevention** not applied (needs `rules/course_equivalencies`).
+- **Faculty-Courses requirement** (≥5 courses, ≥2 MATH, ≥3 FENS / FASS-based for BA) is described in
+  the data as a rule but the audit does NOT verify it yet.
+- **GPA checks** (min program/cumulative GPA) — no GPA data collected.
+- SU-category allocation is a sound greedy heuristic; it does not solve edge cases optimally
+  (a course legal in multiple pools is assigned once, greedily).
+
+Product / UX:
+- **Course-status entry UI**: backend accepts completed/failed/enrolled/transfer/exempted, but the
+  Course History page still sends plain completed IDs — add status toggles.
+- Real login/authorization (current auth is visual/localStorage; admin-only backend).
+- ~~Replace the placeholder logo~~ — **done 2026-07-22**, real adviSU logo in place (see §I).
+- ~~Chat history~~ — **done 2026-07-22** (§I). Long-conversation summarisation/compaction is still
+  not implemented: `recent_turns` stays capped at 5 for prompt context.
+- `frontend/src/pages/SignupPage.tsx` is **dead code** — `/signup` redirects to `/login` and
+  nothing imports the component. Delete it or wire up real signup; do not "fix" its styling.
+
+Retrieval quality (measured 2026-07-22, see `docs/experiment_log.md`):
+- **The CrossEncoder reranker currently HURTS recall on this corpus** (Recall@6 0.438 vs 0.625 for
+  plain hybrid, reproduced at top_k 3/5/10) and adds ~295 ms/query. Cause: `ms-marco-MiniLM` scores
+  the long enumerated `category_pool` chunks poorly against short questions. Candidate fixes:
+  a domain-appropriate reranker, or splitting category-pool chunks so the requirement clause is its
+  own chunk. **Deliberately not changed yet** — Sections 5/6 measure and report; changing the
+  retrieval stack is a separate product decision.
+- **Cross-lingual retrieval gap**: the corpus is English while the product answers in Turkish. A
+  Turkish question can fail to retrieve the chunk its English twin retrieves (benchmark q013 vs q006).
+
+Advanced student cases (roadmap Phase 7): double major, minor advising audit, transfer/exemption
+handling, program transitions, private per-student degree-evaluation uploads with access control.
+
+Conversation memory: keeps the last 5 turns; no long-conversation summarization/compaction yet.
+
+---
+
+### I. Product / UX round (2026-07-22) — current UI, supersedes older frontend notes
+
+**Brand assets.** `frontend/public/assets/`:
+- `big.png` — the source lockup as supplied (kept, untouched).
+- `adviSU-logo.png` — `big.png` trimmed of transparent padding (only **30%** of the source canvas
+  was non-transparent, so a raw swap rendered at half size). Regenerate with PIL `getbbox()` + 2% margin.
+- `adviSU-logo-reversed.png` — **knockout variant for dark grounds**, generated from
+  `adviSU-logo.png` by remapping blue-dominant dark pixels (66% of the mark, ~#1E3060) to white
+  while leaving the gold/teal accents alone; alpha preserved so edges stay clean. This exists
+  because the lockup's descriptor type and "SU" glyphs are navy and vanish on dark. **Use it on
+  every dark surface — do NOT put the logo on a white plate/rectangle** (tried, looked cheap).
+- `campus.jpg` — login background. `sugptlogo.png` / `sabanci_logo.png` deleted.
+
+**Design system.** Two deliberate registers:
+- **Dark chrome** (`/login`, chat): `#08152b`/`#0a1830` surfaces, `white/10` hairlines,
+  `sabanci-light` muted text, mono uppercase eyebrows (`font-mono text-[11px] uppercase
+  tracking-[0.22em]`), gold (`#D6A13A`) as the single accent (caret, focus rings, icons).
+- **Light setup pages** (`/profile`, `/courses`): `#F5F8FC` page, `#004B93` header bar, white cards
+  on `#D8E6F3` borders, `#003B73` headings, `#4A5568` muted. Both use the same tokens so they read
+  as one section.
+
+**Screens.**
+- `/login` — vertical split. Left: darkened `campus.jpg`, reversed lockup, a word-by-word
+  typewriter tagline cycling 3 lines (respects `prefers-reduced-motion`), and 5 example questions
+  set as quotations with a gold hanging quote mark. Right: navy sign-in panel. Copy lives in
+  `src/lib/sample-questions.ts` (shared, so screens can't drift).
+- `/` chat — sidebar is thread-based (New chat, titled history with relative times, delete);
+  header carries **no logo and no retrieval picker**; empty state is spare ("Are we graduating?"
+  + one explanatory line). Uploads and course picking moved OUT of the sidebar.
+- `/courses` — Course History. Left panel lists **saved completed courses with a running SU total**
+  (the point of the page: see what the system thinks you finished); right panel is the picker plus
+  document upload.
+- `/profile` — its "add courses in the chat sidebar" copy now links to `/courses`. The
+  **"Current academic term" selector was removed**: `current_term` was stored but never read by
+  anything (retrieval scoping and `degree_audit` both use `curriculum_term`, the admit term). A
+  control that changes nothing is worse than no control. Dropped from `AcademicProfilePayload`,
+  `DEFAULT_ACADEMIC_PROFILE` and the `AcademicProfile` TS interface.
+  **`get_academic_profile` now filters reads to the known keys.** Removing the field from the
+  default dict was not enough: the old code did `dict(DEFAULT).update(stored)`, so a user document
+  written before the removal still echoed `current_term` straight back out of `GET
+  /users/{u}/profile` — verified live, then fixed. Stored values are left in Mongo untouched;
+  they are simply no longer served.
+
+**Behaviour changes.**
+- **Language consistency** — `llm.detect_language()` decides `tr`/`en` in code and
+  `_LANGUAGE_DIRECTIVE` is injected at the top AND bottom of the prompt. The prompt already had a
+  "answer in the user's language" rule, but the whole system prompt is Turkish, which biased the
+  model to Turkish for English questions. A rule buried in Turkish prose does not win; a
+  code-decided directive does. Verified live both ways.
+- **Chat history** — `conversation_memory` now stores a durable `messages[]` transcript + `title` +
+  `updatedAt` **alongside** the capped `recent_turns` (5). They are deliberately separate:
+  `recent_turns` is prompt working memory and must stay bounded; `messages` is what the user browses.
+- **Retrieval picker removed from the UI** and `DEFAULT_RETRIEVAL_MODE` changed
+  `hybrid_rerank` → **`hybrid`** — see §12/§15: our own benchmark measured hybrid better
+  (Recall@6 0.625 vs 0.438) *and* ~283 ms faster. Modes still exist on `/ask/` for the evaluation
+  harness. Revert with `DEFAULT_RETRIEVAL_MODE=hybrid_rerank`.
+- **Profile gate banner** — chat shows a gold banner linking to `/profile` when major/curriculum
+  term is unset.
+- **Provider errors sanitised** — a Groq 429 used to render the raw payload (including the
+  organisation id) in the chat bubble; `/ask/` now returns a plain message and logs the detail.
+- **Auth deep-link fix** — `AuthContext` reads localStorage during the first render. Loading it in
+  a `useEffect` made the initial render unauthenticated, so refreshing on `/profile` bounced to
+  `/login` → `/`, silently losing the route.
+
+**Deleted:** `components/chat/CourseSelector.tsx` (superseded by `/courses`).
+
+---
+
+CS 455 *evaluation* track (sections 3, 5, 6, 7) — **implemented 2026-07-22.** Selectable retrieval
+modes, a corpus-derived benchmark, Recall@k/MRR/nDCG, efficiency logging, ablations, failure
+analysis, report tables, and the README/prompt/experiment/demo docs all exist and have been run.
+See sections 12, 14, 15, 16 and `docs/experiment_log.md` for measured numbers. **Section 4
+(prompts module, query router, few-shot, expert routing) is still NOT implemented** — `/ask/`
+accepts `prompt_strategy` and `expert_mode` but they are inert, so no prompt-strategy comparison
+exists yet. Answer-side evaluation is incomplete for 3 of 5 modes because Groq's free tier caps
+usage at 100k tokens/day. Do not fabricate results.
 
 ---
 
@@ -704,21 +1022,26 @@ Target structure (✓ = already exists; ⬜ = planned for a later section):
     - reranker.py                           ✓
     - llm.py                                ✓ (will be replaced by prompts.py + generation.py in Section 4)
     - query_handlers.py                     ✓
-    - bm25_retriever.py                     ⬜ Section 3
-    - dense_retriever.py                    ⬜ Section 3 (currently inline in main.py)
-    - hybrid_retriever.py                   ⬜ Section 3
-    - retrieval_modes.py                    ⬜ Section 3
+    - bm25_retriever.py                     ✓ (built during the advising work, before Section 3)
+    - retrieval_modes.py                    ✓ Section 3
+    - dense_retriever.py                    ✗ NOT created — deliberate. Dense/hybrid live inside
+    - hybrid_retriever.py                   ✗   catalog_retriever.retrieve_documents(); the working
+                                            ✗   fused path is injected into retrieval_modes.retrieve()
+                                            ✗   as a callable instead of being split up. See §12.
     - prompts.py                            ⬜ Section 4
     - query_router.py                       ⬜ Section 4
     - generation.py                         ⬜ Section 4
     - response_schema.py                    ⬜ Section 4
-    - metrics.py                            ⬜ Section 5
-    - logging_utils.py                      ⬜ Section 6
-  - evaluation/                             ⬜ Sections 5-6
-    - run_evaluation.py
-    - metrics.py
-    - ablation_runner.py
-    - ablation_configs.yaml
+    - logging_utils.py                      ✗ NOT created — per-query timings are carried on
+                                            ✗   RetrievalOutcome and written by the eval runner.
+  - evaluation/                             ✓ Sections 5-6
+    - __init__.py                           ✓
+    - build_benchmark.py                    ✓ (generates the benchmark from data/)
+    - metrics.py                            ✓ Recall@k / Precision@k / MRR@k / nDCG@k
+    - run_evaluation.py                     ✓
+    - ablation_runner.py                    ✓
+    - ablation_configs.yaml                 ✓
+    - make_tables.py                        ✓ (report CSVs + failure analysis)
   - uploaded_pdfs/                          ✓ (legacy /upload_pdfs/ target)
   - uploaded_documents/                     ✓ (Section 2; /upload_documents/ target)
   - chroma_store/                           ✓ (persistent ChromaDB)
@@ -731,22 +1054,25 @@ Target structure (✓ = already exists; ⬜ = planned for a later section):
     - components/chat/                      ✓
     - contexts/AuthContext.tsx              ✓
     - lib/{api,utils}.ts                    ✓
-    - pages/{Login,Signup,Chat}Page.tsx     ✓
+    - pages/{Login,Signup,Chat,Profile}Page.tsx  ✓ (ProfilePage added by the advising work)
 
-- data/                                     ⬜ Section 5
-  - benchmark/
-    - questions.jsonl
-  - sample_documents/
+- data/                                     ✓
+  - benchmark/questions.jsonl               ✓ Section 5 (GENERATED by build_benchmark.py, committed)
+  - degree_requirements/ minors/            ✓ advising corpus — see "Final Implemented State"
+  - curricula/ course_catalog/              ✓
+  - sample_documents/                       ✗ not created — the advising corpus is the corpus
 
-- outputs/                                  ⬜ Sections 5-6
-  - evaluation_runs/
-  - failure_analysis/
-  - tables/
+- outputs/                                  ✓ Sections 5-6
+  - evaluation_runs/<timestamp>/            ✓ results.jsonl, summary_metrics.json,
+                                            ✓   retrieved_chunks.jsonl, run_config.json
+  - evaluation_runs/ablations.jsonl         ✓
+  - failure_analysis/failure_cases.csv      ✓
+  - tables/                                 ✓ retrieval/answer/efficiency/failure/ablation CSVs
 
-- docs/                                     ⬜ Section 7
-  - prompt_log.md
-  - experiment_log.md
-  - demo_script.md
+- docs/                                     ✓ Section 7
+  - prompt_log.md                           ✓
+  - experiment_log.md                       ✓ (the measured numbers live here)
+  - demo_script.md                          ✓ (also the video shot list)
 
 Do not force this exact structure if the current codebase already has a better organization.
 
@@ -1160,7 +1486,59 @@ The app and API should support uploading academic documents in multiple formats 
 
 # 12. Section 3 — Retrieval Modes: LLM-only, BM25, Dense, Hybrid, Hybrid Rerank
 
-## Status: ⬜ Not yet implemented
+## Status: ✅ Implemented (2026-07-22)
+
+**Important correction to the original brief below:** by the time this section was reached, the
+*retrievers* already existed — the advising work had built BM25 (`bm25_retriever.py`, dependency-free
+Okapi, no `rank-bm25` needed) and fused it with dense + structured `get` inside
+`catalog_retriever.retrieve_documents`, followed by CrossEncoder rerank. What was missing was the
+**switch**: every query went down one hardcoded path. So this section built the mode-selection layer
+over the existing retrievers, plus the genuinely absent `llm_only` baseline. `dense_retriever.py` /
+`hybrid_retriever.py` were deliberately NOT created — splitting the working fused path into separate
+modules would have been churn with no behavioural gain.
+
+**What was done**
+- `server/modules/retrieval_modes.py` — `RETRIEVAL_MODES`, `normalize_mode()` (aliases + safe
+  fallback to default on unknown input), and `retrieve()` returning a `RetrievalOutcome`
+  (`documents`, `candidate_count`, `retrieval_ms`, `rerank_ms`, `reranked`). The production fused
+  path is *injected* as a `hybrid_search` callable so hybrid modes keep exact production behaviour,
+  including route-based multi-search.
+- **Scoping invariant:** every RAG mode receives the same `metadata_filter` the profile-aware
+  retrieval policy produced. Ablating a retriever changes ranking only — it never widens the corpus
+  past the student's program/term. Verified by test + live run against the 30k-vector index.
+- `bm25_retriever.annotate_bm25()` gained `require_narrowing: bool = True`. Hybrid keeps the old
+  narrowing-only gate; standalone `bm25` mode passes `False` (a baseline must answer any question,
+  not only program/term/course-scoped ones).
+- `llm.answer_without_context()` — LLM-only baseline: no retrieval, no student data, no sources,
+  and it bypasses the profile gate. Expected to hallucinate Sabancı facts; that measurement is
+  the reason it exists.
+- `POST /ask/` now accepts optional `mode`, `top_k`, `prompt_strategy`, `expert_mode`. Posting only
+  `question` behaves exactly as before (`hybrid_rerank`). Every response — including early returns
+  (gate, missing interest area, non-academic fallback) — is stamped with the config that produced
+  it, plus `reranked` / `num_retrieved_chunks` / `num_final_context_chunks`. `prompt_strategy` and
+  `expert_mode` are accepted and echoed but **inert until Section 4**.
+- Config (§8): `DEFAULT_RETRIEVAL_MODE`, `ENABLE_RERANKING`, `BM25_TOP_K`, `DENSE_TOP_K`,
+  `FINAL_CONTEXT_TOP_K`, `DEFAULT_PROMPT_STRATEGY`, `DEFAULT_EXPERT_MODE`.
+- Frontend: a mode selector was added to `ChatHeader` per §3.8 — **but it was removed again in the
+  2026-07-22 UX round** (see §I). Picking a retrieval strategy is not a student's job, and the
+  server now defaults to the mode the benchmark measured as best. `RETRIEVAL_MODES` is still
+  exported from `lib/api.ts` and `/ask/` still accepts `mode`, because the evaluation harness
+  depends on it. **`DEFAULT_RETRIEVAL_MODE` is now `hybrid`, not `hybrid_rerank`** — see the
+  headline finding in §15.
+- Tests: 4 new invariants in `server/tests/test_advising.py` (normalization/fallback, llm_only
+  retrieves nothing, hybrid skips rerank but keeps scope + top_k, bm25 gate default unchanged).
+  **18 unit tests, 0 failed.** `tsc --noEmit` clean.
+
+**Verified live** against the real Chroma index (CS/202401 filter, "CS 455 area elective"): all five
+modes ran, all returned CS-only documents, `top_k` honored, and `bm25` returns hits with no
+narrowing filter. Cold-start CrossEncoder load dominates `hybrid_rerank` latency on first call.
+
+**Known gap:** `llm_only` skips conversation-memory working context by design (it takes the raw
+question), so follow-up pronoun resolution does not apply in that mode.
+
+---
+
+## Original brief (kept for reference)
 
 The only retrieval mode currently wired is **Dense + CrossEncoder rerank** (the original RagBot pipeline). When implementing this section, refactor the inline retrieval in `server/main.py` (`vectorstore.similarity_search` + `rerank_documents`) into the modules listed below.
 
@@ -1335,16 +1713,17 @@ The backend and frontend should allow asking the same question under different r
 
 ## Acceptance Checklist
 
-- [ ] llm_only mode works
-- [ ] bm25 mode works
-- [ ] dense mode works
-- [ ] hybrid mode works
-- [ ] hybrid_rerank mode works
-- [ ] POST /ask/ remains backward-compatible
-- [ ] frontend has retrieval mode selector
-- [ ] sources still appear for RAG modes
-- [ ] no sources are shown for LLM-only
-- [ ] no full evaluation pipeline is implemented early
+- [x] llm_only mode works
+- [x] bm25 mode works
+- [x] dense mode works
+- [x] hybrid mode works
+- [x] hybrid_rerank mode works
+- [x] POST /ask/ remains backward-compatible
+- [~] frontend has retrieval mode selector — built, then **deliberately removed** in the UX round
+      (§I). Students should not pick a retrieval strategy; the server runs the measured-best mode.
+- [x] sources still appear for RAG modes
+- [x] no sources are shown for LLM-only
+- [x] no full evaluation pipeline is implemented early
 
 ---
 
@@ -1591,9 +1970,51 @@ SU-GPT should answer in a more grounded, citation-aware, academic style and supp
 
 # 14. Section 5 — Benchmark Dataset and Evaluation Pipeline
 
-## Status: ⬜ Not yet implemented
+## Status: ✅ Implemented (2026-07-22)
 
-No benchmark file, evaluation runner, or metrics module exists yet.
+**Files:** `server/evaluation/{__init__,build_benchmark,metrics,run_evaluation}.py`,
+`data/benchmark/questions.jsonl` (generated + committed), `outputs/evaluation_runs/<timestamp>/`.
+npm: `benchmark:build`, `eval`, `eval:retrieval`.
+
+**Benchmark is GENERATED from the corpus, not hand-written.** `build_benchmark.py` derives every
+answerable question from a real row in `data/degree_requirements/**` / `data/minors/**`: the gold
+`chunk_id` is that row's actual id and the reference answer is built from its own fields. The
+builder verifies each gold id against all 30,343 chunks and exits non-zero on a miss. This is the
+direct implementation of §17's "do not fabricate benchmark answers". 22 questions: 16 answerable
+(factual_lookup / course_requirement / turkish), 4 unanswerable targeting *documented* corpus gaps
+(schedules, instructors, enrolment, grades — all real §H gaps), 2 misleading (false premise).
+Known bias, recorded in the file: templated wording shares vocabulary with the chunks, so lexical
+scores are an optimistic bound.
+
+**metrics.py** — Recall@k, Precision@k, MRR@k, nDCG@k, chunk-level AND source-level. Undefined
+metrics return NaN and are skipped by `mean_ignoring_nan`, so an unmeasurable metric can never be
+reported as 0.0. Source-level is near-ceiling for this corpus (a program×term is one file) and is
+documented as such — quote chunk-level.
+
+**run_evaluation.py** — every question × every mode; writes `results.jsonl`, `summary_metrics.json`,
+`retrieved_chunks.jsonl`, `run_config.json`. Uses the SHIPPED prompt and context formatting
+(imported from `main.py`) so the evaluation cannot drift from production. Flags: `--retrieval-only`
+(no LLM cost), `--modes`, `--limit`, `--summarize-only` (re-aggregate a run in place).
+Section 5.5 manual fields (`answer_correctness`, `citation_correctness`, `faithfulness`,
+`answer_relevancy`, `hallucination_flag`) are written as `null` and NEVER auto-filled. Two objective
+signals are: `auto_refusal_detected` and `auto_reference_number_match`. RAGAS optional (§5.6):
+absent here, recorded as `ragas_available: false`, skipped gracefully.
+
+**Measured results are in `docs/experiment_log.md`.** Headlines: retrieval chunk-level Recall@6 —
+hybrid 0.625 > hybrid_rerank 0.438 > bm25 0.375 > dense 0.188; and with BM25 retrieval the system
+reproduced the correct official number in 93% of answers and refused 67% of unsupported questions,
+versus 27% / **0%** for `llm_only`.
+
+**Two bugs found and fixed while validating our own harness** (both recorded in `docs/prompt_log.md`):
+1. Groq's 100k tokens/day cap returned 429s mid-run; the aggregator was scoring those empty answers
+   as *wrong* rather than *not measured*, which made `hybrid` look like 0% correct when it had
+   produced no answers at all. Now failed calls are excluded and `generation_coverage` is reported.
+2. `make_tables` double-counted failures when merging two runs, and charged `llm_only` with
+   "retrieval misses" despite it having no retriever.
+
+**Known gap:** answer-side coverage is incomplete (`hybrid` 0%, `hybrid_rerank` 5%, `dense` 18%)
+because of the daily token cap. Retrieval metrics are unaffected and reproduce exactly across three
+independent runs. Re-run one or two modes per day to complete it.
 
 ## Goal
 
@@ -1757,9 +2178,45 @@ The project should be able to run benchmark questions across retrieval modes and
 
 # 15. Section 6 — Efficiency Logging, Ablations, and Failure Analysis
 
-## Status: ⬜ Not yet implemented
+## Status: ✅ Implemented (2026-07-22)
 
-No latency / token / cost logging, ablation config, ablation runner, or failure-analysis artifacts exist yet. Depends on Sections 3-5 being in place.
+**Files:** `server/evaluation/{ablation_configs.yaml,ablation_runner.py,make_tables.py}`,
+`outputs/tables/*.csv`, `outputs/failure_analysis/failure_cases.csv`.
+npm: `eval:ablate`, `eval:tables`.
+
+**Efficiency logging (§6.1)** — per-query `retrieval_ms` / `rerank_ms` / `generation_ms` /
+`total_ms`, `num_retrieved_chunks`, `num_final_context_chunks`, `prompt_chars_estimate`,
+`prompt_tokens_estimate` (clearly named an ESTIMATE, ~4 chars/token). Measured: retrieval stack is
+100–723 ms while generation is ~7.6–8.2 s, so generation dominates end-to-end latency.
+`estimated_cost_usd_per_query` is deliberately **blank** — no price is hard-coded, because a
+plausible-looking wrong cost is worse than an empty cell. Set `COST_PER_1K_INPUT` in
+`make_tables.py` to populate it.
+
+**Ablations (§6.2/6.3)** — 12 cells (4 modes × 3 top_k) run and recorded. The runner skips cells
+already present in `ablations.jsonl` (so an interrupted sweep resumes), flushes after each cell, and
+defaults to retrieval-only so the grid does not multiply LLM cost. **No chunk-size/overlap sweep,
+deliberately:** the advising corpus is pre-chunked (1 JSONL row = 1 chunk with its own stable id),
+so `CHUNK_SIZE`/`CHUNK_OVERLAP` do not affect it and a sweep would produce identical numbers and a
+misleading "no effect" conclusion. Sweeping honestly would require re-ingesting a differently-chunked
+corpus, which invalidates every ground-truth chunk id. Documented in the YAML and the experiment log.
+
+**Failure analysis (§6.4)** — `failure_cases.csv` with the required columns. `error_type` is
+auto-classified by documented rules (`retrieval_miss` = gold never in candidates; `retrieval_noise`
+= gold retrieved but ranked out of top-k; `generation_hallucination`; `insufficient_context`;
+`unsupported_answer`). `root_cause` / `proposed_fix` / `before_after_evidence` are left BLANK —
+they are human analysis, not measurements. Provider failures are excluded from generation verdicts.
+
+**Report tables (§6.5)** — `retrieval_metrics.csv`, `answer_metrics.csv`, `efficiency_metrics.csv`,
+`failure_summary.csv`, `ablation_summary.csv`, plus `run_provenance.json`. `make_tables.py` accepts
+`--answers-run` so retrieval and answer metrics can come from different runs (needed because the
+token cap split them).
+
+**Headline finding:** the CrossEncoder reranker *hurts* retrieval on this corpus — Recall@6 0.438
+vs 0.625 for plain hybrid, reproduced at top_k 3/5/10, and it costs ~295 ms/query. Verified by
+tracing gold chunks through the reranker (rank 2→20, 7→20, 1→14), so it is a real corpus/reranker
+mismatch, not a harness artefact. Failure counts show it: hybrid 4 miss + 2 ranking losses vs
+hybrid_rerank 4 + 5. **Not acted on** — measuring and reporting is this section's job; changing the
+reranker is a later product decision. Candidate fixes are listed in the experiment log.
 
 ## Goal
 
@@ -1892,11 +2349,29 @@ The project should produce experiment artifacts suitable for the final CS455 rep
 
 # 16. Section 7 — Final Cleanup, README, Prompt Log, Experiment Log, and Demo Flow
 
-## Status: ⬜ Not yet implemented
+## Status: ✅ Implemented (2026-07-22)
 
-Only `frontend/README.md` exists (covers the React app's setup). The project-level README, `docs/prompt_log.md`, `docs/experiment_log.md`, and `docs/demo_script.md` are not written. `.gitignore` is partial (`frontend/.gitignore` exists; project-root `.gitignore` should still be reviewed against the list in this section).
+- **README** — already strong; extended with the retrieval-modes description, the new `/ask/`
+  parameters, an Evaluation section (how to reproduce + the two headline findings), the evaluation
+  npm scripts, the `server/evaluation/` + `outputs/` + `docs/` tree, and an honest limitations list
+  (Section 4 inert, answer-side coverage capped by Groq quota, cross-lingual retrieval gap).
+- **`docs/experiment_log.md`** — configuration table, benchmark method + its known bias, and the
+  four measured results (retrieval quality, answers-vs-no-retrieval, efficiency, ablations), each
+  traced to the CSV it came from, plus an explicit "what is NOT measured" section and run provenance.
+- **`docs/prompt_log.md`** — AI-usage table with a "Verified by" column for every row, including the
+  two occasions where reviewing the model's output caught bugs in our own harness. Earlier sessions
+  are flagged for the team to fill in.
+- **`docs/demo_script.md`** — 6–8 minute shot list doubling as the video script: grounded answer →
+  deterministic audit → refusal/missing-data safety → retrieval-mode comparison including the
+  `llm_only` control → measured results. Ends with a "questions to avoid on camera" list tied to the
+  §H gaps.
+- **`.gitignore`** — evaluation outputs handled: the small report artefacts (`summary_metrics.json`,
+  `run_config.json`, `outputs/tables/`, `failure_cases.csv`) are **committed on purpose** as the
+  evidence behind the experiment log; only the bulky per-run `results.jsonl` /
+  `retrieved_chunks.jsonl` dumps are excluded.
 
-When implementing this section, remember the Streamlit `client/` no longer exists — README setup instructions should describe running `frontend/` (npm install + npm run dev) instead.
+**Not done:** a from-scratch reproducibility check on a clean machine (§7.6) — the pipeline was only
+exercised on the development machine with an already-built Chroma index.
 
 ## Goal
 

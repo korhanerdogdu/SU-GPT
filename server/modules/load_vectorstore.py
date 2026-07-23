@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import lru_cache
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
@@ -11,10 +12,14 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from modules.config import (
     CHROMA_COLLECTION_NAME,
+    CHROMA_HNSW_BATCH_SIZE,
+    CHROMA_HNSW_SYNC_THRESHOLD,
     CHROMA_PERSIST_DIR,
     CHUNK_OVERLAP,
     CHUNK_SIZE,
     DOCUMENT_STORAGE_DIR,
+    EMBEDDING_BATCH_SIZE,
+    EMBEDDING_DEVICE,
     EMBEDDING_MODEL_NAME,
 )
 from modules.document_cleaner import clean_text
@@ -33,8 +38,34 @@ UPLOAD_DIR = "./uploaded_pdfs"
 DOCUMENTS_UPLOAD_DIR = DOCUMENT_STORAGE_DIR
 
 
+def _resolve_torch_device(configured_device: str) -> str:
+    if configured_device != "auto":
+        return configured_device
+    try:
+        import torch
+
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except ImportError:
+        return "cpu"
+
+
+@lru_cache(maxsize=1)
 def get_embedding_model():
-    return HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_NAME)
+    device = _resolve_torch_device(EMBEDDING_DEVICE)
+    return HuggingFaceEmbeddings(
+        model_name=EMBEDDING_MODEL_NAME,
+        model_kwargs={"device": device},
+        encode_kwargs={"batch_size": EMBEDDING_BATCH_SIZE},
+    )
+
+
+def get_chroma_collection_configuration() -> dict:
+    return {
+        "hnsw": {
+            "batch_size": CHROMA_HNSW_BATCH_SIZE,
+            "sync_threshold": CHROMA_HNSW_SYNC_THRESHOLD,
+        }
+    }
 
 
 def get_vectorstore():
@@ -42,6 +73,7 @@ def get_vectorstore():
         collection_name=CHROMA_COLLECTION_NAME,
         persist_directory=CHROMA_PERSIST_DIR,
         embedding_function=get_embedding_model(),
+        collection_configuration=get_chroma_collection_configuration(),
     )
 
 

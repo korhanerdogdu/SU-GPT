@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useState, type ReactNode } from "react";
 import { login } from "@/lib/api";
 
 interface AuthUser {
@@ -19,16 +19,17 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 const STORAGE_KEY = "su-gpt-auth";
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<AuthUser | null>(null);
-
-  useEffect(() => {
+  // Read storage during the FIRST render, not in an effect. Loading it in useEffect made the
+  // initial render unauthenticated, so RequireAuth bounced any deep link (or refresh) on a
+  // guarded route to /login, and /login then redirected to "/" — silently dropping /profile.
+  const [user, setUser] = useState<AuthUser | null>(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) setUser(JSON.parse(raw) as AuthUser);
+      return raw ? (JSON.parse(raw) as AuthUser) : null;
     } catch {
-      // ignore corrupt storage
+      return null; // ignore corrupt storage
     }
-  }, []);
+  });
 
   function persist(next: AuthUser | null) {
     setUser(next);

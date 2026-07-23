@@ -27,11 +27,21 @@ frontend/.env.*.local
 # Logs
 *.log
 
+# Evaluation outputs (CLAUDE.md 7.5).
+# The small report artefacts ARE committed on purpose - they are the evidence behind
+# docs/experiment_log.md and a reader must be able to check the numbers. Only bulky
+# per-run dumps are excluded.
+outputs/evaluation_runs/*/results.jsonl
+outputs/evaluation_runs/*/retrieved_chunks.jsonl
+outputs/evaluation_runs/raw_large_files/
+
 # Local project notes / generated summaries
 codebase_tech_stack_summary.txt
 llm_message_flow.txt
 prompt_vs_messages_explanation.txt
 summary.txt
+PROJE_DETAYLI_ACIKLAMA.txt
+ACADEMIC_ADVISING_DATA_ROADMAP.md
 
 # OS/editor files
 .DS_Store

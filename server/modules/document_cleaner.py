@@ -1,4 +1,4 @@
-"""Lightweight text cleaning for SU-GPT (Section 2).
+"""Lightweight text cleaning for adviSU (Section 2).
 
 Goal: normalize whitespace and strip obvious artifacts WITHOUT damaging
 academic content such as formulas, code, or non-ASCII characters.

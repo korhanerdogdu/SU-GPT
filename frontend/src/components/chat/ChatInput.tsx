@@ -24,16 +24,16 @@ export default function ChatInput({ onSend, disabled }: Props) {
   }
 
   return (
-    <div className="border-t border-border/60 bg-background/40 px-4 py-4 md:px-8 backdrop-blur-sm">
-      <div className="mx-auto flex max-w-3xl items-end gap-2 rounded-full border border-border bg-secondary/80 px-4 py-2 shadow-lg backdrop-blur">
+    <div className="border-t border-white/10 bg-[#0a1830]/60 px-4 py-4 backdrop-blur-xl md:px-8">
+      <div className="mx-auto flex max-w-3xl items-end gap-2 rounded-2xl border border-white/12 bg-white/[0.05] px-4 py-2.5 transition-colors focus-within:border-sabanci-gold/50 focus-within:bg-white/[0.07]">
         <textarea
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={handleKey}
           rows={1}
-          placeholder="Ask anything"
+          placeholder="Ask about your degree…"
           disabled={disabled}
-          className="flex-1 resize-none bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none disabled:opacity-50 py-1.5"
+          className="flex-1 resize-none bg-transparent py-1.5 text-sm text-white placeholder:text-sabanci-light/40 focus:outline-none disabled:opacity-50"
           style={{ maxHeight: 120 }}
         />
         <button
@@ -41,11 +41,14 @@ export default function ChatInput({ onSend, disabled }: Props) {
           onClick={submit}
           disabled={!value.trim() || disabled}
           aria-label="Send message"
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground transition hover:bg-sabanci-navy disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-sabanci-blue text-white transition-colors hover:bg-sabanci-blue/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sabanci-gold disabled:cursor-not-allowed disabled:opacity-40"
         >
           <ArrowUp className="h-4 w-4" />
         </button>
       </div>
+      <p className="mx-auto mt-2 max-w-3xl px-1 font-mono text-[10px] uppercase tracking-[0.18em] text-sabanci-light/30">
+        Enter to send · Shift + Enter for a new line
+      </p>
     </div>
   );
 }

@@ -1,4 +1,4 @@
-"""Multi-format document loaders for SU-GPT (Section 2).
+"""Multi-format document loaders for adviSU (Section 2).
 
 Each loader returns a list of normalized records:
     {

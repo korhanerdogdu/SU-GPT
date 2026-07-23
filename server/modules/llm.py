@@ -32,12 +32,80 @@ def _build_llm():
     )
 
 
-def get_llm_chain(retriever, intent: str = "diger"):
+_TURKISH_CHARS = set("ğĞıİöÖşŞüÜçÇ")
+_TURKISH_HINTS = (
+    " ders", " kaç", " kredi", "mezuniyet", " hangi", " için", " gerekli", " almam",
+    " nedir", " nasıl", " nasil", " mıyım", " miyim", " muyum", " müyüm", " var mı",
+    " yok mu", " kaldı", " zorunlu", " seçmeli", " secmeli", " benim", " bana",
+)
+
+
+def detect_language(text: str) -> str:
+    """Return 'tr' or 'en' for the user's question.
+
+    The system prompt below is written in Turkish, which biases the model toward answering in
+    Turkish even when asked in English. A rule buried in Turkish prose does not reliably win, so
+    the language is decided here in code and injected as an explicit top-of-prompt directive.
+    """
+    raw = text or ""
+    if any(ch in _TURKISH_CHARS for ch in raw):
+        return "tr"
+    lowered = f" {raw.lower()} "
+    if any(hint in lowered for hint in _TURKISH_HINTS):
+        return "tr"
+    return "en"
+
+
+_LANGUAGE_DIRECTIVE = {
+    "en": (
+        "CRITICAL OUTPUT RULE — LANGUAGE: The user wrote in ENGLISH. Write your ENTIRE answer in "
+        "English. Do not answer in Turkish. Headings, labels and the Sources list must also be in "
+        "English. This rule overrides every other instruction below, including any Turkish "
+        "phrasing in the templates."
+    ),
+    "tr": (
+        "KRİTİK ÇIKTI KURALI — DİL: Kullanıcı TÜRKÇE yazdı. Cevabının TAMAMINI Türkçe yaz. "
+        "Bu kural aşağıdaki diğer tüm talimatların üzerindedir."
+    ),
+}
+
+
+LLM_ONLY_PROMPT = """Sen Sabancı Üniversitesi öğrencilerine yardımcı olan bir akademik danışman asistanısın.
+
+Bu cevabı SADECE kendi genel bilginle üretiyorsun. Sana hiçbir belge, müfredat kaynağı veya \
+öğrenci kaydı verilmedi. Bu mod, bir karşılaştırma temeli (baseline) olarak çalışır.
+
+- Elinde resmi kaynak olmadığını unutma.
+- Sabancı'ya özgü bir sayı, kural veya ders bilgisinden emin değilsen bunu açıkça belirt.
+- Cevap dili için en üstteki KRİTİK ÇIKTI KURALI geçerlidir; bu kuralı hiçbir koşulda ihlal etme.
+
+Soru: {question}
+
+Cevap:"""
+
+
+def answer_without_context(question: str) -> str:
+    """LLM-only baseline (Section 3): no retrieval, no student data, no sources.
+
+    Exists purely so the evaluation track can quantify what retrieval adds. It is expected to
+    hallucinate Sabanci-specific facts — that measurement is the reason the mode exists — so it
+    must never be the default and the UI must warn when it is selected.
+    """
     llm = _build_llm()
+    directive = _LANGUAGE_DIRECTIVE[detect_language(question)]
+    response = llm.invoke(f"{directive}\n\n{LLM_ONLY_PROMPT.format(question=question)}")
+    return getattr(response, "content", str(response))
+
+
+def get_llm_chain(retriever, intent: str = "diger", language: str = "tr"):
+    llm = _build_llm()
+    language_directive = _LANGUAGE_DIRECTIVE.get(language, _LANGUAGE_DIRECTIVE["tr"])
 
     prompt = PromptTemplate(
         input_variables=["context", "question"],
         template="""
+{language_directive}
+
 Sen Sabancı Üniversitesi programları için özelleştirilmiş, sıfır hata toleransıyla çalışan bir Yapay Zeka Akademik Danışmanısın. RAG üzerinden sana sağlanan resmi degree requirement / degree evaluation kaynaklarını ve öğrencinin MongoDB ders geçmişini kullanarak analiz yaparsın.
 
 KULLANICI NİYETİ (Query Router sonucu): {detected_intent}
@@ -109,7 +177,7 @@ Ders programı cevap formatı:
 
 BÖLÜM 3: CEVAP DİSİPLİNİ VE KAYNAKLAMA
 - Sabancı'ya özgü müfredat, kredi, dönem, hoca, prerequisite ve ders uygunluğu bilgilerini sadece RAG Context'ten çıkar.
-- Kullanıcının dili Türkçeyse Türkçe, İngilizceyse İngilizce cevap ver.
+- Cevap dili için en üstteki KRİTİK ÇIKTI KURALI geçerlidir; bu kuralı hiçbir koşulda ihlal etme.
 - Gereksiz uzun paragraf yazma; audit ve önerilerde net, şablonlu ve kontrol edilebilir ol.
 - Context chunk başlıkları "[Source: ...]" formatındadır. Kullandığın kaynakları cevabın sonunda kısa listele:
   Sources:
@@ -121,8 +189,10 @@ RAG Context:
 User Question:
 {question}
 
+{language_directive}
+
 Answer:
-""".replace("{detected_intent}", intent),
+""".replace("{detected_intent}", intent).replace("{language_directive}", language_directive),
     )
 
     return RetrievalQA.from_chain_type(

@@ -1,0 +1,31 @@
+# Ablation grid for adviSU (CLAUDE.md Section 6.2).
+#
+# IMPORTANT - why there is no chunk_size / chunk_overlap sweep here:
+# CLAUDE.md 6.2 asks for chunk-size and chunk-overlap ablations. Those settings apply to the
+# *uploaded-document* path (RecursiveCharacterTextSplitter in load_vectorstore.py). The advising
+# corpus this benchmark measures is PRE-CHUNKED: one JSONL row in data/degree_requirements/** is
+# exactly one retrieval chunk with its own stable chunk_id, produced offline by the scrapers.
+# CHUNK_SIZE/CHUNK_OVERLAP never touch it, so sweeping them would produce identical numbers and
+# a misleading "no effect" conclusion. Sweeping them honestly would require re-ingesting a
+# differently-chunked corpus, which also invalidates every ground-truth chunk_id in the benchmark.
+# Recorded as a known limitation rather than faked.
+
+# Retrieval configurations. Every combination below is run against the full benchmark.
+modes:
+  - bm25
+  - dense
+  - hybrid
+  - hybrid_rerank
+
+top_k_values: [3, 5, 10]
+
+candidate_k_values: [20]
+
+# Prompt strategies stay single-valued until Section 4 implements the prompts module; the runner
+# accepts the axis so the grid does not need restructuring later.
+prompt_strategies:
+  - basic
+
+# Generating answers for every cell is expensive (cells x questions LLM calls) and the ablation
+# question is about retrieval ranking, so answers are off by default. Override with --with-answers.
+with_answers: false

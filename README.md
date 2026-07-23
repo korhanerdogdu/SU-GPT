@@ -1,150 +1,183 @@
-# SU-GPT
+# adviSU — Retrieval-Augmented Academic Advising System
 
-SU-GPT is a course-aware Retrieval-Augmented Generation (RAG) assistant for Sabanci University course materials. It lets users upload academic documents, indexes them into a local ChromaDB vector store, retrieves relevant chunks for a question, reranks the retrieved evidence, and asks a Groq-hosted Llama model to answer with source grounding.
+**Sabancı University · CS 455 project**
+Team: Mehmet Selman Yılmaz, Korhan Erdoğdu
 
-The project was originally based on RagBot, but the current codebase is structured as a React frontend plus a FastAPI backend.
+adviSU is a profile-aware academic advising assistant for Sabancı University. A student sets
+their **program + curriculum (admit) term** and **course history**, then asks questions like
+*"does CS 455 count as an area elective for me?"* or *"how many credits do I still need?"*.
+adviSU answers from the **official degree-requirement data for that exact program and term**,
+computes graduation progress **deterministically in code**, and uses an LLM only to explain
+the result — never to invent the numbers.
 
-## Current Features
+The system deliberately **never mixes requirements across programs or curriculum years**: a CS
+2024 student never sees IE requirements, and if the exact official requirement file is missing
+it says so instead of guessing.
 
-- React + Vite + TypeScript frontend
-- Tailwind CSS and shadcn/ui-style primitives
-- Visual-only login and signup flow backed by `localStorage`
-- FastAPI backend with open local-development CORS
-- Multi-format document upload: PDF, PPTX, DOCX, Markdown, TXT, HTML, IPYNB, and JSON
-- Persistent ChromaDB vector store
-- Single ChromaDB collection: `su_knowledge`
-- MongoDB source-of-truth collections for users, courses, source documents, upload batches, ingestion jobs, reviews, exams, and embedding cache
-- Unified ingestion pipeline with deterministic chunk IDs and idempotent upserts
-- Intent-aware RAG router for course, review, exam, graduation, and recommendation queries
-- HuggingFace SentenceTransformers embeddings
-- CrossEncoder reranking
-- Groq Llama answer generation through LangChain
-- Source-aware responses using page, slide, section, and Chroma chunk ID metadata
-- Admin lifecycle flows for pending WhatsApp review uploads, exam/PDF ingest, and cascade source delete
-- Bulk ingest scripts for all, courses, reviews, and exams
+---
 
-## Project Structure
+## What's implemented
+
+### Data corpus (in-repo, `data/`)
+Scraped from the public Sabancı degree-detail pages and stored as pre-chunked JSONL (one
+requirement chunk per line, with a ready `text` field, stable `chunk_id`, and flat metadata).
+
+| Path | What | Size |
+|---|---|---|
+| `data/degree_requirements/<PROGRAM>/<TERM>.jsonl` | Official degree requirements — **9 majors × 4 admit terms** | 36 files |
+| `data/minors/<CODE>/<TERM>.jsonl` | Minor programs — **17 minors × 4 terms** | 68 files |
+| `data/curricula/registry.jsonl` | Which program × term curricula exist (drives the UI selector + missing-data checks) | 104 rows |
+| `data/course_catalog/current.jsonl` | Searchable course list — **816 distinct courses** (code, title, SU, ECTS, faculty, **+ per-course engineering/basic-science ECTS**) | 816 rows |
+
+- **Majors:** CS (BSCS), IE (BSMS), BIO (BSBIO), ME (BSME), EE (BSEE), PSY (BAPSY),
+  ECON (BAECON), DSA (BSDSA), MAT (BSMAT).
+- **Admit terms:** Fall 2022-23 (`202201`), 2023-24 (`202301`), 2024-25 (`202401`), 2025-26 (`202501`).
+- Each requirement chunk carries `data_role` (`curriculum_requirement` for majors,
+  `minor_requirement` for minors), `program`, `curriculum_term`, `requirement_category`,
+  `course_id`, `su_credits`, `ects`, `faculty`, and a `document_type`
+  (`..._profile` / `..._category_pool` / `..._pool_course` / `..._rule`).
+- **Free/area/core classification is NOT stored on courses** — it depends on the student's
+  program + admit term and is answered from the degree-requirement data.
+- Offline regeneration pipeline lives in `server/scripts/degree_gen/` (see its README).
+
+### Where the data comes from (exact source links)
+Everything is scraped from the public Sabancı prospective-students site. Program codes:
+CS=`BSCS`, IE=`BSMS`, BIO=`BSBIO`, ME=`BSME`, EE=`BSEE`, PSY=`BAPSY`, ECON=`BAECON`, DSA=`BSDSA`,
+MAT=`BSMAT`. Terms: `202201 202301 202401 202501`.
+
+1. **Major requirements (main page):** `.../degree-detail?SU_DEGREE.p_degree_detail?P_TERM=<TERM>&P_PROGRAM=<CODE>&P_LANG=EN&P_LEVEL=UG` — totals, University + Required lists, category minimums, pool links.
+2. **Elective / faculty pools:** `.../degree-detail?SU_DEGREE.p_list_courses?P_TERM=<TERM>&P_AREA=<AREA>&P_PROGRAM=<CODE>&P_LANG=EN&P_LEVEL=UG` where `<AREA>` = `<CODE>_CEL/AEL/FEL` or `FC_FENS|FC_FASS|FC_SOM` (EE uses `_ARE/_FRE`, PSY uses `_COR/ARE/FRE`).
+3. **Minor list:** `https://suis.sabanciuniv.edu/prod/SU_DEGREE.p_list_degree?P_LEVEL=UG&P_LANG=EN&P_PRG_TYPE=MINOR`; minor detail = the same `p_degree_detail` with `P_PROGRAM=<CODE>-MINOR`.
+4. **Per-course engineering / basic-science ECTS:** each course's catalog page (linked from every pool row) — `.../degree-detail?sabanci_www.p_get_courses?levl_code=UG&subj_code=<SUBJ>&crse_numb=<NUM>&lang=eng`, which shows e.g. `6 ECTS (ENGINEERING:0 / BASIC:6)`. Scraped by `npm run scrape:credits` (816/816 filled).
+
+### Vector store (ChromaDB)
+The whole corpus is embedded into a single collection **`su_knowledge`** (~30,343 vectors:
+28,082 degree-requirement + 2,261 minor chunks). Ingested by
+`server/scripts/ingest_degree_requirements.py` (reads the pre-chunked JSONL directly,
+scalarizes metadata, upserts). Chroma is a reproducible index, not the source of truth.
+
+### Source of truth (MongoDB, db `advisu`)
+- `users` — includes each student's `academic_profile` (major, degree_code, curriculum_term,
+  minor_codes). `curriculum_term` is the admit term — the graduation contract that both retrieval
+  scoping and the degree audit key off.
+- `courses` — the ~816-course catalog (seeded from `course_catalog/current.jsonl`) that the
+  course-history picker searches. Fields include `su_credits`, `ects`, and
+  `engineering_ects` / `basic_science_ects` slots (see *Known limitations*).
+- `user_courses` — the student's course history **with per-course status**
+  (`completed` / `enrolled` / `failed` / `withdrawn` / `transfer` / `exempted`); only
+  credit-eligible statuses count toward graduation.
+- `conversations` — bounded session memory (last few turns) for follow-up questions.
+- Plus the existing ingestion/source-of-truth collections (`sourceDocuments`,
+  `ingestionJobs`, `uploadBatches`, `instructorReviews`, `exams`, `embeddingCache`).
+- The Mongo client connects **lazily**, so the backend boots even if Mongo is briefly
+  unreachable — only DB-backed calls fail until it's up.
+
+### Backend intelligence
+- **Profile-aware retrieval** (`server/modules/retrieval_policy.py`): each intent maps to an
+  allowed `data_role` + required profile fields, and retrieval is hard-filtered by
+  data_role / program / curriculum_term **before** reranking, so results never cross program
+  or curriculum boundaries.
+- **Missing-data safety**: an authoritative audit is only attempted when the required profile
+  fields exist AND the exact official file is in the registry; otherwise adviSU returns a safe
+  "authoritative audit unavailable" message.
+- **Deterministic degree audit** (`server/modules/degree_audit.py`): SU-credit category
+  allocation (university / required / core / area / free) with overflow (extra core → area →
+  free), choice-pool handling (e.g. MATH 201 *or* MATH 212), and missing-required detection —
+  all computed in code from the exact requirement file + the student's completed courses.
+- **Hybrid retrieval** (`server/modules/bm25_retriever.py`): dependency-free BM25 runs over the
+  same profile-scoped subset as vector search and is fused into ranking, sharpening exact
+  matches like "CS 455" / "202401".
+- **Conversation memory** (`server/modules/conversation_memory.py`): resolves follow-ups like
+  *"can I take it next semester?"* to the course from the previous turn. Never overrides
+  official data.
+- **Curriculum registry** (`server/modules/curriculum_registry.py`): read-only access to
+  `registry.jsonl`.
+- **Selectable retrieval modes** (`server/modules/retrieval_modes.py`): the same question can be
+  answered under `llm_only` / `bm25` / `dense` / `hybrid` / `hybrid_rerank`, so the evaluation can
+  measure what each component contributes. Every RAG mode receives the *same* profile-scoped
+  metadata filter — ablating a retriever changes ranking, never the corpus a student can see.
+  The **product** always runs one mode and shows no picker: `DEFAULT_RETRIEVAL_MODE=hybrid`,
+  chosen because that is what our own benchmark measured as best (see *Evaluation*).
+- **Language consistency** (`llm.detect_language`): the reply language is decided in code from the
+  question and injected as a top-priority directive. The system prompt is written in Turkish, which
+  used to pull English questions into Turkish answers; a code-decided directive fixes that.
+- **Chat history** (`server/modules/conversation_memory.py`): a durable `messages[]` transcript with
+  a title per session, stored *alongside* the capped 5-turn `recent_turns` used for prompt working
+  memory. The two are separate on purpose — one is browsable history, the other must stay bounded.
+- Existing document RAG (uploads, exams, WhatsApp instructor reviews) is preserved.
+
+### Frontend (React + Vite + TS + Tailwind)
+
+Two deliberate visual registers: **dark chrome** for login and chat, **light Sabancı palette**
+(`#F5F8FC` page, `#004B93` header, white cards) for the two setup pages, so they read as one section.
+
+| Route | Screen |
+|---|---|
+| `/login` | Split layout — darkened campus photo, reversed logo, a word-by-word typewriter tagline, and example questions set as quotations. Sign-in panel on the right. |
+| `/` | Chat. Sidebar is thread-based (New chat, titled history, delete). Empty state is spare: *"Are we graduating?"*. Gold banner prompts for a profile when one isn't set. |
+| `/courses` | **Course History** — saved completed courses with a running SU total (so you can see what the system thinks you finished), plus the course picker and document upload. |
+| `/profile` | **Profile & Degree Audit** — pick major + curriculum term from the live registry, save, and run the deterministic audit (per-category table, Eng/Basic ECTS, missing required). |
+
+**Logo assets.** `adviSU-logo.png` is `big.png` trimmed of transparent padding;
+`adviSU-logo-reversed.png` is a **knockout variant for dark backgrounds** — the lockup's descriptor
+type and "SU" glyphs are navy and disappear on dark, so blue-dominant dark pixels are remapped to
+white while the gold/teal accents are kept. Use the reversed variant on dark surfaces rather than
+placing the logo on a white plate.
+
+**No retrieval-mode picker.** Choosing a retrieval strategy isn't a student's job; the server runs
+the measured-best configuration.
+
+---
+
+## Requirements pipeline (how a question is answered)
 
 ```text
-RagBot-SUGPT/
-+-- frontend/                  # React + Vite frontend
-|   +-- public/assets/          # Campus and logo assets
-|   +-- src/
-|   |   +-- components/chat/    # Chat UI components
-|   |   +-- components/ui/      # Shared UI primitives
-|   |   +-- contexts/           # AuthContext
-|   |   +-- lib/                # API client and utilities
-|   |   +-- pages/              # Login, signup, chat pages
-|   |   +-- App.tsx             # Router and auth guards
-|   |   +-- main.tsx            # React entrypoint
-|   +-- package.json
-|   +-- vite.config.ts
-+-- server/                     # FastAPI backend
-|   +-- main.py                 # API routes
-|   +-- logger.py
-|   +-- modules/
-|   |   +-- config.py           # Environment-based configuration
-|   |   +-- source_of_truth.py  # MongoDB source-of-truth helpers
-|   |   +-- document_cleaner.py
-|   |   +-- document_loaders.py # PDF/PPTX/DOCX/MD/TXT/HTML/IPYNB/JSON loaders
-|   |   +-- load_vectorstore.py # Ingestion, chunking, Chroma upsert
-|   |   +-- rag_router.py       # Intent-aware retrieval routing
-|   |   +-- file_lifecycle.py   # Upload approval, exam ingest, cascade delete
-|   |   +-- llm.py              # Groq LLM chain and prompt
-|   |   +-- query_handlers.py   # Response and source formatting
-|   |   +-- reranker.py         # CrossEncoder reranking
-|   +-- scripts/
-|   |   +-- bulk_ingest.py      # Idempotent all/course/review/exam ingest CLI
-|   |   +-- run_python.sh       # Uses server/.venv when available
-|   +-- requirements.txt
-|   +-- uploaded_documents/     # Runtime uploads from /upload_documents/
-|   +-- uploaded_pdfs/          # Legacy PDF upload directory
-|   +-- chroma_store/           # Persistent ChromaDB data
-+-- assets/                     # Project assets and reports
-+-- package.json                # Root npm scripts for bulk ingest
-+-- CLAUDE.md                   # Internal implementation guide
-+-- README.md
+question (+ username, session_id)
+  -> resolve "this course" via session memory
+  -> intent detection (TF-IDF/LogReg) + regex route guards  (+ new "minor" intent)
+  -> load student academic_profile from MongoDB
+  -> retrieval policy: allowed data_role + required profile fields
+  -> missing-profile / missing-file gate  ->  safe limitation if not satisfiable
+  -> profile-scoped retrieval (data_role + program + curriculum_term)  [vector + BM25 hybrid]
+  -> CrossEncoder rerank
+  -> for graduation questions: run deterministic degree_audit and inject it as an
+     authoritative context source
+  -> LLM (Groq Llama) explains the grounded evidence + audit  ->  answer + sources + intent
 ```
 
-## Backend Setup
+**What the LLM actually receives.** The prompt context is assembled from: (a) the retrieved
+degree-requirement chunks from ChromaDB, (b) a `[Source: MongoDB student profile]` block — the
+student's completed-course list and credit totals in natural language, and (c) a
+`[Source: Deterministic degree audit]` block — the audit JSON computed in code from the MongoDB
+course history. So the student's **derived academic data from MongoDB is passed to the LLM as
+context**, and the model is instructed to *explain* those authoritative numbers, not recompute or
+contradict them. The raw MongoDB connection string / credentials are never sent — only the derived
+per-student facts.
 
-Open a terminal in the project root and run:
+---
 
-Recommended, with a virtual environment:
+## Setup
 
+### 1. Backend
 ```powershell
 cd server
 python -m venv myenv
 .\myenv\Scripts\Activate.ps1
 pip install -r requirements.txt
-python -m uvicorn main:app --reload
+python -m uvicorn main:app --reload   # http://127.0.0.1:8000  (health: /test)
 ```
 
-You can also install and run without a virtual environment:
-
-```powershell
-cd server
-pip install -r requirements.txt
-python -m uvicorn main:app --reload
-```
-
-If your system Python does not allow global installs, use the user install option:
-
-```powershell
-cd server
-pip install --user -r requirements.txt
-python -m uvicorn main:app --reload
-```
-
-The backend runs at:
-
-```text
-http://127.0.0.1:8000
-```
-
-Health check:
-
-```text
-http://127.0.0.1:8000/test
-```
-
-## Frontend Setup
-
-Open a second terminal in the project root and run:
-
-```powershell
-cd frontend
-npm install
-npm run dev
-```
-
-The frontend runs at:
-
-```text
-http://localhost:5173
-```
-
-The frontend uses `http://127.0.0.1:8000` as the default backend URL. To override it, create `frontend/.env`:
+### 2. Environment (`.env` in the project root)
+The backend reads a single `.env` (there is no committed `.env.example`; `.env` is gitignored).
 
 ```env
-VITE_API_URL=http://127.0.0.1:8000
-```
-
-## Environment Variables
-
-The backend reads configuration from `server/.env`.
-
-Required:
-
-```env
+# Required for chat answers:
 GROQ_API_KEY=your_groq_api_key
-```
+# Required for profile / course history / audit:
+MONGO_URI=mongodb+srv://<user>:<pass>@<cluster>.mongodb.net/?retryWrites=true&w=majority
+MONGO_DB_NAME=advisu
 
-Optional:
-
-```env
-MONGO_URI=mongodb://localhost:27017
-MONGO_DB_NAME=sugpt
+# Sensible defaults (override only if needed):
 GROQ_MODEL_NAME=llama-3.3-70b-versatile
 CHROMA_PERSIST_DIR=./chroma_store
 CHROMA_COLLECTION_NAME=su_knowledge
@@ -152,196 +185,171 @@ EMBEDDING_MODEL_NAME=sentence-transformers/all-MiniLM-L12-v2
 CROSS_ENCODER_MODEL_NAME=cross-encoder/ms-marco-MiniLM-L-6-v2
 RETRIEVAL_CANDIDATE_K=20
 RERANK_TOP_K=6
-CHUNK_SIZE=1000
-CHUNK_OVERLAP=150
-SOURCES_DIR=../sources
-REVIEWS_DIR=../sources/reviews
-EXAMS_DIR=../sources/exams
-DOCUMENT_STORAGE_DIR=./uploaded_documents
-CATALOG_DATA_DIR=/Users/selmanyilmaz/data
+# DEGREE_DATA_DIR  -> leave unset; defaults to <project>/data (absolute)
+```
+> For MongoDB Atlas: create a DB user and add your IP (or `0.0.0.0/0` for dev) under Network Access.
+
+### 3. Build data + index (one-time, or after regenerating the corpus)
+```bash
+npm run registry          # build data/curricula/registry.jsonl
+npm run catalog           # build data/course_catalog/current.jsonl (816 courses)
+npm run ingest:degrees:reset   # embed the corpus into ChromaDB (~30k vectors)
+npm run seed:courses      # push the course catalog into MongoDB (search bar)
+npm run validate:data     # (optional) validate corpus + coverage report
+npm run test:advising     # (optional) run the invariant test suite
 ```
 
-`DOCUMENT_STORAGE_DIR` is the current local storage adapter for raw uploaded files. The architecture keeps this behind `storageKey`, so the same MongoDB source document records can later point to MinIO/S3 object keys without changing the RAG contract.
+### 4. Frontend
+```powershell
+cd frontend
+npm install
+npm run dev               # http://localhost:5173
+```
+Override the API base with `frontend/.env` → `VITE_API_URL=http://127.0.0.1:8000`.
 
-## API Endpoints
+### Using it
+Log in (`admin` / `admin`) → **Profile & degree audit** in the sidebar → pick your major +
+curriculum term → **Save** → add completed courses in the course picker → **Run audit**, or
+just ask questions in the chat.
+
+---
+
+## API endpoints (advising)
 
 | Method | Endpoint | Description |
-| --- | --- | --- |
-| `GET` | `/test` | Basic backend health check |
-| `POST` | `/upload_documents/` | Upload PDF, PPTX, DOCX, MD, TXT, HTML, IPYNB, or JSON files |
-| `POST` | `/upload_pdfs/` | Legacy PDF-only upload endpoint |
-| `POST` | `/ask/` | Ask a question over the indexed documents |
-| `POST` | `/admin/whatsapp/upload` | Save WhatsApp export as a pending review upload batch |
-| `POST` | `/admin/whatsapp/{batch_id}/confirm` | Approve/reject pending WhatsApp review data and trigger ingest |
-| `POST` | `/admin/exams/upload` | Store exam PDF metadata and ingest it as `documentType=exam` |
-| `DELETE` | `/sources/{source_id}` | Cascade delete one source from MongoDB, file storage, and ChromaDB |
+|---|---|---|
+| `POST` | `/ask/` | Ask a question (form: `question`; optional `username`, `session_id`, `mode`, `top_k`, `prompt_strategy`, `expert_mode`). Posting only `question` uses `DEFAULT_RETRIEVAL_MODE` (`hybrid`). The UI never sends `mode`; the evaluation harness does. |
+| `GET`  | `/users/{username}/conversations` | Chat history for the sidebar (newest first, titles only) |
+| `GET` / `DELETE` | `/conversations/{session_id}` | Full transcript of one chat / delete it |
+| `GET`  | `/curricula/` | All valid curricula (programs, majors, minors) for the UI selector |
+| `GET`  | `/curricula/{program}` | Curriculum terms available for a program |
+| `GET` / `PUT` | `/users/{username}/profile` | Read / set the student academic profile |
+| `GET` / `PUT` | `/users/{username}/courses` | Read / set course history (PUT accepts per-course `statuses`) |
+| `GET`  | `/users/{username}/degree-audit` | Deterministic degree audit for the saved profile |
+| `GET`  | `/courses/` | Search the course catalog (`search`, `limit`) |
+| `POST` | `/auth/login` | Admin login |
+| `GET`  | `/test` | Health check |
 
-The frontend currently uses:
+Legacy document-RAG endpoints are preserved: `POST /upload_documents/`, `POST /upload_pdfs/`,
+`POST /admin/whatsapp/upload`, `POST /admin/whatsapp/{batch_id}/confirm`,
+`POST /admin/exams/upload`, `DELETE /sources/{source_id}`.
 
-- `POST /upload_documents/`
-- `POST /ask/`
-- `GET /test`
+---
 
-## RAG Pipeline
+## npm scripts
 
-The production-ready direction is:
+| Script | Purpose |
+|---|---|
+| `npm run registry` | Rebuild `data/curricula/registry.jsonl` |
+| `npm run catalog` | Rebuild `data/course_catalog/current.jsonl` |
+| `npm run ingest:degrees[:reset]` | Embed the degree/minor corpus into ChromaDB |
+| `npm run seed:courses` | Force-seed the course catalog into MongoDB |
+| `npm run validate:data` | Validate corpus + print a coverage report |
+| `npm run test:advising` | Run the invariant test suite (18 unit + integration) |
+| `npm run ingest:all\|courses\|reviews\|exams` | Legacy document/source ingestion |
+| `npm run benchmark:build` | Regenerate `data/benchmark/questions.jsonl` from the corpus |
+| `npm run eval` | Run the benchmark across all retrieval modes (generates answers) |
+| `npm run eval:retrieval` | Same, retrieval metrics only — no LLM calls, no API cost |
+| `npm run eval:ablate` | Run the ablation grid from `ablation_configs.yaml` |
+| `npm run eval:tables` | Write report-ready CSVs to `outputs/tables/` |
 
-```text
-source file
--> MongoDB sourceDocuments/uploadBatches/ingestionJobs
--> local storage path today, MinIO/S3 storageKey later
--> normalize text
--> PII clean where applicable
--> chunk
--> embed
--> ChromaDB su_knowledge upsert
--> MongoDB status update
--> ask router
--> metadata-filtered vector search
--> CrossEncoder rerank
--> prompt build
--> LLM answer with source chunk IDs
-```
+---
 
-MongoDB is the source of truth. ChromaDB is treated as a reproducible vector index. If Chroma is deleted, it should be rebuilt from MongoDB records plus the raw files referenced by `storageKey`.
+## Evaluation
 
-### Ingestion Pipeline
-
-1. A source is created in MongoDB with `sourceId`, `type`, `fileName`, `storageKey`, `contentHash`, `status`, and `createdBy`.
-2. An `ingestionJobs` record is started with `jobId`, `sourceId`, `status=processing`, `startedAt`, and `chunksCreated=0`.
-3. The source file is parsed by `server/modules/document_loaders.py`.
-4. Text is cleaned by `server/modules/document_cleaner.py`.
-5. Chunks are created in `server/modules/load_vectorstore.py`.
-6. Each chunk receives deterministic IDs in this format:
-
-```text
-sourceId:chunkIndex:contentHashPrefix
-```
-
-Example:
-
-```text
-course:9f0f8d1d0b77c0b7a8f2a41b:0:2cf24dba5fb0a30e
-```
-
-7. Chunks are upserted into the single Chroma collection `su_knowledge`.
-8. MongoDB `sourceDocuments` and `ingestionJobs` are updated to `indexed` or `failed`.
-
-### ChromaDB Storage Shape
-
-All vectors go into one collection:
-
-```text
-collection_name = su_knowledge
-```
-
-Document type separation is done with metadata, not separate Chroma collections:
-
-```json
-{
-  "id": "review:1e0f3b1c9d4a5e6f7a8b9c0d:3:a7719f2db2e4c19a",
-  "document": "Yücel hoca projelerde zorlayabiliyor ama dersin içeriği faydalı...",
-  "metadata": {
-    "documentType": "review",
-    "document_type": "review",
-    "sourceId": "review:1e0f3b1c9d4a5e6f7a8b9c0d",
-    "contentHash": "a7719f2db2e4c19a7b8f5d7d6c9f0...",
-    "chunk_id": "review:1e0f3b1c9d4a5e6f7a8b9c0d:3:a7719f2db2e4c19a",
-    "chunkIndex": 3,
-    "source": "whatsapp-export.txt",
-    "file_name": "whatsapp-export.txt",
-    "storageKey": "server/uploaded_documents/whatsapp/1e0f3b1c9d4a5e6f-whatsapp-export.txt",
-    "createdBy": "admin",
-    "uploadBatchId": "whatsapp:1e0f3b1c9d4a5e6f7a8b9c0d",
-    "reviewStatus": "approved"
-  }
-}
-```
-
-Course and exam chunks use the same shape, with `documentType=course` or `documentType=exam`.
-
-### Intent Detection and RAG Router
-
-`server/modules/intent_detector.py` keeps the TF-IDF + Logistic Regression classifier for the original 7 intents:
-
-- `mezuniyet_durumu`
-- `ders_onerisi`
-- `calisma_plani`
-- `major_secimi`
-- `alanda_ozellesme`
-- `ders_ayrintisi`
-- `diger`
-
-`server/modules/rag_router.py` adds deterministic routing guards around that classifier:
-
-- Hoca/course review questions, such as `Yücel Saygın zor mu?`, route to `documentType=review`.
-- Exam questions, such as `CS412 final soruları var mı?`, route to `documentType=exam`.
-- Graduation and course recommendation questions route to `documentType=course`.
-- Unclear or general academic questions can multi-search `course`, `exam`, and `review`, then use CrossEncoder reranking.
-
-The `/ask/` flow is now:
-
-```text
-question
--> TF-IDF/logistic intent + regex route guards
--> Chroma metadata filter
--> dense vector search
--> CrossEncoder rerank
--> source-labeled context documents
--> LangChain RetrievalQA prompt
--> answer + sources + source_chunk_ids + intent
-```
-
-## Supported Document Types
-
-- `.pdf`
-- `.pptx`
-- `.docx`
-- `.md`
-- `.txt`
-- `.html`
-- `.htm`
-- `.ipynb`
-- `.json`
-
-Metadata may include filename, document type, page number, slide number, section heading, and chunk ID.
-
-## Bulk Ingest Scripts
-
-The root `package.json` exposes idempotent ingestion commands. They use `server/.venv/bin/python` when it exists, otherwise `PYTHON` or `python3`.
+The retrieval and hallucination evaluation lives under `server/evaluation/`.
 
 ```bash
-npm run ingest:all
-npm run ingest:courses
-npm run ingest:reviews
-npm run ingest:exams
+npm run benchmark:build   # derive the benchmark from data/ (never hand-written answers)
+npm run eval:retrieval    # Recall@k / MRR@k / nDCG@k per mode
+npm run eval              # + generated answers (needs Groq quota)
+npm run eval:ablate       # mode x top_k grid
+npm run eval:tables       # outputs/tables/*.csv + outputs/failure_analysis/failure_cases.csv
 ```
 
-The scripts are designed to be re-runnable. They use deterministic `sourceId`, `contentHash`, and chunk IDs, then upsert instead of blindly appending duplicate Chroma entries.
+**Ground truth is derived, not written.** `build_benchmark.py` reads real rows out of
+`data/degree_requirements/**`, so each question's gold `chunk_id` and reference answer come from
+the corpus itself and cannot drift from it. The builder aborts if any gold id is missing.
 
-## File Lifecycle
+Measured results, the full method, and the caveats are in **[`docs/experiment_log.md`](docs/experiment_log.md)**.
+Two findings worth flagging here:
 
-- WhatsApp exports first enter MongoDB as `uploadBatches.status=pending`.
-- Admin confirmation updates `instructorReviews` and triggers review ingestion into Chroma.
-- Exam PDFs are saved through `storageKey`, recorded in `sourceDocuments` and `exams`, then ingested as `documentType=exam`.
-- Deleting a source cascades through MongoDB source status, physical file deletion, and `collection.delete(where={"sourceId": sourceId})` in Chroma.
+- **Retrieval materially reduces hallucination.** With BM25 retrieval the system reproduced the
+  correct official number in 93% of answers and declined 67% of unsupported questions; the same
+  model with no retrieval (`llm_only`) scored 27% and **refused nothing at all**.
+- **The CrossEncoder reranker hurts recall on this corpus** (Recall@6 0.44 vs 0.62 for plain
+  hybrid) and adds ~295 ms per query. Reproduced at every top-k. **This measurement changed the
+  product:** the default is now `hybrid`, not `hybrid_rerank`. Set
+  `DEFAULT_RETRIEVAL_MODE=hybrid_rerank` to revert. Caveat: the benchmark is 16 answerable
+  questions with templated wording — a real but small sample.
 
-## Frontend Routes
+Answer-quality columns (`answer_correctness`, `faithfulness`, `citation_correctness`,
+`hallucination_rate`) are intentionally **left empty** for manual labelling — do not quote answer
+quality beyond the objective reference-number signal until they are filled in.
 
-| Route | Page | Notes |
-| --- | --- | --- |
-| `/login` | Login page | Visual-only authentication |
-| `/signup` | Signup page | Visual-only authentication |
-| `/` | Chat page | Requires local auth state |
+---
 
-Authentication is still lightweight for local development. The frontend stores `su-gpt-auth` in `localStorage`, while the backend now keeps admin/user and selected-course data in MongoDB for personalization and graduation/recommendation context.
+## Known limitations / next work
 
-## Development Notes
+- **Course-status entry UI**: the backend supports failed/enrolled/transfer/exempted, but the
+  Course History page currently sends plain completed IDs.
+- **No long-conversation compaction**: chat history is stored in full, but only the last 5 turns
+  feed the prompt as working memory.
+- `frontend/src/pages/SignupPage.tsx` is **dead code** — `/signup` redirects to `/login` and
+  nothing imports it. Delete it or implement real signup.
+- **Schedules / program-term classifications** aren't ingested, so full course *recommendation*
+  (offerings, instructors, timetable) is limited.
+- **Not modeled yet**: GPA checks, course equivalencies, program transitions / double majors,
+  transfer/exemption rules.
+- Auth is lightweight (visual login for local development).
+- **Section 4 (prompts module, expert routing, few-shot) is not implemented**, so
+  `prompt_strategy` / `expert_mode` are accepted by `/ask/` but currently inert.
+- **Answer-side evaluation is incomplete**: Groq's free tier caps usage at 100k tokens/day and the
+  full 5-mode sweep exceeds it. Run one or two modes per day, or use a paid tier.
+- **Cross-lingual retrieval is a measured weak point**: the corpus is English while the product
+  answers in Turkish, and a Turkish question can miss a chunk its English twin retrieves.
 
-- Run backend and frontend in separate terminals.
-- The first backend run may take longer because embedding and reranking models can be downloaded.
-- Uploaded files and ChromaDB data are local runtime artifacts.
-- CORS is currently permissive for local development.
-- The current implemented retrieval mode is dense retrieval with CrossEncoder reranking.
-- Future planned work includes BM25, hybrid retrieval, evaluation scripts, efficiency logging, ablations, and prompt experiments.
-- Known next gaps: add real syllabus documents, improve final answer quality/prompt behavior, and collect benchmark results for retrieval and answer correctness.
+---
+
+## Project structure (advising additions)
+
+```text
+data/
+  degree_requirements/<PROGRAM>/<TERM>.jsonl   # 9 majors x 4 terms
+  minors/<CODE>/<TERM>.jsonl                   # 17 minors x 4 terms
+  curricula/registry.jsonl
+  course_catalog/current.jsonl
+server/
+  modules/
+    curriculum_registry.py    retrieval_policy.py    degree_audit.py
+    bm25_retriever.py         conversation_memory.py
+    catalog_retriever.py  (hybrid + profile filters)  mongodb.py  (profile + course status)
+  scripts/
+    ingest_degree_requirements.py   build_curricula_registry.py   build_course_catalog.py
+    seed_courses.py                 validate_degree_data.py
+    degree_gen/                     # offline corpus regeneration
+  evaluation/
+    build_benchmark.py              # derives the benchmark from data/
+    metrics.py                      # Recall@k / MRR@k / nDCG@k
+    run_evaluation.py               # question x mode runner
+    ablation_runner.py              # ablation grid
+    ablation_configs.yaml
+    make_tables.py                  # report-ready CSVs + failure analysis
+  tests/test_advising.py
+data/benchmark/questions.jsonl      # generated, committed
+outputs/
+  evaluation_runs/<timestamp>/      # results.jsonl, summary_metrics.json, run_config.json
+  tables/                           # retrieval/answer/efficiency/failure/ablation CSVs
+  failure_analysis/failure_cases.csv
+docs/
+  experiment_log.md  prompt_log.md  demo_script.md
+frontend/
+  public/assets/
+    adviSU-logo.png                 # trimmed lockup (light grounds)
+    adviSU-logo-reversed.png        # knockout variant (dark grounds)
+    big.png  campus.jpg
+  src/
+    pages/{Login,Chat,Courses,Profile}Page.tsx
+    components/chat/{Sidebar,ChatHeader,ChatMessages,ChatInput}.tsx
+    lib/{api,sample-questions,utils}.ts
+```

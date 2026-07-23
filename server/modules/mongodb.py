@@ -10,7 +10,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import ASCENDING, UpdateOne
 
 from logger import logger
-from modules.config import ADMIN_USERNAME, CATALOG_DATA_DIR, MONGO_DB_NAME, MONGO_URI
+from modules.config import ADMIN_USERNAME, CATALOG_DATA_DIR, DEGREE_DATA_DIR, MONGO_DB_NAME, MONGO_URI
 
 
 client = AsyncIOMotorClient(MONGO_URI, serverSelectionTimeoutMS=3000)
@@ -25,6 +25,7 @@ ingestion_jobs = db["ingestionJobs"]
 instructor_reviews = db["instructorReviews"]
 exams = db["exams"]
 embedding_cache = db["embeddingCache"]
+conversations = db["conversations"]
 
 
 FALLBACK_COURSES = [
@@ -61,6 +62,7 @@ async def ensure_database() -> None:
     await exams.create_index([("sourceId", ASCENDING)])
     await exams.create_index([("courseCode", ASCENDING)])
     await embedding_cache.create_index([("cacheKey", ASCENDING)], unique=True)
+    await conversations.create_index([("sessionId", ASCENDING)], unique=True)
     await ensure_user(ADMIN_USERNAME)
 
 
@@ -77,12 +79,23 @@ async def ensure_user(username: str) -> dict[str, Any]:
     return user
 
 
-async def seed_courses_from_catalog(data_dir: str = CATALOG_DATA_DIR) -> int:
-    if await courses.estimated_document_count() > 0:
+async def seed_courses_from_catalog(data_dir: str = DEGREE_DATA_DIR, force: bool = False) -> int:
+    """Upsert the searchable course list into MongoDB (roadmap section 5.3).
+
+    Prefers data/course_catalog/current.jsonl (built from the degree-requirement corpus,
+    ~800 courses with SU/ECTS/faculty + engineering/basic-science slots). Falls back to the
+    legacy all_coursepage_info.jsonl, then to a tiny hardcoded set. Idempotent."""
+    catalog_path = Path(data_dir).expanduser() / "course_catalog" / "current.jsonl"
+    if catalog_path.exists():
+        course_docs = _read_course_catalog(catalog_path)
+    else:
+        legacy = Path(CATALOG_DATA_DIR).expanduser() / "all_coursepage_info.jsonl"
+        course_docs = _read_catalog_courses(legacy) if legacy.exists() else FALLBACK_COURSES
+
+    # Only skip when Mongo already holds the full catalog (the old guard left 6 fallback rows).
+    if not force and await courses.estimated_document_count() >= len(course_docs):
         return 0
 
-    path = Path(data_dir).expanduser() / "all_coursepage_info.jsonl"
-    course_docs = _read_catalog_courses(path) if path.exists() else FALLBACK_COURSES
     operations = [
         UpdateOne({"code": doc["code"]}, {"$set": doc}, upsert=True)
         for doc in course_docs
@@ -94,6 +107,27 @@ async def seed_courses_from_catalog(data_dir: str = CATALOG_DATA_DIR) -> int:
     inserted = result.upserted_count + result.modified_count
     logger.info("course seed complete: %d course records touched", inserted)
     return inserted
+
+
+def _read_course_catalog(path: Path) -> list[dict[str, Any]]:
+    docs: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            docs.append({
+                "code": row.get("course_id"),
+                "subject": row.get("subject"),
+                "number": row.get("number"),
+                "title": row.get("title"),
+                "su_credits": row.get("su_credits"),
+                "ects": row.get("ects"),
+                "engineering_ects": row.get("engineering_ects"),
+                "basic_science_ects": row.get("basic_science_ects"),
+                "faculty": row.get("faculty"),
+            })
+    return docs
 
 
 async def list_courses(search: str = "", limit: int = 200) -> list[dict[str, Any]]:
@@ -111,33 +145,107 @@ async def list_courses(search: str = "", limit: int = 200) -> list[dict[str, Any
     return [_serialize_course(doc) async for doc in cursor]
 
 
+# Course-history status (roadmap section 8). Only these count toward graduation progress.
+COURSE_STATUSES = {"completed", "enrolled", "failed", "withdrawn", "transfer", "exempted"}
+ELIGIBLE_FOR_CREDIT = {"completed", "transfer", "exempted"}
+
+
+def _norm_status(value: Any) -> str:
+    status = str(value or "completed").strip().lower()
+    return status if status in COURSE_STATUSES else "completed"
+
+
 async def get_user_courses(username: str) -> list[dict[str, Any]]:
     user = await ensure_user(username)
     links = [link async for link in user_courses.find({"user_id": user["_id"]})]
     if not links:
         return []
-    course_ids = [link["course_id"] for link in links]
-    cursor = courses.find({"_id": {"$in": course_ids}}).sort([("subject", ASCENDING), ("number", ASCENDING)])
-    return [_serialize_course(doc) async for doc in cursor]
+    status_by_id = {link["course_id"]: _norm_status(link.get("status")) for link in links}
+    cursor = courses.find({"_id": {"$in": list(status_by_id)}}).sort([("subject", ASCENDING), ("number", ASCENDING)])
+    result = []
+    async for doc in cursor:
+        serialized = _serialize_course(doc)
+        serialized["status"] = status_by_id.get(doc["_id"], "completed")
+        result.append(serialized)
+    return result
 
 
-async def set_user_courses(username: str, course_ids: list[str]) -> list[dict[str, Any]]:
+async def set_user_courses(
+    username: str,
+    course_ids: list[str],
+    statuses: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
     user = await ensure_user(username)
-    object_ids = [_to_object_id(value) for value in course_ids]
-    object_ids = [value for value in dict.fromkeys(object_ids) if value is not None]
+    statuses = statuses or {}
+    # map requested ids -> status, preserving order and dropping invalid/duplicate ids
+    requested: dict[Any, str] = {}
+    for value in course_ids:
+        oid = _to_object_id(value)
+        if oid is not None and oid not in requested:
+            requested[oid] = _norm_status(statuses.get(value))
 
-    valid_ids = [
+    valid_ids = {
         doc["_id"]
-        async for doc in courses.find({"_id": {"$in": object_ids}}, {"_id": 1})
-    ]
+        async for doc in courses.find({"_id": {"$in": list(requested)}}, {"_id": 1})
+    }
 
     await user_courses.delete_many({"user_id": user["_id"]})
-    if valid_ids:
-        await user_courses.insert_many(
-            [{"user_id": user["_id"], "course_id": course_id} for course_id in valid_ids],
-            ordered=False,
-        )
+    docs = [
+        {"user_id": user["_id"], "course_id": oid, "status": status}
+        for oid, status in requested.items()
+        if oid in valid_ids
+    ]
+    if docs:
+        await user_courses.insert_many(docs, ordered=False)
     return await get_user_courses(username)
+
+
+async def get_completed_course_codes(username: str) -> list[str]:
+    """Course codes with a credit-eligible status (completed/transfer/exempted)."""
+    selected = await get_user_courses(username)
+    return [c["code"] for c in selected if c.get("status", "completed") in ELIGIBLE_FOR_CREDIT and c.get("code")]
+
+
+# `current_term` was removed 2026-07-22: it was collected but never read. Retrieval scoping and
+# the degree audit both key off `curriculum_term` (the admit term / graduation contract). Any
+# value already stored on existing user documents is simply ignored — `set_academic_profile`
+# persists only keys present here.
+DEFAULT_ACADEMIC_PROFILE = {
+    "major": None,
+    "degree_code": None,
+    "admission_term": None,
+    "curriculum_term": None,
+    "minor_codes": [],
+    "profile_status": "unset",
+}
+
+
+async def get_academic_profile(username: str) -> dict[str, Any]:
+    """Return the student's academic profile (roadmap section 8). Never raises.
+
+    Reads are filtered to the known keys, not merged blindly: user documents written before a
+    field was retired (e.g. `current_term`) still carry it, and echoing that back would resurrect
+    a field the product no longer has. The stored value is left alone — it is simply not served.
+    """
+    user = await ensure_user(username)
+    stored = user.get("academic_profile") or {}
+    return {key: stored.get(key, default) for key, default in DEFAULT_ACADEMIC_PROFILE.items()}
+
+
+async def set_academic_profile(username: str, profile: dict[str, Any]) -> dict[str, Any]:
+    """Store/merge the student's academic profile. Only known keys are persisted."""
+    allowed = set(DEFAULT_ACADEMIC_PROFILE)
+    clean = {k: v for k, v in (profile or {}).items() if k in allowed}
+    if clean.get("major"):
+        clean["major"] = str(clean["major"]).strip().upper()
+    if clean:
+        clean.setdefault("profile_status", "confirmed")
+    await ensure_user(username)
+    await users.update_one(
+        {"username": username.strip()},
+        {"$set": {f"academic_profile.{k}": v for k, v in clean.items()}},
+    )
+    return await get_academic_profile(username)
 
 
 async def get_user_course_context(username: str | None) -> str:

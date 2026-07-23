@@ -5,12 +5,16 @@ from langchain_core.documents import Document
 from sentence_transformers import CrossEncoder
 
 from modules.catalog_retriever import structured_metadata_score
-from modules.config import CROSS_ENCODER_MODEL_NAME
+from modules.config import CROSS_ENCODER_DEVICE, CROSS_ENCODER_MODEL_NAME
+from modules.load_vectorstore import _resolve_torch_device
 
 
 @lru_cache(maxsize=1)
 def get_cross_encoder():
-    return CrossEncoder(CROSS_ENCODER_MODEL_NAME)
+    return CrossEncoder(
+        CROSS_ENCODER_MODEL_NAME,
+        device=_resolve_torch_device(CROSS_ENCODER_DEVICE),
+    )
 
 
 def rerank_documents(query: str, documents: List[Document], top_k: int) -> List[Document]:

@@ -3,6 +3,19 @@
     "ingest:all": "bash server/scripts/run_python.sh server/scripts/bulk_ingest.py --target all",
     "ingest:courses": "bash server/scripts/run_python.sh server/scripts/bulk_ingest.py --target courses",
     "ingest:reviews": "bash server/scripts/run_python.sh server/scripts/bulk_ingest.py --target reviews",
-    "ingest:exams": "bash server/scripts/run_python.sh server/scripts/bulk_ingest.py --target exams"
+    "ingest:exams": "bash server/scripts/run_python.sh server/scripts/bulk_ingest.py --target exams",
+    "registry": "bash server/scripts/run_python.sh server/scripts/build_curricula_registry.py",
+    "catalog": "bash server/scripts/run_python.sh server/scripts/build_course_catalog.py",
+    "seed:courses": "bash server/scripts/run_python.sh server/scripts/seed_courses.py",
+    "scrape:credits": "bash server/scripts/run_python.sh server/scripts/scrape_course_credits.py",
+    "ingest:degrees": "bash server/scripts/run_python.sh server/scripts/ingest_degree_requirements.py",
+    "ingest:degrees:reset": "bash server/scripts/run_python.sh server/scripts/ingest_degree_requirements.py --reset",
+    "validate:data": "bash server/scripts/run_python.sh server/scripts/validate_degree_data.py",
+    "test:advising": "bash server/scripts/run_python.sh server/tests/test_advising.py",
+    "benchmark:build": "bash server/scripts/run_python.sh server/evaluation/build_benchmark.py",
+    "eval": "bash server/scripts/run_python.sh server/evaluation/run_evaluation.py",
+    "eval:retrieval": "bash server/scripts/run_python.sh server/evaluation/run_evaluation.py --retrieval-only",
+    "eval:ablate": "bash server/scripts/run_python.sh server/evaluation/ablation_runner.py",
+    "eval:tables": "bash server/scripts/run_python.sh server/evaluation/make_tables.py"
   }
 }

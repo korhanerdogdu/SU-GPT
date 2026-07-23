@@ -10,7 +10,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from langchain_core.documents import Document
 
 from modules.catalog_data_loader import iter_catalog_documents
-from modules.config import CATALOG_DATA_DIR, EXAMS_DIR, REVIEWS_DIR, SOURCES_DIR
+from modules.config import (
+    CATALOG_DATA_DIR,
+    CATALOG_TERM_CODES,
+    EXAMS_DIR,
+    REVIEWS_DIR,
+    SOURCES_DIR,
+)
 from modules.document_loaders import SUPPORTED_EXTENSIONS
 from modules.load_vectorstore import get_vectorstore, ingest_file_paths, upsert_documents
 from modules.source_of_truth import (
@@ -22,7 +28,7 @@ from modules.source_of_truth import (
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Idempotent SU-GPT bulk ingestion.")
+    parser = argparse.ArgumentParser(description="Idempotent adviSU bulk ingestion.")
     parser.add_argument("--target", choices=["all", "courses", "reviews", "exams"], default="all")
     parser.add_argument("--catalog-dir", default=CATALOG_DATA_DIR)
     parser.add_argument("--sources-dir", default=SOURCES_DIR)
@@ -72,7 +78,7 @@ def ingest_catalog_courses(catalog_dir: str, *, batch_size: int = 256) -> int:
         batch.clear()
         ids.clear()
 
-    for document in iter_catalog_documents(root):
+    for document in iter_catalog_documents(root, term_codes=CATALOG_TERM_CODES):
         normalized, chunk_id, source_id, source_name = normalize_catalog_document(document, source_counters)
         batch.append(normalized)
         ids.append(chunk_id)

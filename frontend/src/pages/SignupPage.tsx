@@ -40,14 +40,31 @@ export default function SignupPage() {
           "linear-gradient(rgba(8,17,30,0.62), rgba(15,31,61,0.7)), url(/assets/campus.jpg)",
       }}
     >
-      <div className="flex h-full w-full items-center justify-center px-4">
-        <div className="w-full max-w-sm rounded-2xl border border-white/10 bg-card/70 p-6 shadow-2xl backdrop-blur-md">
+      <div className="mx-auto flex h-full w-full max-w-6xl flex-col items-center justify-center gap-8 px-4 lg:flex-row lg:justify-between lg:gap-16">
+        {/* Brand panel — matches the login screen */}
+        <div className="flex w-full max-w-xl shrink flex-col items-center text-center lg:items-start lg:text-left">
+          {/* Light panel: the lockup's navy type is illegible on the dark backdrop. */}
+          <div className="rounded-2xl bg-white/95 px-6 py-5 shadow-2xl backdrop-blur-sm">
+            <img
+              src="/assets/adviSU-logo.png"
+              alt="adviSU — Sabancı University Academic Advisor"
+              className="w-[min(100%,30rem)]"
+            />
+          </div>
+          <p className="mt-4 hidden max-w-md text-sm leading-relaxed text-white/80 lg:block">
+            Retrieval-Augmented Academic Advising System. Ask about your degree requirements,
+            remaining credits, electives and minors — answered from official Sabancı University
+            curriculum data.
+          </p>
+        </div>
+
+        <div className="w-full max-w-sm shrink-0 rounded-2xl border border-white/10 bg-card/70 p-6 shadow-2xl backdrop-blur-md">
           <div className="mb-5">
             <h1 className="text-2xl font-bold tracking-tight">
               Create an account
             </h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              Join SU-GPT in a few seconds
+              Join adviSU in a few seconds
             </p>
           </div>
 

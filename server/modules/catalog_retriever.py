@@ -16,6 +16,11 @@ CATALOG_DOCUMENT_TYPES = {
     "degree_requirement_pool_course",
     "degree_requirement_profile",
     "degree_requirement_record",
+    "degree_requirement_rule",
+    "minor_requirement_profile",
+    "minor_requirement_category_pool",
+    "minor_requirement_pool_course",
+    "minor_requirement_rule",
     "graduation_requirement_category",
     "graduation_requirement_course",
     "graduation_requirement_course_list",
@@ -95,6 +100,14 @@ def retrieve_documents(
         else:
             documents.extend(vectorstore.similarity_search(query, k=k))
 
+    # Hybrid: add BM25 lexical hits from the SAME scoped subset (roadmap section 12).
+    try:
+        from modules.bm25_retriever import annotate_bm25
+
+        documents.extend(annotate_bm25(vectorstore, query, metadata_filter))
+    except Exception:
+        pass
+
     ranked = _lexical_rank(query, _dedupe(documents))
     return ranked[: max(k, 1)]
 
@@ -113,6 +126,10 @@ def structured_metadata_score(query: str, metadata: dict[str, Any]) -> float:
     if metadata.get("program") in programs:
         value += 6
     if metadata.get("requirement_type") in requirement_types:
+        value += 4
+    # new degree-requirement corpus tags requirement_category (e.g. "area_electives")
+    req_category = str(metadata.get("requirement_category") or "")
+    if req_category and any(rt in req_category for rt in requirement_types):
         value += 4
     if _is_graduation_query(query) and metadata.get("source_authority") == "official_degree_evaluation":
         value += 14
@@ -167,6 +184,13 @@ def _candidate_filters(query: str) -> list[dict[str, Any]]:
 
 def _document_type_filter(query: str) -> list[str]:
     q = query.lower()
+    if _has_any(q, ["minor", "yandal", "yan dal"]):
+        return [
+            "minor_requirement_profile",
+            "minor_requirement_category_pool",
+            "minor_requirement_pool_course",
+            "minor_requirement_rule",
+        ]
     if _has_any(q, ["schedule", "time", "meeting", "meet", "crn", "section", "instructor", "saat", "program", "sube"]):
         return ["schedule_section", "schedule_course_list"]
     if _has_any(
@@ -189,6 +213,7 @@ def _document_type_filter(query: str) -> list[str]:
             "degree_requirement_profile",
             "degree_requirement_category_pool",
             "degree_requirement_pool_course",
+            "degree_requirement_rule",
             "graduation_requirement_summary",
             "graduation_requirement_category",
             "graduation_requirement_course",
@@ -356,6 +381,7 @@ def _lexical_rank(query: str, documents: Iterable[Document]) -> list[Document]:
         metadata = doc.metadata or {}
         text = doc.page_content.lower()
         value = structured_metadata_score(query, metadata)
+        value += float(metadata.get("_bm25") or 0.0) * 12  # hybrid: fuse BM25 lexical score
         for term in terms:
             if len(term) > 1 and term in text:
                 value += 0.25
@@ -365,16 +391,19 @@ def _lexical_rank(query: str, documents: Iterable[Document]) -> list[Document]:
 
 
 def _dedupe(documents: Iterable[Document]) -> list[Document]:
-    seen = set()
-    deduped = []
+    seen: dict[Any, Document] = {}
+    order: list[Any] = []
     for doc in documents:
         metadata = doc.metadata or {}
         key = metadata.get("chunk_id") or (metadata.get("source"), doc.page_content[:80])
         if key in seen:
+            # carry the BM25 signal onto the already-kept copy (dense hit may lack it)
+            if metadata.get("_bm25") and not (seen[key].metadata or {}).get("_bm25"):
+                seen[key].metadata["_bm25"] = metadata["_bm25"]
             continue
-        seen.add(key)
-        deduped.append(doc)
-    return deduped
+        seen[key] = doc
+        order.append(key)
+    return [seen[k] for k in order]
 
 
 def _has_any(text: str, needles: Iterable[str]) -> bool:
