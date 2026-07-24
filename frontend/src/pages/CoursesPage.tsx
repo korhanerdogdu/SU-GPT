@@ -4,6 +4,7 @@ import { ArrowLeft, BookOpen, Check, Loader2, Save, Search, Upload, X } from "lu
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/AuthContext";
+import ThemeToggle from "@/components/ThemeToggle";
 import {
   fetchCourses,
   fetchUserCourses,
@@ -78,7 +79,12 @@ export default function CoursesPage() {
   }, [user?.username]);
 
   const totalSu = useMemo(
-    () => saved.reduce((sum, c) => sum + (c.su_credits ?? 0), 0),
+    () =>
+      saved
+        .filter((course) =>
+          ["completed", "transfer", "exempted"].includes(course.status ?? "completed"),
+        )
+        .reduce((sum, course) => sum + (course.su_credits ?? 0), 0),
     [saved]
   );
   const dirty = useMemo(() => {
@@ -101,7 +107,16 @@ export default function CoursesPage() {
     if (!user?.username) return;
     setSaving(true);
     try {
-      const result = await saveUserCourses(user.username, Array.from(selectedIds));
+      const statuses = Object.fromEntries(
+        saved
+          .filter((course) => course.status)
+          .map((course) => [course.id, course.status]),
+      );
+      const result = await saveUserCourses(
+        user.username,
+        Array.from(selectedIds),
+        statuses,
+      );
       setSaved(result);
       setSelectedIds(new Set(result.map((c) => c.id)));
       toast.success(`Saved ${result.length} completed course${result.length === 1 ? "" : "s"}.`);
@@ -151,6 +166,7 @@ export default function CoursesPage() {
           <BookOpen size={18} />
           <span className="font-semibold">Course History</span>
         </div>
+        <ThemeToggle className="ml-auto" />
       </header>
 
       <main className="mx-auto grid max-w-5xl gap-6 p-6 md:grid-cols-2">
@@ -180,6 +196,9 @@ export default function CoursesPage() {
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-semibold text-[#003B73]">{c.code}</p>
                     <p className="text-xs text-[#4A5568]">{c.title}</p>
+                    <span className="mt-1 inline-flex rounded-full bg-[#eef4fa] px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[#004B93]">
+                      {c.status ?? "completed"}
+                    </span>
                   </div>
                   <span className="shrink-0 text-xs font-medium text-[#4A5568]">
                     {c.su_credits ?? "—"} SU
@@ -268,6 +287,7 @@ export default function CoursesPage() {
             </Button>
           </section>
 
+          {user?.role === "admin" && (
           <section className="rounded-xl border border-[#D8E6F3] bg-white p-5 shadow-sm">
             <h2 className="mb-4 text-lg font-semibold text-[#003B73]">Course documents</h2>
             <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-md border border-dashed border-[#D8E6F3] bg-[#F5F8FC] px-3 py-5 text-center text-sm text-[#4A5568] transition-colors hover:border-[#004B93] hover:bg-[#eef4fa]">
@@ -321,6 +341,7 @@ export default function CoursesPage() {
               </>
             )}
           </section>
+          )}
         </div>
       </main>
     </div>

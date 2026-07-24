@@ -1,42 +1,84 @@
+@import "katex/dist/katex.min.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
   :root {
-    /* shadcn dark theme tuned to Sabancı navy */
-    --background: 217 60% 8%;            /* #0A1A33 deep navy */
-    --foreground: 210 40% 96%;           /* #F8FAFC */
-    --card: 217 50% 10%;                 /* #0F2247 */
-    --card-foreground: 210 40% 96%;
-    --popover: 217 50% 10%;
-    --popover-foreground: 210 40% 96%;
-    --primary: 213 100% 29%;             /* #004B93 Sabancı blue */
+    --background: 213 42% 97%;
+    --foreground: 216 47% 15%;
+    --card: 0 0% 100%;
+    --card-foreground: 216 47% 15%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 216 47% 15%;
+    --primary: 213 100% 29%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 217 33% 17%;            /* #1E293B */
-    --secondary-foreground: 210 40% 96%;
-    --muted: 217 33% 17%;
-    --muted-foreground: 215 20% 65%;     /* #94A3B8 */
+    --secondary: 211 45% 92%;
+    --secondary-foreground: 216 47% 15%;
+    --muted: 211 42% 94%;
+    --muted-foreground: 215 20% 40%;
     --accent: 213 100% 29%;
     --accent-foreground: 0 0% 100%;
     --destructive: 0 62% 50%;
     --destructive-foreground: 0 0% 100%;
-    --border: 217 33% 22%;               /* #334155 */
-    --input: 217 33% 17%;
+    --border: 211 38% 86%;
+    --input: 211 38% 86%;
     --ring: 213 100% 35%;
-    --radius: 0.6rem;
+    --radius: 0.7rem;
+  }
+
+  :root[data-theme="dark"] {
+    --background: 217 60% 8%;
+    --foreground: 210 40% 96%;
+    --card: 217 50% 10%;
+    --card-foreground: 210 40% 96%;
+    --popover: 217 50% 10%;
+    --popover-foreground: 210 40% 96%;
+    --secondary: 217 33% 17%;
+    --secondary-foreground: 210 40% 96%;
+    --muted: 217 33% 17%;
+    --muted-foreground: 215 20% 65%;
+    --border: 217 33% 22%;
+    --input: 217 33% 17%;
   }
 
   * {
     @apply border-border;
   }
-  html, body, #root {
+
+  html,
+  body,
+  #root {
     height: 100%;
   }
+
   body {
     @apply bg-background text-foreground antialiased;
     font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
       Helvetica, Arial, sans-serif;
+  }
+
+  button,
+  a,
+  input,
+  textarea,
+  select {
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background;
+  }
+}
+
+@layer components {
+  .sidebar-link {
+    @apply flex items-center gap-2.5 rounded-xl px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground;
+  }
+
+  .theme-logo {
+    @apply rounded-md bg-[#082447] px-2 py-1;
+  }
+
+  .advisu-markdown .katex-display {
+    @apply my-4 overflow-x-auto overflow-y-hidden rounded-lg bg-muted px-3 py-2;
   }
 }
 
@@ -45,14 +87,38 @@
     width: 8px;
     height: 8px;
   }
+
   .scrollbar-thin::-webkit-scrollbar-track {
     background: transparent;
   }
+
   .scrollbar-thin::-webkit-scrollbar-thumb {
     background: hsl(var(--border));
     border-radius: 8px;
   }
+
   .scrollbar-thin::-webkit-scrollbar-thumb:hover {
     background: hsl(var(--ring));
   }
 }
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Compatibility for setup screens that used the original fixed light palette. */
+:root[data-theme="dark"] .bg-\[\#F5F8FC\] { background-color: hsl(var(--background)); }
+:root[data-theme="dark"] .bg-white { background-color: hsl(var(--card)); }
+:root[data-theme="dark"] .bg-\[\#eef4fa\] { background-color: hsl(var(--muted)); }
+:root[data-theme="dark"] .text-\[\#1a2b45\],
+:root[data-theme="dark"] .text-\[\#003B73\] { color: hsl(var(--foreground)); }
+:root[data-theme="dark"] .text-\[\#4A5568\] { color: hsl(var(--muted-foreground)); }
+:root[data-theme="dark"] .border-\[\#D8E6F3\],
+:root[data-theme="dark"] .border-\[\#eef4fa\] { border-color: hsl(var(--border)); }

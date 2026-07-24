@@ -6,13 +6,14 @@ import ChatMessages, { type Message } from "@/components/chat/ChatMessages";
 import ChatInput from "@/components/chat/ChatInput";
 import { useAuth } from "@/contexts/AuthContext";
 import {
-  askQuestion,
+  askQuestionStream,
   currentSessionId,
   deleteConversation,
   getConversation,
   getProfile,
   listConversations,
   startNewSession,
+  updateConversation,
   useSession,
   type ConversationSummary,
 } from "@/lib/api";
@@ -28,6 +29,10 @@ export default function ChatPage() {
   const [sessionId, setSessionId] = useState<string>(() => currentSessionId());
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [profileReady, setProfileReady] = useState(true); // assume ok until told otherwise
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    () => localStorage.getItem("advisu-sidebar-collapsed") === "true",
+  );
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   const refreshConversations = useCallback(async () => {
     if (!user?.username) return;
@@ -68,15 +73,36 @@ export default function ChatPage() {
     ]);
     setBusy(true);
     try {
-      const res = await askQuestion(text);
+      const res = await askQuestionStream(text, (token) => {
+        setMessages((current) =>
+          current.map((message) =>
+            message.id === pendingId
+              ? {
+                  ...message,
+                  content: message.content + token,
+                  pending: true,
+                }
+              : message,
+          ),
+        );
+      });
       setMessages((m) =>
         m.map((msg) =>
           msg.id === pendingId
-            ? { ...msg, content: res.response, sources: res.sources, pending: false }
+            ? {
+                ...msg,
+                content: res.response,
+                sources: res.sources,
+                summary: res.summary,
+                structuredContent: res.structured_content,
+                exportLinks: res.export_links,
+                pending: false,
+              }
             : msg
         )
       );
       void refreshConversations();
+      setMobileSidebarOpen(false);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Request failed";
       toast.error(message);
@@ -129,19 +155,52 @@ export default function ChatPage() {
     }
   }
 
+  async function handleRenameChat(id: string, title: string) {
+    try {
+      await updateConversation(id, { title });
+      void refreshConversations();
+    } catch {
+      toast.error("Sohbet yeniden adlandırılamadı.");
+    }
+  }
+
+  async function handlePinChat(id: string, pinned: boolean) {
+    try {
+      await updateConversation(id, { pinned });
+      void refreshConversations();
+    } catch {
+      toast.error("Sabitleme değiştirilemedi.");
+    }
+  }
+
+  function toggleSidebar() {
+    const next = !sidebarCollapsed;
+    setSidebarCollapsed(next);
+    localStorage.setItem("advisu-sidebar-collapsed", String(next));
+  }
+
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-sky-night">
+    <div className="flex h-screen w-screen overflow-hidden bg-background">
       <Sidebar
         conversations={conversations}
         activeSessionId={sessionId}
+        collapsed={sidebarCollapsed}
+        mobileOpen={mobileSidebarOpen}
+        onToggle={toggleSidebar}
+        onCloseMobile={() => setMobileSidebarOpen(false)}
         onNewChat={handleNewChat}
         onOpenChat={handleOpenChat}
         onDeleteChat={handleDeleteChat}
+        onRenameChat={handleRenameChat}
+        onPinChat={handlePinChat}
       />
       <main className="flex min-w-0 flex-1 flex-col">
-        <ChatHeader profileReady={profileReady} />
+        <ChatHeader
+          profileReady={profileReady}
+          onOpenMenu={() => setMobileSidebarOpen(true)}
+        />
         <div className="flex-1 overflow-y-auto scrollbar-thin">
-          <ChatMessages messages={messages} />
+          <ChatMessages messages={messages} showSources={user?.role === "admin"} />
         </div>
         <ChatInput onSend={handleSend} disabled={busy} />
       </main>

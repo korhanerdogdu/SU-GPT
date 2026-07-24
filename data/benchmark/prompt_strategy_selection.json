@@ -1,0 +1,33 @@
+{
+  "measured_at": "2026-07-24T16:57:42.069568+00:00",
+  "model_calls": 4,
+  "task_count": 6,
+  "selection_metric": "exact_match_accuracy",
+  "results": {
+    "basic": {
+      "correct": 6,
+      "total": 6,
+      "accuracy": 1.0,
+      "parse_success": true
+    },
+    "lookup": {
+      "correct": 6,
+      "total": 6,
+      "accuracy": 1.0,
+      "parse_success": true
+    },
+    "algorithmic": {
+      "correct": 6,
+      "total": 6,
+      "accuracy": 1.0,
+      "parse_success": true
+    },
+    "structured_lookup": {
+      "correct": 6,
+      "total": 6,
+      "accuracy": 1.0,
+      "parse_success": true
+    }
+  },
+  "winner": "structured_lookup"
+}

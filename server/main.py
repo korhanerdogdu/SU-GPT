@@ -1,10 +1,11 @@
+import asyncio
 import json
 import re
 from functools import lru_cache
 from pathlib import Path
 
 from fastapi import FastAPI,UploadFile,File,Form,Request,HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List
 from langchain_core.retrievers import BaseRetriever
@@ -36,6 +37,8 @@ from modules.config import (
     RERANK_TOP_K,
     RETRIEVAL_CANDIDATE_K,
     SOURCES_DIR,
+    STUDENT_PASSWORD,
+    STUDENT_USERNAME,
 )
 from modules import retrieval_modes
 from modules.catalog_retriever import retrieve_documents
@@ -47,9 +50,18 @@ from modules.mongodb import (
     get_user_course_context,
     get_user_courses,
     list_courses,
+    mutate_user_courses_by_codes,
     seed_courses_from_catalog,
     set_academic_profile,
     set_user_courses,
+)
+from modules.course_commands import parse_course_history_command
+from modules.export_utils import audit_rows, course_rows, rows_to_csv, rows_to_xlsx
+from modules.response_formatter import (
+    audit_structured_content,
+    course_update_structured_content,
+    ensure_summary_section,
+    merge_structured_content,
 )
 from modules.rag_router import route_query
 from modules import curriculum_registry
@@ -86,6 +98,11 @@ class AcademicProfilePayload(BaseModel):
     admission_term: str | None = None
     curriculum_term: str | None = None
     minor_codes: list[str] | None = None
+
+
+class ConversationUpdatePayload(BaseModel):
+    title: str | None = None
+    pinned: bool | None = None
 
 
 GRADUATION_INTENT_RE = re.compile(
@@ -295,7 +312,25 @@ def _is_course_detail_like(question: str) -> bool:
     return not graduation_terms.search(question or "")
 
 
-def _resolve_intent(question: str, detected_intent: str) -> str:
+def _resolve_intent(
+    question: str,
+    detected_intent: str,
+    working_context: dict | None = None,
+) -> str:
+    previous_intent = (working_context or {}).get("last_intent")
+    normalized = re.sub(r"\s+", " ", (question or "").strip().lower())
+    graduation_followups = (
+        "yani ne almam lazım",
+        "yani ne almaliyim",
+        "ne almam lazım",
+        "ne almaliyim",
+        "what do i need",
+        "what should i take then",
+    )
+    if previous_intent == "mezuniyet_durumu" and any(
+        phrase in normalized for phrase in graduation_followups
+    ):
+        return "mezuniyet_durumu"
     if MINOR_INTENT_RE.search(question or ""):
         return "minor"
     if _is_graduation_intent(question) and not _is_course_detail_like(question):
@@ -461,6 +496,72 @@ def _audit_context_document(audit_result: dict) -> Document:
         page_content=text,
         metadata={"source": "Deterministic degree audit", "document_type": "degree_audit_result"},
     )
+
+
+def _conversation_context_document(turns: list[dict[str, str]]) -> Document:
+    compact = []
+    for turn in turns[-3:]:
+        compact.append(
+            {
+                "user": str(turn.get("user") or "")[:600],
+                "assistant": str(turn.get("assistant") or "")[:900],
+            }
+        )
+    return Document(
+        page_content=(
+            "[Source: Recent conversation context]\n"
+            "Use these turns only to resolve follow-up meaning. Official curriculum data and "
+            "the deterministic audit remain authoritative.\n"
+            + json.dumps(compact, ensure_ascii=False)
+        ),
+        metadata={
+            "source": "Recent conversation",
+            "document_type": "conversation_context",
+        },
+    )
+
+
+def _course_mutation_answer(mutation: dict, *, language: str) -> str:
+    updates = mutation.get("updates") or []
+    missing = mutation.get("missing") or []
+    if language == "en":
+        lines = [
+            (
+                f"Updated your course history. You now have {mutation.get('course_count', 0)} "
+                f"stored courses; {mutation.get('credit_eligible_course_count', 0)} currently "
+                "count toward graduation credit."
+            )
+        ]
+        if updates:
+            lines.extend(
+                f"- **{row.get('code')}**: {row.get('action')} ({row.get('status') or 'removed'})"
+                for row in updates
+            )
+        if missing:
+            lines.append("Not found in the course catalog: " + ", ".join(missing))
+        lines.append(
+            f"Current credit-eligible SU total: {mutation.get('total_su_credits', 0):g}."
+        )
+        return "\n".join(lines)
+
+    lines = [
+        (
+            f"Ders geçmişin güncellendi. Şu anda {mutation.get('course_count', 0)} kayıtlı dersin "
+            f"var; bunların {mutation.get('credit_eligible_course_count', 0)} tanesi mezuniyet "
+            "kredisine sayılabilecek durumda."
+        )
+    ]
+    if updates:
+        lines.extend(
+            f"- **{row.get('code')}**: {row.get('action')} ({row.get('status') or 'silindi'})"
+            for row in updates
+        )
+    if missing:
+        lines.append("Ders kataloğunda bulunamadı: " + ", ".join(missing))
+    lines.append(
+        f"Güncel, krediye sayılabilir SU toplamı: {mutation.get('total_su_credits', 0):g}."
+    )
+    return "\n".join(lines)
 
 
 def _clean_code(code: str) -> str:
@@ -855,13 +956,17 @@ async def delete_source_document(source_id: str, hard: bool = False):
 
 @app.post("/auth/login")
 async def login(payload: LoginPayload):
-    if payload.username != ADMIN_USERNAME or payload.password != ADMIN_PASSWORD:
+    if payload.username == ADMIN_USERNAME and payload.password == ADMIN_PASSWORD:
+        role = "admin"
+    elif payload.username == STUDENT_USERNAME and payload.password == STUDENT_PASSWORD:
+        role = "student"
+    else:
         raise HTTPException(status_code=401, detail="Invalid username or password")
     try:
-        await ensure_user(ADMIN_USERNAME)
+        await ensure_user(payload.username, role=role)
     except Exception:
-        logger.exception("Could not sync admin user to MongoDB")
-    return {"username": ADMIN_USERNAME, "role": "admin"}
+        logger.exception("Could not sync user to MongoDB")
+    return {"username": payload.username, "role": role}
 
 
 @app.get("/courses/")
@@ -917,6 +1022,55 @@ async def degree_audit_endpoint(username: str):
     return degree_audit.audit(program, term, completed)
 
 
+def _tabular_download(
+    rows: list[dict],
+    *,
+    file_format: str,
+    filename: str,
+    sheet_name: str,
+) -> Response:
+    normalized = file_format.strip().lower()
+    if normalized == "csv":
+        content = rows_to_csv(rows)
+        media_type = "text/csv; charset=utf-8"
+        extension = "csv"
+    elif normalized == "xlsx":
+        content = rows_to_xlsx(rows, sheet_name=sheet_name)
+        media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        extension = "xlsx"
+    else:
+        raise HTTPException(status_code=400, detail="format must be csv or xlsx")
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}.{extension}"'},
+    )
+
+
+@app.get("/users/{username}/courses/export")
+async def export_selected_courses(username: str, format: str = "csv"):
+    selected = await get_user_courses(username)
+    return _tabular_download(
+        course_rows(selected),
+        file_format=format,
+        filename=f"advisu-{username}-courses",
+        sheet_name="Course History",
+    )
+
+
+@app.get("/users/{username}/degree-audit/export")
+async def export_degree_audit(username: str, format: str = "xlsx"):
+    audit_result = await degree_audit_endpoint(username)
+    if audit_result.get("reliability") == "unavailable":
+        raise HTTPException(status_code=404, detail=audit_result.get("message"))
+    return _tabular_download(
+        audit_rows(audit_result),
+        file_format=format,
+        filename=f"advisu-{username}-degree-audit",
+        sheet_name="Degree Audit",
+    )
+
+
 @app.post("/ask/")
 async def ask_question(
     question: str = Form(...),
@@ -934,6 +1088,10 @@ async def ask_question(
     context_top_k = max(int(top_k), 1) if top_k else RERANK_TOP_K
     prompt_strategy = (prompt_strategy or DEFAULT_PROMPT_STRATEGY).strip().lower()
     expert_mode = (expert_mode or DEFAULT_EXPERT_MODE).strip().lower()
+    original_question = question
+    language = detect_language(original_question)
+    course_mutation: dict | None = None
+    course_update_content: dict | None = None
 
     def _stamp(payload: dict) -> dict:
         """Every /ask response reports the configuration that produced it (needed by Section 5)."""
@@ -946,15 +1104,63 @@ async def ask_question(
     try:
         logger.info(f"user query: {question} (mode={retrieval_mode}, top_k={context_top_k})")
 
+        # Explicit course-history statements are deterministic commands, not LLM guesses.
+        # They update only the mentioned courses and preserve the rest of the profile.
+        course_command = parse_course_history_command(original_question)
+        if course_command and username:
+            course_mutation = await mutate_user_courses_by_codes(
+                username,
+                course_command.course_codes,
+                status=course_command.status,
+                remove=course_command.is_remove,
+            )
+            course_update_content = course_update_structured_content(
+                course_mutation.get("updates"),
+                language=language,
+            )
+            if course_command.standalone:
+                answer = _course_mutation_answer(course_mutation, language=language)
+                answer, summary = ensure_summary_section(answer, language=language)
+                await conversation_memory.append_turn(
+                    session_id,
+                    username=username,
+                    question=original_question,
+                    answer=answer,
+                    intent="course_history_update",
+                    course_id=course_command.course_codes[-1] if course_command.course_codes else None,
+                )
+                return _stamp(
+                    {
+                        "response": answer,
+                        "summary": summary,
+                        "structured_content": course_update_content,
+                        "sources": [],
+                        "source_chunk_ids": [],
+                        "intent": "course_history_update",
+                        "profile_updated": True,
+                        "course_history": course_mutation,
+                        "export_links": {
+                            "csv": f"/users/{username}/courses/export?format=csv",
+                            "xlsx": f"/users/{username}/courses/export?format=xlsx",
+                        },
+                    }
+                )
+
         # LLM-only baseline: no retrieval, no student data, no sources, no profile gate.
         # It answers from model knowledge alone so the evaluation can measure what RAG adds.
         if retrieval_mode == "llm_only":
             answer = answer_without_context(question)
+            answer, summary = ensure_summary_section(answer, language=language)
             await conversation_memory.append_turn(
-                session_id, username=username, question=question, answer=answer, intent="llm_only"
+                session_id,
+                username=username,
+                question=original_question,
+                answer=answer,
+                intent="llm_only",
             )
             return _stamp({
                 "response": answer,
+                "summary": summary,
                 "sources": [],
                 "source_chunk_ids": [],
                 "intent": "llm_only",
@@ -964,9 +1170,10 @@ async def ask_question(
         # Bounded session memory: resolve "this course" style follow-ups (roadmap section 19).
         working_context = await conversation_memory.get_working_context(session_id)
         question = conversation_memory.resolve_reference(question, working_context)
+        prior_turns = await conversation_memory.recent_turns(session_id, limit=3)
 
         detected_intent = get_intent(question)
-        resolved_intent = _resolve_intent(question, detected_intent)
+        resolved_intent = _resolve_intent(question, detected_intent, working_context)
         route = route_query(question, resolved_intent)
         intent = resolved_intent if resolved_intent == "minor" else route.intent
         logger.info(
@@ -1044,6 +1251,7 @@ async def ask_question(
         context_docs = _format_for_context(outcome.documents)
 
         # Deterministic degree audit: compute the numbers in code, inject as authoritative context.
+        audit_result: dict | None = None
         if graduation_intent and program and profile.get("curriculum_term"):
             try:
                 completed = await get_completed_course_codes(username) if username else []
@@ -1072,16 +1280,48 @@ async def ask_question(
             )
         if recommendation_intent:
             context_docs = _recommendation_support_documents(effective_question, taken_codes) + context_docs
+        if prior_turns:
+            context_docs.insert(0, _conversation_context_document(prior_turns))
         context_docs.insert(0, _intent_context_document(intent, taken_codes))
 
         retriever = StaticRetriever(documents=context_docs)
         # Answer in the language the student wrote in. Decided here rather than left to a rule
         # inside the (Turkish) system prompt, which the model was not reliably honouring.
-        chain = get_llm_chain(retriever, intent=intent, language=detect_language(question))
+        chain = get_llm_chain(
+            retriever,
+            intent=intent,
+            language=language,
+            prompt_strategy=prompt_strategy,
+        )
         llm_question = _recommendation_question_for_llm(effective_question, taken_codes) if recommendation_intent else question
         result = query_chain(chain, llm_question)
         if recommendation_intent:
             result = _clean_recommendation_response(result)
+        rendered_answer, summary = ensure_summary_section(
+            result.get("response", ""),
+            language=language,
+        )
+        result["response"] = rendered_answer
+        result["summary"] = summary
+        result["structured_content"] = merge_structured_content(
+            audit_structured_content(audit_result, language=language),
+            course_update_content,
+        )
+        if username:
+            result["export_links"] = {
+                "courses_csv": f"/users/{username}/courses/export?format=csv",
+                "courses_xlsx": f"/users/{username}/courses/export?format=xlsx",
+            }
+            if audit_result and audit_result.get("reliability") != "unavailable":
+                result["export_links"].update(
+                    {
+                        "audit_csv": f"/users/{username}/degree-audit/export?format=csv",
+                        "audit_xlsx": f"/users/{username}/degree-audit/export?format=xlsx",
+                    }
+                )
+        if course_mutation:
+            result["profile_updated"] = True
+            result["course_history"] = course_mutation
         result["intent"] = intent
         result = _stamp(result)
         result["reranked"] = outcome.reranked
@@ -1092,7 +1332,7 @@ async def ask_question(
         await conversation_memory.append_turn(
             session_id,
             username=username,
-            question=question,
+            question=original_question,
             answer=result.get("response", ""),
             intent=intent,
             course_id=conversation_memory.extract_course_code(question)
@@ -1128,6 +1368,46 @@ async def ask_question(
         })
 
 
+@app.post("/ask/stream")
+async def ask_question_stream(
+    question: str = Form(...),
+    username: str | None = Form(None),
+    session_id: str | None = Form(None),
+    mode: str | None = Form(None),
+    top_k: int | None = Form(None),
+    prompt_strategy: str | None = Form(None),
+    expert_mode: str | None = Form(None),
+):
+    """NDJSON response that renders progressively while retaining the stable /ask contract."""
+    payload = await ask_question(
+        question=question,
+        username=username,
+        session_id=session_id,
+        mode=mode,
+        top_k=top_k,
+        prompt_strategy=prompt_strategy,
+        expert_mode=expert_mode,
+    )
+    if isinstance(payload, Response):
+        return payload
+
+    response_text = str(payload.get("response") or "")
+    metadata = {key: value for key, value in payload.items() if key != "response"}
+
+    async def events():
+        yield json.dumps({"type": "metadata", "data": metadata}, ensure_ascii=False) + "\n"
+        for chunk in re.findall(r"\S+\s*", response_text):
+            yield json.dumps({"type": "token", "text": chunk}, ensure_ascii=False) + "\n"
+            await asyncio.sleep(0.012)
+        yield json.dumps({"type": "done"}, ensure_ascii=False) + "\n"
+
+    return StreamingResponse(
+        events(),
+        media_type="application/x-ndjson",
+        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+    )
+
+
 @app.get("/users/{username}/conversations")
 async def list_conversations(username: str, limit: int = 50):
     """Chat history for the sidebar: newest first, titles only."""
@@ -1139,6 +1419,27 @@ async def get_conversation(session_id: str):
     conversation = await conversation_memory.get_conversation(session_id)
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    return conversation
+
+
+@app.patch("/conversations/{session_id}")
+async def update_conversation(session_id: str, payload: ConversationUpdatePayload):
+    conversation = None
+    if payload.title is not None:
+        conversation = await conversation_memory.rename_conversation(session_id, payload.title)
+        if not conversation:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+    if payload.pinned is not None:
+        conversation = await conversation_memory.set_conversation_pinned(
+            session_id,
+            payload.pinned,
+        )
+        if not conversation:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+    if conversation is None:
+        conversation = await conversation_memory.get_conversation(session_id)
+        if not conversation:
+            raise HTTPException(status_code=404, detail="Conversation not found")
     return conversation
 
 

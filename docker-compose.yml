@@ -1,49 +1,67 @@
+name: advisu
+
 services:
   mongo:
     image: mongo:7
-    container_name: sugpt-mongo
-    ports:
-      - "27017:27017"
+    restart: unless-stopped
     volumes:
       - mongo_data:/data/db
     healthcheck:
       test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
-      interval: 10s
+      interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 20
 
   backend:
     build:
-      context: ./server
-    container_name: sugpt-backend
+      context: .
+      dockerfile: server/Dockerfile
+    restart: unless-stopped
     env_file:
       - .env
     environment:
       MONGO_URI: mongodb://mongo:27017
+      MONGO_DB_NAME: ${MONGO_DB_NAME:-advisu}
       CHROMA_PERSIST_DIR: /app/chroma_store
-      SOURCES_DIR: /app/sources
+      DEGREE_DATA_DIR: /app/data
       CATALOG_DATA_DIR: /app/data
-    ports:
-      - "8000:8000"
+      SOURCES_DIR: /app/sources
+      AUTO_BUILD_VECTOR_INDEX: ${AUTO_BUILD_VECTOR_INDEX:-true}
+      AUTO_SEED_COURSES: "true"
+      STUDENT_USERNAME: ${STUDENT_USERNAME:-student}
+      STUDENT_PASSWORD: ${STUDENT_PASSWORD:-student}
     volumes:
-      - ./server/chroma_store:/app/chroma_store
-      - ./server/uploaded_documents:/app/uploaded_documents
-      - ${SOURCES_DIR_HOST:-./sources}:/app/sources:ro
-      - ${CATALOG_DATA_DIR_HOST:-./data}:/app/data:ro
+      - chroma_data:/app/chroma_store
+      - uploads_data:/app/uploaded_documents
+      - huggingface_cache:/app/.cache/huggingface
+      - ./sources:/app/sources:ro
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
     depends_on:
       mongo:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/test"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
 
   frontend:
     build:
-      context: ./frontend
-    container_name: sugpt-frontend
-    environment:
-      VITE_API_URL: ${VITE_API_URL:-http://127.0.0.1:8000}
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        VITE_API_URL: /api
+    restart: unless-stopped
     ports:
-      - "5173:5173"
+      - "${FRONTEND_PORT:-5173}:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
 
 volumes:
   mongo_data:
+  chroma_data:
+  uploads_data:
+  huggingface_cache:

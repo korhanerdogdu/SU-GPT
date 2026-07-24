@@ -4,6 +4,7 @@ import { login } from "@/lib/api";
 interface AuthUser {
   username: string;
   email?: string;
+  role: "admin" | "student";
 }
 
 interface AuthContextValue {
@@ -42,9 +43,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     isAuthenticated: !!user,
     signIn: async (username, password) => {
       const result = await login(username, password);
-      persist({ username: result.username });
+      persist({
+        username: result.username,
+        role: result.role === "admin" ? "admin" : "student",
+      });
     },
-    signUp: (username, email) => persist({ username, email }),
+    signUp: (username, email) => persist({ username, email, role: "student" }),
     signOut: () => persist(null),
   };
 

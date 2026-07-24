@@ -18,8 +18,10 @@ os.environ.setdefault("MONGO_URI", "mongodb://localhost:27017")  # lazy; never d
 from modules import curriculum_registry, degree_audit
 from modules.retrieval_policy import build_metadata_filter, check_profile
 from modules.bm25_retriever import _tokenize, _is_narrowing
-from modules.conversation_memory import extract_course_code, resolve_reference
+from modules.conversation_memory import _automatic_title, extract_course_code, resolve_reference
+from modules.course_commands import parse_course_history_command
 from modules.mongodb import _norm_status, ELIGIBLE_FOR_CREDIT
+from modules.response_formatter import ensure_summary_section
 
 
 # ---- retrieval policy / profile scoping ---------------------------------------------
@@ -100,6 +102,38 @@ def test_reference_resolution_injects_last_course():
     q = resolve_reference("can I take it next semester?", {"last_course_id": "CS 455"})
     assert "CS 455" in q
     assert extract_course_code("does CS412 count") == "CS 412"
+
+
+def test_followup_resolution_keeps_previous_intent():
+    q = resolve_reference("yani ne almam lazım?", {"last_intent": "mezuniyet_durumu"})
+    assert "mezuniyet_durumu" in q
+
+
+def test_automatic_title_uses_multiple_turns():
+    title = _automatic_title(
+        [
+            {"user": "Merhaba, mezuniyet durumumu hesaplar mısın?", "assistant": "..."},
+            {"user": "Yani ne almam lazım?", "assistant": "..."},
+        ]
+    )
+    assert "mezuniyet" in title.lower()
+    assert len(title) <= 70
+
+
+def test_course_history_command_parser():
+    command = parse_course_history_command("CS 201 ve MATH101'i aldım")
+    assert command is not None
+    assert command.status == "completed"
+    assert command.course_codes == ("CS 201", "MATH 101")
+    assert parse_course_history_command("CS 201 hakkında bilgi ver") is None
+
+
+def test_summary_is_always_available_for_long_answers():
+    answer, summary = ensure_summary_section(
+        "İlk önemli sonuç budur. İkinci önemli sonuç budur.", language="tr"
+    )
+    assert summary
+    assert "Kısa Özet" in answer
 
 
 # ---- course-history status ----------------------------------------------------------

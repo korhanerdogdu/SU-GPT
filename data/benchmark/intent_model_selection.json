@@ -1,0 +1,27 @@
+{
+  "measured_at": "2026-07-24T16:56:17.469312+00:00",
+  "sample_count": 84,
+  "labels": [
+    "alanda_ozellesme",
+    "calisma_plani",
+    "ders_ayrintisi",
+    "ders_onerisi",
+    "diger",
+    "major_secimi",
+    "mezuniyet_durumu"
+  ],
+  "cross_validation": "StratifiedKFold(n_splits=4, shuffle=True, random_state=42)",
+  "selection_metric": "macro_f1",
+  "minimum_improvement": 0.0,
+  "tfidf": {
+    "macro_f1": 0.348167,
+    "accuracy": 0.357143
+  },
+  "bert": {
+    "macro_f1": 0.737285,
+    "accuracy": 0.738095,
+    "model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+  },
+  "winner": "bert",
+  "bert_selected": true
+}

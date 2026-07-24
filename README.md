@@ -16,6 +16,28 @@ it says so instead of guessing.
 
 ---
 
+## v2 experience and safety additions
+
+- Responses preserve the historical Markdown `response` field and also expose `summary`,
+  `structured_content`, and export links. The UI renders GFM tables and KaTeX formulas and can
+  download course history or degree-audit rows as CSV/XLSX.
+- Every substantive answer ends with a compact **Kısa Özet / Short Summary**. A deterministic
+  fallback supplies it if the provider omits the requested section.
+- Writing **"CS 201'i aldım"**, **"CS 300'e kayıtlıyım"**, or **"MATH 101'i sil"** mutates only
+  those course-history rows. Other saved courses remain intact, and the same request immediately
+  answers from the updated MongoDB profile.
+- Session memory passes the last three bounded turns into the prompt for follow-up meaning, while
+  official curriculum documents and the deterministic audit remain authoritative.
+- Chat history can be collapsed, pinned, renamed, and deleted. After the second turn, an unedited
+  title is regenerated from the first conversation topics.
+- Light/dark/system theme support is global and persisted. Students get a clean answer surface;
+  technical source chips and document upload remain admin-only.
+- `/ask/stream` streams NDJSON token events while `/ask/` stays backward compatible.
+- Intent routing is benchmark-selected: multilingual BERT is used only because its measured
+  macro-F1 exceeded the existing TF-IDF classifier; any load failure falls back to TF-IDF.
+
+---
+
 ## What's implemented
 
 ### Data corpus (in-repo, `data/`)
@@ -158,6 +180,23 @@ per-student facts.
 
 ## Setup
 
+### Recommended: Docker Desktop (Windows and macOS)
+
+Install Docker Desktop, copy `.env.example` to `.env`, add the provider key, then run from the
+repository root:
+
+```bash
+docker compose up --build
+```
+
+Open **http://localhost:5173**. Student demo: `student / student`; admin demo:
+`admin / admin`. API docs are at **http://localhost:8000/docs**.
+
+The first start builds the Chroma index from the bundled official JSONL corpus and downloads the
+embedding model, so it is slower than later starts. MongoDB, Chroma, uploads, and the Hugging Face
+cache use named volumes to avoid Windows/macOS bind-mount permission differences. Stop with
+`docker compose down`; add `-v` only when you explicitly want to erase local application data.
+
 ### 1. Backend
 ```powershell
 cd server
@@ -208,7 +247,7 @@ npm run dev               # http://localhost:5173
 Override the API base with `frontend/.env` → `VITE_API_URL=http://127.0.0.1:8000`.
 
 ### Using it
-Log in (`admin` / `admin`) → **Profile & degree audit** in the sidebar → pick your major +
+Log in (`student` / `student`) → **Profile & degree audit** in the sidebar → pick your major +
 curriculum term → **Save** → add completed courses in the course picker → **Run audit**, or
 just ask questions in the chat.
 
@@ -219,13 +258,16 @@ just ask questions in the chat.
 | Method | Endpoint | Description |
 |---|---|---|
 | `POST` | `/ask/` | Ask a question (form: `question`; optional `username`, `session_id`, `mode`, `top_k`, `prompt_strategy`, `expert_mode`). Posting only `question` uses `DEFAULT_RETRIEVAL_MODE` (`hybrid`). The UI never sends `mode`; the evaluation harness does. |
+| `POST` | `/ask/stream` | Same answer contract over NDJSON metadata/token/done events |
 | `GET`  | `/users/{username}/conversations` | Chat history for the sidebar (newest first, titles only) |
-| `GET` / `DELETE` | `/conversations/{session_id}` | Full transcript of one chat / delete it |
+| `GET` / `PATCH` / `DELETE` | `/conversations/{session_id}` | Full transcript / rename or pin / delete |
 | `GET`  | `/curricula/` | All valid curricula (programs, majors, minors) for the UI selector |
 | `GET`  | `/curricula/{program}` | Curriculum terms available for a program |
 | `GET` / `PUT` | `/users/{username}/profile` | Read / set the student academic profile |
 | `GET` / `PUT` | `/users/{username}/courses` | Read / set course history (PUT accepts per-course `statuses`) |
+| `GET` | `/users/{username}/courses/export?format=csv\|xlsx` | Download course history |
 | `GET`  | `/users/{username}/degree-audit` | Deterministic degree audit for the saved profile |
+| `GET` | `/users/{username}/degree-audit/export?format=csv\|xlsx` | Download audit table |
 | `GET`  | `/courses/` | Search the course catalog (`search`, `limit`) |
 | `POST` | `/auth/login` | Admin login |
 | `GET`  | `/test` | Health check |
@@ -283,6 +325,21 @@ Two findings worth flagging here:
   `DEFAULT_RETRIEVAL_MODE=hybrid_rerank` to revert. Caveat: the benchmark is 16 answerable
   questions with templated wording — a real but small sample.
 
+### v2 model-selection measurements (2026-07-24)
+
+- **Intent:** 84 bilingual examples, four-fold stratified cross-validation, same folds.
+  TF-IDF/LogReg macro-F1 **0.3482** vs multilingual MiniLM/BERT embeddings + LogReg
+  **0.7373**. BERT therefore ships; the measured decision is committed in
+  `data/benchmark/intent_model_selection.json`.
+- **Prompt strategy:** one batched provider call per candidate over six exact graph/academic
+  lookup tasks. `basic`, `lookup`, `algorithmic`, and `structured_lookup` each scored **6/6**.
+  `structured_lookup` wins the documented tie-break because it also matches the structured-table
+  product contract. See `data/benchmark/prompt_strategy_selection.json`.
+- **Reranking:** the existing corpus-derived benchmark still rejects CrossEncoder as the product
+  default: hybrid Recall@6 **0.625** vs hybrid+rerank **0.438**, with added latency. The reranked
+  mode remains available for reproducibility and rollback, but the measured winner stays
+  `hybrid`.
+
 Answer-quality columns (`answer_correctness`, `faithfulness`, `citation_correctness`,
 `hallucination_rate`) are intentionally **left empty** for manual labelling — do not quote answer
 quality beyond the objective reference-number signal until they are filled in.
@@ -291,8 +348,6 @@ quality beyond the objective reference-number signal until they are filled in.
 
 ## Known limitations / next work
 
-- **Course-status entry UI**: the backend supports failed/enrolled/transfer/exempted, but the
-  Course History page currently sends plain completed IDs.
 - **No long-conversation compaction**: chat history is stored in full, but only the last 5 turns
   feed the prompt as working memory.
 - `frontend/src/pages/SignupPage.tsx` is **dead code** — `/signup` redirects to `/login` and
@@ -302,8 +357,8 @@ quality beyond the objective reference-number signal until they are filled in.
 - **Not modeled yet**: GPA checks, course equivalencies, program transitions / double majors,
   transfer/exemption rules.
 - Auth is lightweight (visual login for local development).
-- **Section 4 (prompts module, expert routing, few-shot) is not implemented**, so
-  `prompt_strategy` / `expert_mode` are accepted by `/ask/` but currently inert.
+- `expert_mode` remains an evaluation-compatible input but does not alter generation. Prompt
+  strategy is active and benchmark-selected.
 - **Answer-side evaluation is incomplete**: Groq's free tier caps usage at 100k tokens/day and the
   full 5-mode sweep exceeds it. Run one or two modes per day, or use a paid tier.
 - **Cross-lingual retrieval is a measured weak point**: the corpus is English while the product

@@ -2,6 +2,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 import joblib
+import json
 import os
 from pathlib import Path
 
@@ -10,6 +11,19 @@ DEFAULT_MODEL_PATH = Path(
     os.getenv(
         "INTENT_MODEL_PATH",
         Path(__file__).resolve().parents[1] / "chroma_store" / "intent_model.pkl",
+    )
+)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+MODEL_SELECTION_PATH = Path(
+    os.getenv(
+        "INTENT_MODEL_SELECTION_PATH",
+        PROJECT_ROOT / "data" / "benchmark" / "intent_model_selection.json",
+    )
+)
+BERT_CLASSIFIER_PATH = Path(
+    os.getenv(
+        "INTENT_BERT_CLASSIFIER_PATH",
+        Path(__file__).resolve().parents[1] / "models" / "intent_bert_classifier.joblib",
     )
 )
 
@@ -78,8 +92,62 @@ class IntentDetector:
         intent, _confidence = self.predict_with_confidence(query, threshold=threshold)
         return intent
 
-# Singleton instance
-detector = IntentDetector()
+class BenchmarkSelectedIntentDetector:
+    """Use BERT only when the committed, reproducible benchmark selected it."""
+
+    def __init__(self):
+        self.baseline = IntentDetector()
+        self._bert_encoder = None
+        self._bert_bundle = None
+        self.bert_enabled = self._selection_approved()
+
+    def _selection_approved(self) -> bool:
+        if not MODEL_SELECTION_PATH.exists() or not BERT_CLASSIFIER_PATH.exists():
+            return False
+        try:
+            result = json.loads(MODEL_SELECTION_PATH.read_text(encoding="utf-8"))
+            return bool(
+                result.get("winner") == "bert"
+                and result.get("bert_selected")
+                and float(result["bert"]["macro_f1"]) > float(result["tfidf"]["macro_f1"])
+            )
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+            return False
+
+    def _load_bert(self):
+        if self._bert_bundle is None:
+            from sentence_transformers import SentenceTransformer
+
+            self._bert_bundle = joblib.load(BERT_CLASSIFIER_PATH)
+            self._bert_encoder = SentenceTransformer(self._bert_bundle["model_name"])
+        return self._bert_encoder, self._bert_bundle["classifier"]
+
+    def predict_with_confidence(self, query, threshold=0.3):
+        if not self.bert_enabled:
+            return self.baseline.predict_with_confidence(query, threshold=threshold)
+        try:
+            encoder, classifier = self._load_bert()
+            embedding = encoder.encode(
+                [query],
+                normalize_embeddings=True,
+                show_progress_bar=False,
+            )
+            probabilities = classifier.predict_proba(embedding)[0]
+            probability = float(max(probabilities))
+            predicted = classifier.classes_[probabilities.argmax()]
+            if probability < threshold:
+                return "diger", probability
+            return str(predicted), probability
+        except Exception:
+            # A missing model cache or optional dependency must never take down chat routing.
+            return self.baseline.predict_with_confidence(query, threshold=threshold)
+
+    def predict(self, query, threshold=0.3):
+        return self.predict_with_confidence(query, threshold=threshold)[0]
+
+
+# Singleton instance. BERT weights remain lazy until the first routed question.
+detector = BenchmarkSelectedIntentDetector()
 
 def get_intent(query: str) -> str:
     return detector.predict(query)

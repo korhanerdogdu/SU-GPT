@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/contexts/AuthContext";
 import { SAMPLE_QUESTIONS } from "@/lib/sample-questions";
+import ThemeToggle from "@/components/ThemeToggle";
 
 /** Short lines, typed one word at a time. Written from the student's side of the screen. */
 const TAGLINES = [
@@ -164,37 +165,38 @@ export default function LoginPage() {
       </section>
 
       {/* ── Right: the form. Deep navy, deliberately quiet — all the character lives on the left. */}
-      <section className="flex w-full flex-col justify-center border-t border-sabanci-blue/25 bg-sabanci-navy px-8 py-14 sm:px-14 lg:w-[30rem] lg:shrink-0 lg:border-l lg:border-t-0 lg:px-12 xl:w-[34rem]">
+      <section className="relative flex w-full flex-col justify-center border-t border-border bg-card px-8 py-14 text-card-foreground sm:px-14 lg:w-[30rem] lg:shrink-0 lg:border-l lg:border-t-0 lg:px-12 xl:w-[34rem]">
+        <ThemeToggle className="absolute right-5 top-5" />
         <div className="mx-auto w-full max-w-sm">
-          <h1 className="text-2xl font-bold tracking-tight text-white">Welcome back</h1>
-          <p className="mt-1.5 text-sm text-sabanci-light/70">
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">Welcome back</h1>
+          <p className="mt-1.5 text-sm text-muted-foreground">
             Sign in to continue to adviSU.
           </p>
 
           <form onSubmit={handleSubmit} className="mt-9 space-y-5">
             <div className="space-y-1.5">
-              <Label htmlFor="username" className="text-sabanci-light/90">
+              <Label htmlFor="username" className="text-foreground">
                 Username
               </Label>
               <div className="relative">
-                <User className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-sabanci-light/50" />
+                <User className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   id="username"
                   autoComplete="username"
                   placeholder="admin"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  className="border-sabanci-blue/40 bg-white/5 pl-9 text-white placeholder:text-sabanci-light/40"
+                  className="border-border bg-background pl-9 text-foreground placeholder:text-muted-foreground"
                 />
               </div>
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="password" className="text-sabanci-light/90">
+              <Label htmlFor="password" className="text-foreground">
                 Password
               </Label>
               <div className="relative">
-                <Lock className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-sabanci-light/50" />
+                <Lock className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   id="password"
                   type={showPassword ? "text" : "password"}
@@ -202,13 +204,13 @@ export default function LoginPage() {
                   placeholder="admin"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="border-sabanci-blue/40 bg-white/5 pl-9 pr-9 text-white placeholder:text-sabanci-light/40"
+                  className="border-border bg-background pl-9 pr-9 text-foreground placeholder:text-muted-foreground"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword((s) => !s)}
                   aria-label={showPassword ? "Hide password" : "Show password"}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 rounded text-sabanci-light/60 transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sabanci-gold"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 rounded text-muted-foreground transition-colors hover:text-foreground"
                 >
                   {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
@@ -218,16 +220,16 @@ export default function LoginPage() {
             <Button
               type="submit"
               size="xl"
-              className="w-full bg-white text-sabanci-navy hover:bg-sabanci-light focus-visible:ring-sabanci-gold"
+              className="w-full bg-primary text-primary-foreground hover:opacity-90"
               disabled={submitting}
             >
               {submitting ? "Signing in…" : "Sign in"}
             </Button>
           </form>
 
-          <p className="mt-7 border-t border-white/10 pt-5 text-sm text-sabanci-light/60">
-            Demo credentials{" "}
-            <span className="font-mono text-white">admin / admin</span>
+          <p className="mt-7 border-t border-border pt-5 text-sm text-muted-foreground">
+            Student demo <span className="font-mono text-foreground">student / student</span>
+            {" · "}Admin <span className="font-mono text-foreground">admin / admin</span>
           </p>
         </div>
       </section>

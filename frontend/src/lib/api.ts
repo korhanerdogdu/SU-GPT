@@ -1,4 +1,4 @@
-const API_URL: string =
+export const API_URL: string =
   (import.meta.env.VITE_API_URL as string) || "http://127.0.0.1:8000";
 
 /**
@@ -20,7 +20,17 @@ export type RetrievalMode = (typeof RETRIEVAL_MODES)[number]["value"];
 
 export interface AskResponse {
   response: string;
+  summary?: string;
   sources: string[];
+  structured_content?: StructuredContent | null;
+  export_links?: Record<string, string>;
+  profile_updated?: boolean;
+  course_history?: {
+    courses: Course[];
+    course_count: number;
+    credit_eligible_course_count: number;
+    total_su_credits: number;
+  };
   intent?: string;
   profile_required?: boolean;
   curriculum_unavailable?: boolean;
@@ -32,6 +42,24 @@ export interface AskResponse {
   reranked?: boolean;
   num_retrieved_chunks?: number;
   num_final_context_chunks?: number;
+}
+
+export interface StructuredTable {
+  id: string;
+  title: string;
+  columns: Array<{ key: string; label: string }>;
+  rows: Array<Record<string, string | number | null>>;
+  exportable?: boolean;
+}
+
+export interface StructuredContent {
+  kind: string;
+  status?: string;
+  headline?: Record<string, string | number | null>;
+  tables?: StructuredTable[];
+  missing_required_courses?: string[];
+  warnings?: string[];
+  sections?: StructuredContent[];
 }
 
 export interface AcademicProfile {
@@ -99,6 +127,8 @@ export interface Course {
   ects?: number | null;
   engineering_ects?: number | null;
   basic_science_ects?: number | null;
+  faculty?: string | null;
+  status?: "completed" | "enrolled" | "failed" | "withdrawn" | "transfer" | "exempted";
   description?: string;
   prerequisites?: string;
   corequisites?: string;
@@ -154,6 +184,7 @@ export interface ConversationSummary {
   title: string;
   updated_at: string | null;
   message_count: number;
+  pinned: boolean;
 }
 
 export interface ConversationMessage {
@@ -185,6 +216,18 @@ export async function deleteConversation(sessionId: string): Promise<void> {
   await parseJsonOrThrow(res);
 }
 
+export async function updateConversation(
+  sessionId: string,
+  changes: { title?: string; pinned?: boolean },
+): Promise<ConversationSummary> {
+  const res = await fetch(`${API_URL}/conversations/${encodeURIComponent(sessionId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(changes),
+  });
+  return parseJsonOrThrow<ConversationSummary>(res);
+}
+
 export async function askQuestion(
   question: string,
   options: { mode?: RetrievalMode; topK?: number } = {}
@@ -205,6 +248,66 @@ export async function askQuestion(
   }
   const res = await fetch(`${API_URL}/ask/`, { method: "POST", body: form });
   return parseJsonOrThrow<AskResponse>(res);
+}
+
+export async function askQuestionStream(
+  question: string,
+  onToken: (token: string) => void,
+  options: { mode?: RetrievalMode; topK?: number; promptStrategy?: string } = {},
+): Promise<AskResponse> {
+  const form = new FormData();
+  form.append("question", question);
+  form.append("session_id", getSessionId());
+  if (options.mode) form.append("mode", options.mode);
+  if (options.topK) form.append("top_k", String(options.topK));
+  if (options.promptStrategy) form.append("prompt_strategy", options.promptStrategy);
+  const rawAuth = localStorage.getItem("su-gpt-auth");
+  if (rawAuth) {
+    try {
+      const user = JSON.parse(rawAuth) as { username?: string };
+      if (user.username) form.append("username", user.username);
+    } catch {
+      // ignore corrupt local auth state
+    }
+  }
+
+  const res = await fetch(`${API_URL}/ask/stream`, { method: "POST", body: form });
+  if (!res.ok || !res.body) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`HTTP ${res.status}${text ? ` — ${text}` : ""}`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let metadata: Omit<AskResponse, "response"> = { sources: [] };
+  let response = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      const event = JSON.parse(line) as {
+        type: "metadata" | "token" | "done";
+        data?: Omit<AskResponse, "response">;
+        text?: string;
+      };
+      if (event.type === "metadata" && event.data) metadata = event.data;
+      if (event.type === "token" && event.text) {
+        response += event.text;
+        onToken(event.text);
+      }
+    }
+    if (done) break;
+  }
+  return { ...metadata, response };
+}
+
+export function absoluteApiUrl(path: string): string {
+  return path.startsWith("http") ? path : `${API_URL}${path}`;
 }
 
 export async function getCurricula(): Promise<{
@@ -263,11 +366,15 @@ export async function fetchUserCourses(username: string): Promise<Course[]> {
   return data.courses;
 }
 
-export async function saveUserCourses(username: string, courseIds: string[]): Promise<Course[]> {
+export async function saveUserCourses(
+  username: string,
+  courseIds: string[],
+  statuses: Record<string, Course["status"]> = {},
+): Promise<Course[]> {
   const res = await fetch(`${API_URL}/users/${encodeURIComponent(username)}/courses`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ course_ids: courseIds }),
+    body: JSON.stringify({ course_ids: courseIds, statuses }),
   });
   const data = await parseJsonOrThrow<{ courses: Course[] }>(res);
   return data.courses;

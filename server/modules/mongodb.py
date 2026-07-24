@@ -63,14 +63,14 @@ async def ensure_database() -> None:
     await exams.create_index([("courseCode", ASCENDING)])
     await embedding_cache.create_index([("cacheKey", ASCENDING)], unique=True)
     await conversations.create_index([("sessionId", ASCENDING)], unique=True)
-    await ensure_user(ADMIN_USERNAME)
+    await ensure_user(ADMIN_USERNAME, role="admin")
 
 
-async def ensure_user(username: str) -> dict[str, Any]:
+async def ensure_user(username: str, role: str = "student") -> dict[str, Any]:
     clean_username = username.strip()
     await users.update_one(
         {"username": clean_username},
-        {"$setOnInsert": {"username": clean_username, "role": "admin"}},
+        {"$setOnInsert": {"username": clean_username, "role": role}},
         upsert=True,
     )
     user = await users.find_one({"username": clean_username})
@@ -200,6 +200,98 @@ async def set_user_courses(
     return await get_user_courses(username)
 
 
+async def mutate_user_courses_by_codes(
+    username: str,
+    course_codes: list[str] | tuple[str, ...],
+    *,
+    status: str | None = None,
+    remove: bool = False,
+) -> dict[str, Any]:
+    """Apply a chat-originated course-history mutation without replacing other rows.
+
+    The existing PUT endpoint intentionally remains a full replacement operation. Chat
+    commands need different semantics: "I completed CS 201" must upsert only CS 201 and
+    preserve every course already stored for the student.
+    """
+    user = await ensure_user(username)
+    normalized = list(
+        dict.fromkeys(
+            re.sub(r"\s+", " ", str(code or "").strip().upper())
+            for code in course_codes
+            if str(code or "").strip()
+        )
+    )
+    found = [
+        doc
+        async for doc in courses.find(
+            {"code": {"$in": normalized}},
+            {
+                "_id": 1,
+                "code": 1,
+                "title": 1,
+                "su_credits": 1,
+                "ects": 1,
+                "engineering_ects": 1,
+                "basic_science_ects": 1,
+            },
+        )
+    ]
+    by_code = {str(doc.get("code", "")).upper(): doc for doc in found}
+    updates: list[dict[str, Any]] = []
+    clean_status = _norm_status(status)
+
+    if remove and found:
+        await user_courses.delete_many(
+            {"user_id": user["_id"], "course_id": {"$in": [doc["_id"] for doc in found]}}
+        )
+        for doc in found:
+            updates.append(
+                {
+                    "code": doc.get("code"),
+                    "title": doc.get("title"),
+                    "status": None,
+                    "action": "removed",
+                }
+            )
+    elif found:
+        operations = [
+            UpdateOne(
+                {"user_id": user["_id"], "course_id": doc["_id"]},
+                {
+                    "$set": {"status": clean_status},
+                    "$setOnInsert": {"user_id": user["_id"], "course_id": doc["_id"]},
+                },
+                upsert=True,
+            )
+            for doc in found
+        ]
+        await user_courses.bulk_write(operations, ordered=False)
+        for doc in found:
+            updates.append(
+                {
+                    "code": doc.get("code"),
+                    "title": doc.get("title"),
+                    "status": clean_status,
+                    "action": "updated",
+                }
+            )
+
+    selected = await get_user_courses(username)
+    credit_courses = [
+        course
+        for course in selected
+        if course.get("status", "completed") in ELIGIBLE_FOR_CREDIT
+    ]
+    return {
+        "updates": sorted(updates, key=lambda row: str(row.get("code") or "")),
+        "missing": [code for code in normalized if code not in by_code],
+        "courses": selected,
+        "course_count": len(selected),
+        "credit_eligible_course_count": len(credit_courses),
+        "total_su_credits": sum(_su_credit_value(course.get("su_credits")) for course in credit_courses),
+    }
+
+
 async def get_completed_course_codes(username: str) -> list[str]:
     """Course codes with a credit-eligible status (completed/transfer/exempted)."""
     selected = await get_user_courses(username)
@@ -265,10 +357,12 @@ async def get_user_course_context(username: str | None) -> str:
     course_lines = []
     total_su_credits = 0.0
     for course in selected:
-        su_credits = _su_credit_value(course.get("su_credits"))
-        total_su_credits += su_credits
+        status = _norm_status(course.get("status"))
+        if status in ELIGIBLE_FOR_CREDIT:
+            total_su_credits += _su_credit_value(course.get("su_credits"))
         fields = [
             f"{course['code']} - {course['title']}",
+            f"status {status}",
             _maybe(f"SU credits {course.get('su_credits')}", course.get("su_credits") is not None),
             _maybe(f"ECTS {course.get('ects')}", course.get("ects") is not None),
             _maybe(f"engineering ECTS {course.get('engineering_ects')}", course.get("engineering_ects") is not None),
@@ -276,14 +370,43 @@ async def get_user_course_context(username: str | None) -> str:
         ]
         course_lines.append("; ".join(field for field in fields if field))
 
+    total_min_su_credits: float | None = None
+    try:
+        profile = await get_academic_profile(username)
+        program = str(profile.get("major") or "").strip().upper()
+        term = str(profile.get("curriculum_term") or "").strip()
+        if program and term:
+            from modules.degree_audit import load_requirements
+
+            requirements = load_requirements(program, term)
+            if requirements and requirements.get("total_min_su_credits") is not None:
+                total_min_su_credits = float(requirements["total_min_su_credits"])
+    except Exception:
+        logger.exception("Could not resolve curriculum credit target")
+
+    eligible_count = sum(
+        1 for course in selected if _norm_status(course.get("status")) in ELIGIBLE_FOR_CREDIT
+    )
+    total_line = f"Authoritative credit-eligible SU total from MongoDB: {_format_credit(total_su_credits)}."
+    remaining_line = ""
+    if total_min_su_credits is not None:
+        total_line = (
+            "Authoritative credit-eligible SU total from MongoDB: "
+            f"{_format_credit(total_su_credits)}/{_format_credit(total_min_su_credits)} SU credits."
+        )
+        remaining_line = (
+            "\nAuthoritative remaining SU credits to the selected curriculum minimum: "
+            f"{_format_credit(max(total_min_su_credits - total_su_credits, 0))}."
+        )
+
     return (
         f"User profile from MongoDB: {username}.\n"
-        f"Authoritative completed SU credit total from MongoDB: {_format_credit(total_su_credits)}/125 SU credits.\n"
-        f"Authoritative remaining SU credits to 125: {_format_credit(max(125 - total_su_credits, 0))}.\n"
-        f"Authoritative completed course count from MongoDB: {len(selected)}.\n"
-        "Use the authoritative MongoDB total for final graduation arithmetic. Do not recompute the final x/125 total from memory if this line is present.\n"
+        f"{total_line}{remaining_line}\n"
+        f"Authoritative credit-eligible course count from MongoDB: {eligible_count}.\n"
+        f"All stored course-history rows, including non-credit statuses: {len(selected)}.\n"
+        "Use only completed, transfer, and exempted statuses for graduation arithmetic.\n"
         "Important intent guard: this profile contains graduation totals, but use them only when the user explicitly asks for graduation, credit, audit, or degree evaluation. For course recommendation questions, use this profile only as a taken-course exclusion list.\n"
-        "Taken/completed courses selected by the user:\n"
+        "Stored courses selected by the user:\n"
         + "\n".join(f"- {line}" for line in course_lines)
         + "\nUse this personal course history when answering eligibility, prerequisite, recommendation, or personalization questions."
     )
@@ -333,6 +456,7 @@ def _serialize_course(doc: dict[str, Any]) -> dict[str, Any]:
         "ects": doc.get("ects"),
         "engineering_ects": doc.get("engineering_ects"),
         "basic_science_ects": doc.get("basic_science_ects"),
+        "faculty": doc.get("faculty"),
         "description": doc.get("description", ""),
         "prerequisites": doc.get("prerequisites", ""),
         "corequisites": doc.get("corequisites", ""),

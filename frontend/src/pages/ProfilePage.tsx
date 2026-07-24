@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { ArrowLeft, GraduationCap, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/AuthContext";
+import ThemeToggle from "@/components/ThemeToggle";
 import {
   getCurricula,
   getDegreeAudit,
@@ -92,6 +93,7 @@ export default function ProfilePage() {
           <GraduationCap size={20} />
           <span className="font-semibold">Academic Profile &amp; Degree Audit</span>
         </div>
+        <ThemeToggle className="ml-auto" />
       </header>
 
       <main className="mx-auto grid max-w-5xl gap-6 p-6 md:grid-cols-2">

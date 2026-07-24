@@ -38,6 +38,7 @@ python-dotenv
 pydantic
 requests
 pandas
+openpyxl
 scikit-learn
 joblib
 

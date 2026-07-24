@@ -30,6 +30,18 @@ _REFERENCE_RE = re.compile(
     r"bu ders|bu dersi|bu dersin|o ders|o dersi|şu ders|su ders|aynı ders|ayni ders)\b",
     re.IGNORECASE,
 )
+_FOLLOWUP_RE = re.compile(
+    r"^\s*(?:"
+    r"yani|peki|tamam|öyleyse|o zaman|then|so|okay|ok|"
+    r"ne almam lazım|ne almalıyım|what should i take|what do i need"
+    r")\b",
+    re.IGNORECASE,
+)
+_TITLE_FILLER_RE = re.compile(
+    r"\b(?:merhaba|selam|lütfen|lutfen|acaba|bana|yardım eder misin|"
+    r"yardim eder misin|please|could you|can you|tell me)\b",
+    re.IGNORECASE,
+)
 
 
 def extract_course_code(text: str) -> str | None:
@@ -43,7 +55,25 @@ def resolve_reference(question: str, working_context: dict[str, Any] | None) -> 
     last_course = working_context.get("last_course_id")
     if last_course and _REFERENCE_RE.search(question or "") and not extract_course_code(question):
         return f"{question} (the course being referred to is {last_course})"
+    last_intent = working_context.get("last_intent")
+    if last_intent and _FOLLOWUP_RE.search(question or ""):
+        return f"{question} (conversation context: the previous intent was {last_intent})"
     return question
+
+
+def _automatic_title(turns: list[dict[str, str]]) -> str:
+    """Build a compact topic title from the first few user turns without another LLM call."""
+    questions = [str(turn.get("user") or "").strip() for turn in turns[:3]]
+    combined = " · ".join(question for question in questions if question)
+    combined = _TITLE_FILLER_RE.sub(" ", combined)
+    combined = re.sub(r"\([^)]*conversation context:[^)]*\)", "", combined, flags=re.IGNORECASE)
+    combined = re.sub(r"\s+", " ", combined).strip(" .,:;!?-")
+    if not combined:
+        return "New chat"
+    if len(combined) <= TITLE_MAX:
+        return combined[0].upper() + combined[1:]
+    shortened = combined[: TITLE_MAX + 1].rsplit(" ", 1)[0].rstrip(" .,:;-")
+    return shortened or combined[:TITLE_MAX]
 
 
 async def get_working_context(session_id: str | None) -> dict[str, Any]:
@@ -81,11 +111,6 @@ async def append_turn(
 ) -> None:
     if not session_id:
         return
-    working_context = {"last_intent": intent}
-    if course_id:
-        working_context["last_course_id"] = course_id
-    if term_code:
-        working_context["last_term_code"] = term_code
     turn = {"user": question[:1000], "assistant": (answer or "")[:1500]}
     now = datetime.now(timezone.utc)
     message_pair = [
@@ -94,17 +119,26 @@ async def append_turn(
     ]
     title = (question or "").strip().replace("\n", " ")[:TITLE_MAX] or "New chat"
     try:
+        context_updates: dict[str, Any] = {
+            "sessionId": session_id,
+            "username": username,
+            "working_context.last_intent": intent,
+            "updatedAt": now,
+        }
+        if course_id:
+            context_updates["working_context.last_course_id"] = course_id
+        if term_code:
+            context_updates["working_context.last_term_code"] = term_code
         await conversations.update_one(
             {"sessionId": session_id},
             {
-                "$set": {
-                    "sessionId": session_id,
-                    "username": username,
-                    "working_context": working_context,
-                    "updatedAt": now,
+                "$set": context_updates,
+                "$setOnInsert": {
+                    "title": title,
+                    "titleEdited": False,
+                    "pinned": False,
+                    "createdAt": now,
                 },
-                # Title is the first question asked and never changes afterwards.
-                "$setOnInsert": {"title": title, "createdAt": now},
                 "$push": {
                     "recent_turns": {"$each": [turn], "$slice": -MAX_TURNS},
                     "messages": {"$each": message_pair},
@@ -112,6 +146,16 @@ async def append_turn(
             },
             upsert=True,
         )
+        doc = await conversations.find_one(
+            {"sessionId": session_id},
+            {"recent_turns": 1, "titleEdited": 1},
+        )
+        turns = (doc or {}).get("recent_turns") or []
+        if len(turns) >= 2 and not (doc or {}).get("titleEdited"):
+            await conversations.update_one(
+                {"sessionId": session_id, "titleEdited": {"$ne": True}},
+                {"$set": {"title": _automatic_title(turns)}},
+            )
     except Exception:
         logger.exception("conversation memory write failed")
 
@@ -123,6 +167,7 @@ def _summarise(doc: dict[str, Any]) -> dict[str, Any]:
         "title": doc.get("title") or "New chat",
         "updated_at": updated.isoformat() if hasattr(updated, "isoformat") else None,
         "message_count": len(doc.get("messages") or []),
+        "pinned": bool(doc.get("pinned")),
     }
 
 
@@ -133,7 +178,7 @@ async def list_conversations(username: str | None, limit: int = 50) -> list[dict
     try:
         cursor = (
             conversations.find({"username": username, "messages": {"$exists": True, "$ne": []}})
-            .sort("updatedAt", -1)
+            .sort([("pinned", -1), ("updatedAt", -1)])
             .limit(max(1, min(limit, 100)))
         )
         return [_summarise(doc) async for doc in cursor]
@@ -170,3 +215,36 @@ async def delete_conversation(session_id: str) -> bool:
     except Exception:
         logger.exception("conversation delete failed")
         return False
+
+
+async def rename_conversation(session_id: str, title: str) -> dict[str, Any] | None:
+    clean_title = re.sub(r"\s+", " ", str(title or "")).strip()[:TITLE_MAX]
+    if not clean_title:
+        return None
+    try:
+        result = await conversations.update_one(
+            {"sessionId": session_id},
+            {"$set": {"title": clean_title, "titleEdited": True}},
+        )
+        if result.matched_count == 0:
+            return None
+        doc = await conversations.find_one({"sessionId": session_id})
+        return _summarise(doc or {})
+    except Exception:
+        logger.exception("conversation rename failed")
+        return None
+
+
+async def set_conversation_pinned(session_id: str, pinned: bool) -> dict[str, Any] | None:
+    try:
+        result = await conversations.update_one(
+            {"sessionId": session_id},
+            {"$set": {"pinned": bool(pinned)}},
+        )
+        if result.matched_count == 0:
+            return None
+        doc = await conversations.find_one({"sessionId": session_id})
+        return _summarise(doc or {})
+    except Exception:
+        logger.exception("conversation pin update failed")
+        return None

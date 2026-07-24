@@ -1,10 +1,17 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import {
   BookOpen,
+  ChevronLeft,
   GraduationCap,
   LogOut,
   MessageSquarePlus,
+  PanelLeftOpen,
+  Pencil,
+  Pin,
+  PinOff,
   Trash2,
+  X,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import type { ConversationSummary } from "@/lib/api";
@@ -12,136 +19,220 @@ import type { ConversationSummary } from "@/lib/api";
 interface SidebarProps {
   conversations: ConversationSummary[];
   activeSessionId: string;
+  collapsed: boolean;
+  mobileOpen: boolean;
+  onToggle: () => void;
+  onCloseMobile: () => void;
   onNewChat: () => void;
   onOpenChat: (sessionId: string) => void;
   onDeleteChat: (sessionId: string) => void;
+  onRenameChat: (sessionId: string, title: string) => void;
+  onPinChat: (sessionId: string, pinned: boolean) => void;
 }
 
 function relativeTime(iso: string | null): string {
   if (!iso) return "";
-  const then = new Date(iso).getTime();
-  if (Number.isNaN(then)) return "";
-  const mins = Math.round((Date.now() - then) / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.round(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.round(hours / 24)}d ago`;
+  const minutes = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+  if (minutes < 1) return "şimdi";
+  if (minutes < 60) return `${minutes} dk`;
+  if (minutes < 1440) return `${Math.round(minutes / 60)} sa`;
+  return `${Math.round(minutes / 1440)} gün`;
 }
 
-/**
- * Chat-focused, like a thread list: new chat, past conversations, then the places you go to set
- * things up. Course history and uploads moved to their own page — they are setup, not chat.
- */
 export default function Sidebar({
   conversations,
   activeSessionId,
+  collapsed,
+  mobileOpen,
+  onToggle,
+  onCloseMobile,
   onNewChat,
   onOpenChat,
   onDeleteChat,
+  onRenameChat,
+  onPinChat,
 }: SidebarProps) {
   const { user, signOut } = useAuth();
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
 
-  return (
-    <aside className="flex h-screen w-[17.5rem] shrink-0 flex-col border-r border-white/10 bg-[#08152b]/80 backdrop-blur-xl">
-      <div className="px-5 pb-4 pt-6">
-        <img
-          src="/assets/adviSU-logo-reversed.png"
-          alt="adviSU — Sabancı University Academic Advisor"
-          className="w-[9.5rem]"
-        />
-      </div>
+  function beginRename(item: ConversationSummary) {
+    setEditing(item.session_id);
+    setDraft(item.title);
+  }
 
-      <div className="px-5">
+  function commitRename() {
+    if (editing && draft.trim()) onRenameChat(editing, draft.trim());
+    setEditing(null);
+  }
+
+  if (collapsed && !mobileOpen) {
+    return (
+      <aside className="hidden h-screen w-16 shrink-0 flex-col items-center border-r border-border bg-card py-4 md:flex">
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-label="Sohbet geçmişini aç"
+          className="rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground"
+        >
+          <PanelLeftOpen className="h-5 w-5" />
+        </button>
         <button
           type="button"
           onClick={onNewChat}
-          className="flex w-full items-center gap-2.5 rounded-xl border border-white/12 bg-white/[0.05] px-3 py-2.5 text-sm font-medium text-white transition-colors hover:bg-white/[0.1] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sabanci-gold"
+          aria-label="Yeni sohbet"
+          className="mt-4 rounded-lg bg-primary p-2 text-primary-foreground"
         >
-          <MessageSquarePlus className="h-4 w-4 text-sabanci-gold" />
-          New chat
+          <MessageSquarePlus className="h-5 w-5" />
         </button>
-      </div>
+      </aside>
+    );
+  }
 
-      {/* Chat history */}
-      <div className="mt-6 flex-1 overflow-y-auto scrollbar-thin px-5 pb-4">
-        <h3 className="mb-3 font-mono text-[11px] uppercase tracking-[0.22em] text-sabanci-light/45">
-          Chats
-        </h3>
-
-        {conversations.length === 0 ? (
-          <p className="text-xs leading-relaxed text-sabanci-light/40">
-            Your past conversations appear here once you ask something.
-          </p>
-        ) : (
-          <ul className="space-y-1">
-            {conversations.map((c) => {
-              const active = c.session_id === activeSessionId;
-              return (
-                <li key={c.session_id} className="group relative">
-                  <button
-                    type="button"
-                    onClick={() => onOpenChat(c.session_id)}
-                    className={`w-full rounded-lg px-2.5 py-2 pr-8 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sabanci-gold ${
-                      active
-                        ? "bg-white/[0.1] text-white"
-                        : "text-sabanci-light/70 hover:bg-white/[0.06] hover:text-white"
-                    }`}
-                  >
-                    <span className="block truncate text-sm">{c.title}</span>
-                    <span className="mt-0.5 block font-mono text-[10px] uppercase tracking-[0.15em] text-sabanci-light/35">
-                      {relativeTime(c.updated_at)}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onDeleteChat(c.session_id)}
-                    aria-label={`Delete chat: ${c.title}`}
-                    className="absolute right-1.5 top-2 rounded p-1 text-sabanci-light/40 opacity-0 transition hover:bg-white/10 hover:text-white focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sabanci-gold group-hover:opacity-100"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </div>
-
-      {/* Setup + account */}
-      <div className="border-t border-white/10 px-5 py-4">
-        <Link
-          to="/courses"
-          className="flex items-center gap-2.5 rounded-xl px-3 py-2 text-sm text-sabanci-light/75 transition-colors hover:bg-white/[0.06] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sabanci-gold"
-        >
-          <BookOpen className="h-4 w-4" />
-          Course history
-        </Link>
-        <Link
-          to="/profile"
-          className="flex items-center gap-2.5 rounded-xl px-3 py-2 text-sm text-sabanci-light/75 transition-colors hover:bg-white/[0.06] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sabanci-gold"
-        >
-          <GraduationCap className="h-4 w-4" />
-          Profile &amp; degree audit
-        </Link>
-
-        <div className="mt-3 flex items-center justify-between gap-2 border-t border-white/10 pt-3">
-          <div className="min-w-0">
-            <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-sabanci-light/40">
-              Signed in
-            </p>
-            <p className="truncate text-sm font-medium text-white">{user?.username}</p>
-          </div>
+  return (
+    <>
+      {mobileOpen && (
+        <button
+          className="fixed inset-0 z-30 bg-black/40 md:hidden"
+          onClick={onCloseMobile}
+          aria-label="Menüyü kapat"
+        />
+      )}
+      <aside
+        className={`fixed inset-y-0 left-0 z-40 flex w-[18rem] shrink-0 flex-col border-r border-border bg-card shadow-xl transition-transform md:static md:shadow-none ${
+          mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
+        }`}
+      >
+        <div className="flex items-center justify-between px-5 pb-4 pt-5">
+          <img src="/assets/adviSU-logo-reversed.png" alt="adviSU" className="theme-logo w-36" />
           <button
             type="button"
-            onClick={signOut}
-            className="flex shrink-0 items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs text-sabanci-light/60 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sabanci-gold"
+            onClick={mobileOpen ? onCloseMobile : onToggle}
+            aria-label="Sohbet geçmişini gizle"
+            className="rounded-lg p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
           >
-            <LogOut className="h-3.5 w-3.5" />
-            Log out
+            {mobileOpen ? <X className="h-5 w-5" /> : <ChevronLeft className="h-5 w-5" />}
           </button>
         </div>
-      </div>
-    </aside>
+
+        <div className="px-4">
+          <button
+            type="button"
+            onClick={onNewChat}
+            className="flex w-full items-center gap-2.5 rounded-xl border border-border bg-background px-3 py-2.5 text-sm font-medium text-foreground hover:bg-muted"
+          >
+            <MessageSquarePlus className="h-4 w-4 text-primary" />
+            Yeni sohbet
+          </button>
+        </div>
+
+        <div className="mt-5 flex-1 overflow-y-auto px-3 pb-4 scrollbar-thin">
+          <h3 className="mb-2 px-2 font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+            Sohbet geçmişi
+          </h3>
+          {conversations.length === 0 ? (
+            <p className="px-2 text-xs leading-relaxed text-muted-foreground">
+              İlk sorundan sonra sohbetlerin burada görünecek.
+            </p>
+          ) : (
+            <ul className="space-y-1">
+              {conversations.map((item) => {
+                const active = item.session_id === activeSessionId;
+                return (
+                  <li
+                    key={item.session_id}
+                    className={`group rounded-lg border ${
+                      active ? "border-primary/30 bg-primary/10" : "border-transparent hover:bg-muted"
+                    }`}
+                  >
+                    <div className="flex items-start">
+                      <button
+                        type="button"
+                        onClick={() => onOpenChat(item.session_id)}
+                        className="min-w-0 flex-1 px-2.5 py-2 text-left"
+                      >
+                        {editing === item.session_id ? (
+                          <input
+                            autoFocus
+                            value={draft}
+                            onChange={(event) => setDraft(event.target.value)}
+                            onBlur={commitRename}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") commitRename();
+                              if (event.key === "Escape") setEditing(null);
+                            }}
+                            onClick={(event) => event.stopPropagation()}
+                            className="w-full rounded border border-primary bg-background px-1.5 py-0.5 text-sm text-foreground outline-none"
+                          />
+                        ) : (
+                          <span className="flex items-center gap-1.5">
+                            {item.pinned && <Pin className="h-3 w-3 shrink-0 text-primary" />}
+                            <span className="block truncate text-sm text-foreground">{item.title}</span>
+                          </span>
+                        )}
+                        <span className="mt-0.5 block font-mono text-[9px] uppercase tracking-[0.12em] text-muted-foreground">
+                          {relativeTime(item.updated_at)}
+                        </span>
+                      </button>
+                      <div className="flex pt-1.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                        <button
+                          type="button"
+                          onClick={() => onPinChat(item.session_id, !item.pinned)}
+                          aria-label={item.pinned ? "Sabitlemeyi kaldır" : "Sohbeti sabitle"}
+                          className="rounded p-1 text-muted-foreground hover:bg-background hover:text-foreground"
+                        >
+                          {item.pinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => beginRename(item)}
+                          aria-label="Sohbeti yeniden adlandır"
+                          className="rounded p-1 text-muted-foreground hover:bg-background hover:text-foreground"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onDeleteChat(item.session_id)}
+                          aria-label="Sohbeti sil"
+                          className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+
+        <div className="border-t border-border px-4 py-4">
+          <Link to="/courses" className="sidebar-link">
+            <BookOpen className="h-4 w-4" /> Ders geçmişi
+          </Link>
+          <Link to="/profile" className="sidebar-link">
+            <GraduationCap className="h-4 w-4" /> Profil ve mezuniyet
+          </Link>
+          <div className="mt-3 flex items-center justify-between border-t border-border pt-3">
+            <div className="min-w-0">
+              <p className="truncate text-sm font-medium text-foreground">{user?.username}</p>
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                {user?.role === "admin" ? "Yönetici" : "Öğrenci"}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={signOut}
+              className="rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground"
+              aria-label="Çıkış yap"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      </aside>
+    </>
   );
 }

@@ -97,14 +97,45 @@ def answer_without_context(question: str) -> str:
     return getattr(response, "content", str(response))
 
 
-def get_llm_chain(retriever, intent: str = "diger", language: str = "tr"):
+_PROMPT_STRATEGIES = {
+    "basic": "Use the supplied context conservatively and answer the question directly.",
+    "lookup": (
+        "Before composing the answer, privately locate the exact context records that match "
+        "the requested course, program, term, or requirement. Cross-check identifiers and "
+        "statuses. Do not expose private chain-of-thought; show only supporting facts."
+    ),
+    "algorithmic": (
+        "Treat the task as a deterministic data operation: normalize identifiers, filter to "
+        "the student's program and curriculum, apply each rule exactly once, verify totals, "
+        "and then explain the result. Do not expose private chain-of-thought."
+    ),
+    "structured_lookup": (
+        "First perform a private exact lookup of the relevant records, then apply the required "
+        "rules in order and run a consistency check. Prefer a compact Markdown table whenever "
+        "the answer has repeated fields such as courses, credits, requirements, schedules, or "
+        "status. Do not expose private chain-of-thought; show only inputs, results, and concise "
+        "checkable arithmetic."
+    ),
+}
+
+
+def get_llm_chain(
+    retriever,
+    intent: str = "diger",
+    language: str = "tr",
+    prompt_strategy: str = "basic",
+):
     llm = _build_llm()
     language_directive = _LANGUAGE_DIRECTIVE.get(language, _LANGUAGE_DIRECTIVE["tr"])
+    strategy_directive = _PROMPT_STRATEGIES.get(prompt_strategy, _PROMPT_STRATEGIES["basic"])
 
     prompt = PromptTemplate(
         input_variables=["context", "question"],
         template="""
 {language_directive}
+
+ACTIVE PROMPT STRATEGY
+{strategy_directive}
 
 Sen Sabancı Üniversitesi programları için özelleştirilmiş, sıfır hata toleransıyla çalışan bir Yapay Zeka Akademik Danışmanısın. RAG üzerinden sana sağlanan resmi degree requirement / degree evaluation kaynaklarını ve öğrencinin MongoDB ders geçmişini kullanarak analiz yaparsın.
 
@@ -192,7 +223,9 @@ User Question:
 {language_directive}
 
 Answer:
-""".replace("{detected_intent}", intent).replace("{language_directive}", language_directive),
+""".replace("{detected_intent}", intent).replace(
+            "{language_directive}", language_directive
+        ).replace("{strategy_directive}", strategy_directive),
     )
 
     return RetrievalQA.from_chain_type(

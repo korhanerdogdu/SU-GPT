@@ -24,6 +24,8 @@ MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "advisu")
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin")
+STUDENT_USERNAME = os.getenv("STUDENT_USERNAME", "student")
+STUDENT_PASSWORD = os.getenv("STUDENT_PASSWORD", "student")
 SOURCES_DIR = os.getenv("SOURCES_DIR", str(PROJECT_ROOT / "sources"))
 REVIEWS_DIR = os.getenv("REVIEWS_DIR", str(PROJECT_ROOT / "sources" / "reviews"))
 EXAMS_DIR = os.getenv("EXAMS_DIR", str(PROJECT_ROOT / "sources" / "exams"))
@@ -65,8 +67,10 @@ ENABLE_RERANKING = os.getenv("ENABLE_RERANKING", "true").strip().lower() == "tru
 BM25_TOP_K = int(os.getenv("BM25_TOP_K", "25"))
 DENSE_TOP_K = int(os.getenv("DENSE_TOP_K", "20"))
 FINAL_CONTEXT_TOP_K = int(os.getenv("FINAL_CONTEXT_TOP_K", str(RERANK_TOP_K)))
-# Accepted by /ask/ from Section 3 onward; only wired to real behaviour in Section 4.
-DEFAULT_PROMPT_STRATEGY = os.getenv("DEFAULT_PROMPT_STRATEGY", "basic").strip().lower()
+# `structured_lookup` tied for best exact-match accuracy (6/6) with all candidates in the
+# 2026-07-24 strategy benchmark, and wins the documented tie-break because it also produces
+# the table-oriented UI contract. Set `basic` to restore the historical prompt.
+DEFAULT_PROMPT_STRATEGY = os.getenv("DEFAULT_PROMPT_STRATEGY", "structured_lookup").strip().lower()
 DEFAULT_EXPERT_MODE = os.getenv("DEFAULT_EXPERT_MODE", "auto").strip().lower()
 
 # Chunking (Section 2)
