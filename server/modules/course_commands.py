@@ -7,6 +7,10 @@ from dataclasses import dataclass, field
 
 
 COURSE_RE = re.compile(r"\b([A-Z]{2,5})\s*-?\s*(\d{3,5}[A-Z]?)\b", re.IGNORECASE)
+SHORTHAND_COURSE_RE = re.compile(
+    r"\b([A-Z]{2,5})\s*-?\s*(\d{3}[A-Z]?)(?P<tail>(?:\s*[,/]?\s*\d{3}[A-Z]?){1,12})",
+    re.IGNORECASE,
+)
 
 _REMOVE_RE = re.compile(
     r"\b(sil|çıkar|cikar|kaldır|kaldir|remove|delete|almadım|almadim|yanlış ekledim|yanlis ekledim)\b",
@@ -37,6 +41,25 @@ def normalize_course_code(subject: str, number: str) -> str:
     return f"{subject.upper()} {number.upper()}"
 
 
+def extract_course_codes(text: str) -> tuple[str, ...]:
+    """Extract explicit and repeated-subject forms such as ``CS 445 412 404``."""
+    raw = text or ""
+    found: list[tuple[int, str]] = [
+        (match.start(), normalize_course_code(match.group(1), match.group(2)))
+        for match in COURSE_RE.finditer(raw)
+    ]
+    for match in SHORTHAND_COURSE_RE.finditer(raw):
+        subject = match.group(1)
+        for number_match in re.finditer(r"\d{3}[A-Z]?", match.group("tail"), re.IGNORECASE):
+            found.append(
+                (
+                    match.start("tail") + number_match.start(),
+                    normalize_course_code(subject, number_match.group()),
+                )
+            )
+    return tuple(dict.fromkeys(code for _position, code in sorted(found)))
+
+
 @dataclass(frozen=True)
 class CourseHistoryCommand:
     course_codes: tuple[str, ...]
@@ -52,7 +75,7 @@ class CourseHistoryCommand:
 
 def parse_course_history_command(text: str) -> CourseHistoryCommand | None:
     raw = text or ""
-    codes = tuple(dict.fromkeys(normalize_course_code(a, b) for a, b in COURSE_RE.findall(raw)))
+    codes = extract_course_codes(raw)
     if not codes:
         return None
 
@@ -78,4 +101,3 @@ def parse_course_history_command(text: str) -> CourseHistoryCommand | None:
         standalone=not bool(_QUERY_TERMS_RE.search(raw)),
         matched_text=raw,
     )
-

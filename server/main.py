@@ -56,12 +56,16 @@ from modules.mongodb import (
     set_user_courses,
 )
 from modules.course_commands import parse_course_history_command
+from modules.profile_commands import parse_academic_profile_command, resolve_profile_update
 from modules.export_utils import audit_rows, course_rows, rows_to_csv, rows_to_xlsx
 from modules.response_formatter import (
     audit_structured_content,
     course_update_structured_content,
+    audit_answer,
+    graduation_plan_answer,
     ensure_summary_section,
     merge_structured_content,
+    sanitize_student_answer,
 )
 from modules.rag_router import route_query
 from modules import curriculum_registry
@@ -327,10 +331,14 @@ def _resolve_intent(
         "what do i need",
         "what should i take then",
     )
-    if previous_intent == "mezuniyet_durumu" and any(
+    if previous_intent in {"mezuniyet_durumu", "graduation_plan"} and any(
         phrase in normalized for phrase in graduation_followups
     ):
-        return "mezuniyet_durumu"
+        return "graduation_plan"
+    if previous_intent in {"mezuniyet_durumu", "graduation_plan"} and re.search(
+        r"\b(?:sonraki|gelecek)\s+dönem\b|\bnext semester\b", normalized
+    ):
+        return "graduation_plan"
     if MINOR_INTENT_RE.search(question or ""):
         return "minor"
     if _is_graduation_intent(question) and not _is_course_detail_like(question):
@@ -1104,6 +1112,63 @@ async def ask_question(
     try:
         logger.info(f"user query: {question} (mode={retrieval_mode}, top_k={context_top_k})")
 
+        # Major and curriculum term can be changed conversationally and are persisted
+        # immediately, just like the profile screen.
+        profile_command = parse_academic_profile_command(original_question)
+        if profile_command and username:
+            current_profile = await get_academic_profile(username)
+            profile_update, profile_error = resolve_profile_update(profile_command, current_profile)
+            if profile_error:
+                return _stamp({
+                    "response": profile_error,
+                    "summary": profile_error,
+                    "sources": [],
+                    "source_chunk_ids": [],
+                    "intent": "academic_profile_update",
+                })
+            saved_profile = await set_academic_profile(username, profile_update)
+            if profile_command.standalone:
+                answer = (
+                    f"Akademik profilin güncellendi: **{saved_profile.get('major')} / "
+                    f"{saved_profile.get('degree_code')}**, müfredat dönemi "
+                    f"**{saved_profile.get('curriculum_term')}**."
+                )
+                summary = (
+                    f"Bölümün {saved_profile.get('major')}, müfredat dönemin "
+                    f"{saved_profile.get('curriculum_term')} olarak kaydedildi."
+                )
+                answer = f"{answer}\n\n## Kısa Özet\n\n{summary}"
+                await conversation_memory.append_turn(
+                    session_id,
+                    username=username,
+                    question=original_question,
+                    answer=answer,
+                    intent="academic_profile_update",
+                    term_code=saved_profile.get("curriculum_term"),
+                    working_context_updates={"active_topic": "academic_profile"},
+                )
+                return _stamp({
+                    "response": answer,
+                    "summary": summary,
+                    "structured_content": {
+                        "kind": "academic_profile_update",
+                        "tables": [{
+                            "id": "academic-profile-update",
+                            "title": "Akademik Profil",
+                            "columns": [
+                                {"key": "major", "label": "Bölüm"},
+                                {"key": "degree_code", "label": "Program"},
+                                {"key": "curriculum_term", "label": "Müfredat dönemi"},
+                            ],
+                            "rows": [saved_profile],
+                        }],
+                    },
+                    "sources": [],
+                    "source_chunk_ids": [],
+                    "intent": "academic_profile_update",
+                    "profile_updated": True,
+                })
+
         # Explicit course-history statements are deterministic commands, not LLM guesses.
         # They update only the mentioned courses and preserve the rest of the profile.
         course_command = parse_course_history_command(original_question)
@@ -1128,6 +1193,7 @@ async def ask_question(
                     answer=answer,
                     intent="course_history_update",
                     course_id=course_command.course_codes[-1] if course_command.course_codes else None,
+                    working_context_updates={"active_topic": "course_history"},
                 )
                 return _stamp(
                     {
@@ -1189,6 +1255,9 @@ async def ask_question(
         profile = await get_academic_profile(username) if username else {}
         program = (profile.get("major") or "").strip().upper()
 
+        graduation_plan_intent = resolved_intent == "graduation_plan"
+        if graduation_plan_intent:
+            intent = "graduation_plan"
         graduation_intent = intent == "mezuniyet_durumu"
         recommendation_intent = intent == "ders_onerisi"
         if recommendation_intent and not _has_interest_area(question):
@@ -1200,7 +1269,7 @@ async def ask_question(
             })
 
         # Missing-data / missing-profile safety for authoritative intents (roadmap section 15).
-        gate = check_profile(intent, profile)
+        gate = check_profile("mezuniyet_durumu" if graduation_plan_intent else intent, profile)
         if not gate.ok:
             return _stamp({
                 "response": gate.message,
@@ -1210,6 +1279,52 @@ async def ask_question(
                 "profile_required": bool(gate.missing_fields),
                 "curriculum_unavailable": gate.data_unavailable,
             })
+
+        # Graduation arithmetic and its immediate follow-ups are deterministic. This keeps
+        # context stable and prevents implementation narration from leaking into the answer.
+        if (graduation_intent or graduation_plan_intent) and program and profile.get("curriculum_term"):
+            completed = await get_completed_course_codes(username) if username else []
+            audit_result = degree_audit.audit(program, profile["curriculum_term"], completed)
+            if graduation_plan_intent:
+                next_term = bool(re.search(
+                    r"\b(?:sonraki|gelecek)\s+dönem\b|\bnext semester\b",
+                    original_question,
+                    re.IGNORECASE,
+                ))
+                rendered_answer, summary = graduation_plan_answer(
+                    audit_result, next_term=next_term, language=language
+                )
+            else:
+                rendered_answer, summary = audit_answer(audit_result, language=language)
+            result = _stamp({
+                "response": rendered_answer,
+                "summary": summary,
+                "structured_content": audit_structured_content(audit_result, language=language),
+                "sources": ["Deterministic degree audit"],
+                "source_chunk_ids": [],
+                "intent": intent,
+                "export_links": {
+                    "courses_csv": f"/users/{username}/courses/export?format=csv",
+                    "courses_xlsx": f"/users/{username}/courses/export?format=xlsx",
+                    "audit_csv": f"/users/{username}/degree-audit/export?format=csv",
+                    "audit_xlsx": f"/users/{username}/degree-audit/export?format=xlsx",
+                },
+            })
+            await conversation_memory.append_turn(
+                session_id,
+                username=username,
+                question=original_question,
+                answer=rendered_answer,
+                intent=intent,
+                term_code=profile.get("curriculum_term"),
+                sources=result["sources"],
+                working_context_updates={
+                    "active_topic": "graduation_planning",
+                    "last_audit_status": audit_result.get("status"),
+                    "last_remaining_su": audit_result.get("remaining_su_credits"),
+                },
+            )
+            return result
 
         vectorstore = get_vectorstore()
         effective_question = _expanded_recommendation_question(question) if recommendation_intent else question
@@ -1297,8 +1412,9 @@ async def ask_question(
         result = query_chain(chain, llm_question)
         if recommendation_intent:
             result = _clean_recommendation_response(result)
+        cleaned_answer = sanitize_student_answer(result.get("response", ""))
         rendered_answer, summary = ensure_summary_section(
-            result.get("response", ""),
+            cleaned_answer,
             language=language,
         )
         result["response"] = rendered_answer

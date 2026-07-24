@@ -91,7 +91,7 @@ function MessageBubble({
           <div className="whitespace-pre-wrap">{message.content}</div>
         ) : (
           <>
-            <MarkdownMessage content={message.content} />
+            <MarkdownMessage content={withoutEmbeddedSummary(message.content, message.summary)} />
             {message.pending && (
               <span
                 className="ml-1 inline-block h-4 w-0.5 animate-pulse rounded bg-primary align-middle"
@@ -103,6 +103,12 @@ function MessageBubble({
             )}
             {message.exportLinks && Object.keys(message.exportLinks).length > 0 && (
               <ExportLinks links={message.exportLinks} />
+            )}
+            {!message.pending && message.summary && (
+              <section className="mt-5 border-t border-border pt-4">
+                <h3 className="mb-1 font-semibold text-primary">Kısa Özet</h3>
+                <p className="leading-relaxed">{message.summary}</p>
+              </section>
             )}
           </>
         )}
@@ -130,6 +136,12 @@ function MessageBubble({
       </article>
     </div>
   );
+}
+
+function withoutEmbeddedSummary(content: string, summary?: string) {
+  if (!summary) return content;
+  const match = content.match(/\n#{1,6}\s*(?:Kısa Özet|Kisa Ozet|Short Summary)\s*\n/i);
+  return match?.index == null ? content : content.slice(0, match.index).trimEnd();
 }
 
 function StructuredSections({ content }: { content: StructuredContent }) {

@@ -20,8 +20,10 @@ from modules.retrieval_policy import build_metadata_filter, check_profile
 from modules.bm25_retriever import _tokenize, _is_narrowing
 from modules.conversation_memory import _automatic_title, extract_course_code, resolve_reference
 from modules.course_commands import parse_course_history_command
+from modules.profile_commands import parse_academic_profile_command, resolve_profile_update
+from modules.export_utils import course_rows
 from modules.mongodb import _norm_status, ELIGIBLE_FOR_CREDIT
-from modules.response_formatter import ensure_summary_section
+from modules.response_formatter import audit_answer, audit_summary, ensure_summary_section, sanitize_student_answer
 
 
 # ---- retrieval policy / profile scoping ---------------------------------------------
@@ -117,6 +119,7 @@ def test_automatic_title_uses_multiple_turns():
         ]
     )
     assert "mezuniyet" in title.lower()
+    assert "dönem planı" in title.lower()
     assert len(title) <= 70
 
 
@@ -128,12 +131,59 @@ def test_course_history_command_parser():
     assert parse_course_history_command("CS 201 hakkında bilgi ver") is None
 
 
+def test_course_history_shorthand_repeats_subject():
+    command = parse_course_history_command("CS 445 412 404 aldım tüm university coursesı aldım")
+    assert command is not None
+    assert command.course_codes == ("CS 445", "CS 412", "CS 404")
+
+
+def test_profile_command_parses_major_and_curriculum_term():
+    command = parse_academic_profile_command("Bölümüm CS, müfredat dönemim 202401")
+    assert command is not None and command.major == "CS" and command.curriculum_term == "202401"
+    update, error = resolve_profile_update(command, {})
+    assert error is None
+    assert update["degree_code"] == "BSCS"
+    natural = parse_academic_profile_command("Majorum cs cirriculum termim Fall 2022")
+    assert natural is not None
+    assert natural.major == "CS" and natural.curriculum_term == "202201"
+
+
+def test_course_export_contains_totals():
+    rows = course_rows([
+        {"code": "CS 201", "title": "X", "status": "completed", "su_credits": 3, "ects": 6},
+        {"code": "CS 202", "title": "Y", "status": "failed", "su_credits": 3, "ects": 6},
+    ])
+    assert rows[-1]["code"] == "TOTAL"
+    assert rows[-1]["total_su_credits"] == 3
+    assert rows[0]["total_su_credits"] == 3
+
+
 def test_summary_is_always_available_for_long_answers():
     answer, summary = ensure_summary_section(
         "İlk önemli sonuç budur. İkinci önemli sonuç budur.", language="tr"
     )
     assert summary
     assert "Kısa Özet" in answer
+
+
+def test_audit_summary_contains_total_remaining_and_status():
+    audit = degree_audit.audit("CS", "202401", ["CS 201"])
+    summary = audit_summary(audit, language="tr")
+    assert str(audit["total_min_su_credits"]) in summary
+    assert str(audit["remaining_su_credits"]) in summary
+    assert "henüz" in summary
+    answer, rendered_summary = audit_answer(audit, language="tr")
+    assert rendered_summary == summary and "MongoDB" not in answer
+
+
+def test_student_answer_hides_implementation_narration():
+    raw = (
+        "Mezuniyet durumunuzu hesaplamak için MongoDB ders geçmişinizi kullanacağım.\n\n"
+        "Sonuç: 14/125 SU.\n\nKaynaklar:\n[Source: Deterministic degree audit engine]"
+    )
+    cleaned = sanitize_student_answer(raw)
+    assert "MongoDB" not in cleaned and "Source:" not in cleaned
+    assert "14/125" in cleaned
 
 
 # ---- course-history status ----------------------------------------------------------

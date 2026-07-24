@@ -35,7 +35,7 @@ def audit_rows(audit: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def course_rows(courses: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [
+    rows = [
         {
             "code": course.get("code"),
             "title": course.get("title"),
@@ -47,6 +47,28 @@ def course_rows(courses: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
         }
         for course in courses
     ]
+    eligible = {"completed", "transfer", "exempted"}
+    eligible_rows = [row for row in rows if str(row.get("status") or "completed").lower() in eligible]
+    totals = {
+        "su_credits": sum(float(row.get("su_credits") or 0) for row in eligible_rows),
+        "ects": sum(float(row.get("ects") or 0) for row in eligible_rows),
+        "engineering_ects": sum(float(row.get("engineering_ects") or 0) for row in eligible_rows),
+        "basic_science_ects": sum(float(row.get("basic_science_ects") or 0) for row in eligible_rows),
+    }
+    for row in rows:
+        row["total_su_credits"] = totals["su_credits"]
+        row["total_ects"] = totals["ects"]
+    rows.append(
+        {
+            "code": "TOTAL",
+            "title": f"{len(eligible_rows)} credit-eligible courses",
+            "status": "",
+            **totals,
+            "total_su_credits": totals["su_credits"],
+            "total_ects": totals["ects"],
+        }
+    )
+    return rows
 
 
 def rows_to_csv(rows: list[dict[str, Any]]) -> bytes:
@@ -88,4 +110,3 @@ def rows_to_xlsx(rows: list[dict[str, Any]], *, sheet_name: str = "adviSU") -> b
     output = io.BytesIO()
     workbook.save(output)
     return output.getvalue()
-

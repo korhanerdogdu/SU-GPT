@@ -64,6 +64,21 @@ def resolve_reference(question: str, working_context: dict[str, Any] | None) -> 
 def _automatic_title(turns: list[dict[str, str]]) -> str:
     """Build a compact topic title from the first few user turns without another LLM call."""
     questions = [str(turn.get("user") or "").strip() for turn in turns[:3]]
+    normalized = " ".join(questions).lower()
+    graduation = any(term in normalized for term in ("mezun", "kalan kredi", "degree audit"))
+    next_courses = any(
+        term in normalized
+        for term in ("ne alm", "hangi ders", "sonraki dönem", "gelecek dönem", "next semester")
+    )
+    if graduation and next_courses:
+        return "Mezuniyet Durumu ve Gelecek Dönem Planı"
+    if graduation:
+        return "Ayrıntılı Mezuniyet Durumu"
+    if any(term in normalized for term in ("aldım", "aldim", "tamamladım", "completed")):
+        codes = list(dict.fromkeys(extract_course_code(q) for q in questions))
+        codes = [code for code in codes if code]
+        suffix = f": {', '.join(codes[:3])}" if codes else ""
+        return f"Ders Geçmişi Güncellemesi{suffix}"[:TITLE_MAX]
     combined = " · ".join(question for question in questions if question)
     combined = _TITLE_FILLER_RE.sub(" ", combined)
     combined = re.sub(r"\([^)]*conversation context:[^)]*\)", "", combined, flags=re.IGNORECASE)
@@ -108,6 +123,7 @@ async def append_turn(
     course_id: str | None = None,
     term_code: str | None = None,
     sources: list[str] | None = None,
+    working_context_updates: dict[str, Any] | None = None,
 ) -> None:
     if not session_id:
         return
@@ -129,6 +145,9 @@ async def append_turn(
             context_updates["working_context.last_course_id"] = course_id
         if term_code:
             context_updates["working_context.last_term_code"] = term_code
+        for key, value in (working_context_updates or {}).items():
+            if value is not None:
+                context_updates[f"working_context.{key}"] = value
         await conversations.update_one(
             {"sessionId": session_id},
             {

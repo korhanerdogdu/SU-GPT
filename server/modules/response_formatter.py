@@ -83,6 +83,95 @@ def ensure_summary_section(answer: str, *, language: str = "tr") -> tuple[str, s
     return rendered, summary
 
 
+def sanitize_student_answer(answer: str) -> str:
+    """Remove implementation narration while preserving the actual academic result."""
+    body, _summary = split_summary(answer or "")
+    body = re.sub(
+        r"(?im)^\s*(?:öncelikle\s+)?(?:mezuniyet durumunuzu?|mezuniyet durumunu)"
+        r".*?(?:kullanacağım|hesaplayacağım|kontrol edelim)\.?\s*$",
+        "",
+        body,
+    )
+    body = re.sub(
+        r"(?im)^\s*(?:kalan kredi hesabını\s+)?latex.*?(?:açıklamak|göstermek).*?:?\s*$",
+        "",
+        body,
+    )
+    body = re.sub(r"(?is)\n*\s*(?:kaynaklar|sources)\s*:\s*(?:\n.*)*$", "", body)
+    body = re.sub(r"(?im)^\s*\[Source:[^\n]*\]\s*$", "", body)
+    return re.sub(r"\n{3,}", "\n\n", body).strip()
+
+
+def audit_summary(audit: dict[str, Any], *, language: str = "tr") -> str:
+    completed = audit.get("completed_su_credits", 0)
+    required = audit.get("total_min_su_credits", 0)
+    remaining = audit.get("remaining_su_credits", 0)
+    complete = audit.get("status") == "complete"
+    if language == "en":
+        status = "You currently meet the graduation requirements." if complete else "You do not yet meet all graduation requirements."
+        return f"You have completed {completed} of {required} SU credits; {remaining} SU credits remain. {status}"
+    status = "Mezuniyet koşullarını şu anda tamamlıyorsun." if complete else "Mezuniyet koşullarının tamamı henüz karşılanmadı."
+    return f"Gerekli {required} SU kredisinin {completed} SU’sunu tamamladın; {remaining} SU kredisi kaldı. {status}"
+
+
+def audit_answer(audit: dict[str, Any], *, language: str = "tr") -> tuple[str, str]:
+    """Render the authoritative audit without exposing storage/retrieval internals."""
+    if audit.get("reliability") == "unavailable":
+        message = str(audit.get("message") or "Bu müfredat için güvenilir hesaplama yapılamıyor.")
+        return ensure_summary_section(message, language=language)
+    if language == "en":
+        headline = (
+            f"**Graduation status:** {audit.get('completed_su_credits', 0)}/"
+            f"{audit.get('total_min_su_credits', 0)} SU completed; "
+            f"{audit.get('remaining_su_credits', 0)} SU remaining."
+        )
+    else:
+        headline = (
+            f"**Mezuniyet durumu:** {audit.get('completed_su_credits', 0)}/"
+            f"{audit.get('total_min_su_credits', 0)} SU tamamlandı; "
+            f"{audit.get('remaining_su_credits', 0)} SU kaldı."
+        )
+    summary = audit_summary(audit, language=language)
+    heading = "## Kısa Özet" if language == "tr" else "## Short Summary"
+    return f"{headline}\n\n{heading}\n\n{summary}", summary
+
+
+def graduation_plan_answer(audit: dict[str, Any], *, next_term: bool, language: str = "tr") -> tuple[str, str]:
+    missing = list(audit.get("missing_required_courses") or [])
+    categories = [
+        item for item in audit.get("categories") or []
+        if (item.get("remaining_su_credits") or 0) > 0
+    ]
+    first_courses = missing[:5]
+    if language == "en":
+        intro = "For next term, prioritize these missing required courses:" if next_term else "You still need to complete these required courses:"
+        lines = [intro]
+        lines.extend(f"- **{code}**" for code in first_courses)
+        if not first_courses:
+            lines.append("- No individually missing required course was found; focus on the remaining elective categories.")
+        if categories:
+            lines.append("\nRemaining category credits: " + "; ".join(
+                f"{_category_label(str(c.get('category')), language)}: {c.get('remaining_su_credits')} SU"
+                for c in categories
+            ))
+    else:
+        intro = "Gelecek dönem önceliğin şu eksik zorunlu dersler olmalı:" if next_term else "Öncelikle şu eksik zorunlu dersleri tamamlamalısın:"
+        lines = [intro]
+        lines.extend(f"- **{code}**" for code in first_courses)
+        if not first_courses:
+            lines.append("- Tekil eksik zorunlu ders görünmüyor; kalan seçmeli kategorilerine odaklanmalısın.")
+        if categories:
+            lines.append("\nKalan kategori kredileri: " + "; ".join(
+                f"{_category_label(str(c.get('category')), language)}: {c.get('remaining_su_credits')} SU"
+                for c in categories
+            ))
+        if next_term:
+            lines.append("\nDerslerin açılma ve önkoşul durumuna göre bu listeyi dönem programına dönüştürebilirim.")
+    summary = audit_summary(audit, language=language)
+    heading = "## Kısa Özet" if language == "tr" else "## Short Summary"
+    return "\n".join(lines) + f"\n\n{heading}\n\n{summary}", summary
+
+
 def _category_label(value: str, language: str) -> str:
     labels = {
         "university_courses": ("Üniversite dersleri", "University courses"),
@@ -205,4 +294,3 @@ def merge_structured_content(*items: dict[str, Any] | None) -> dict[str, Any] | 
         return present[0]
     tables = [table for item in present for table in item.get("tables", [])]
     return {"kind": "composite", "tables": tables, "sections": present}
-
