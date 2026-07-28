@@ -1,0 +1,16 @@
+{
+  "first_stage_run": "../outputs/retrieval_lab/dev__pools",
+  "first_stage_method": "hybrid_bm25f_e5_meta",
+  "split": "dev",
+  "rerankers": [
+    "original_ranking",
+    "metadata_rule_rerank",
+    "fuse_rules_first"
+  ],
+  "depths": [
+    25
+  ],
+  "n_queries": 40,
+  "corpus_fingerprint": "9918ab2b1f34ebe9",
+  "timestamp_utc": "2026-07-27T23:31:16Z"
+}

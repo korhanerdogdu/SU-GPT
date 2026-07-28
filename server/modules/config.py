@@ -58,11 +58,16 @@ RERANK_TOP_K = int(os.getenv("RERANK_TOP_K", "6"))
 # Retrieval modes (Section 3). The other modes exist so the evaluation track can ablate one
 # component at a time; the product always runs this default and no longer exposes a picker.
 #
-# Default is `hybrid` (vector + BM25 fused), NOT `hybrid_rerank`, because that is what our own
-# benchmark measured as best — chunk-level Recall@6 0.625 vs 0.438, reproduced at top-k 3/5/10,
-# while also being ~283 ms/query faster because it skips the CrossEncoder. See
-# docs/experiment_log.md "Finding 1a". Set DEFAULT_RETRIEVAL_MODE=hybrid_rerank to revert.
-DEFAULT_RETRIEVAL_MODE = os.getenv("DEFAULT_RETRIEVAL_MODE", "hybrid").strip().lower()
+# Default is `hybrid_meta`: BM25F over the structured curriculum corpus, fused by RRF with
+# multilingual-E5-small, then soft metadata/record-type boosts. On the 499-query held-out
+# test split it reaches Recall@10 0.9419 against 0.5992 for the BM25 baseline
+# (+0.343, 95% CI [+0.299, +0.389], p=0.0001) with no subgroup regression, and it replaced
+# `hybrid` after the 2026-07-28 benchmark. See docs/retrieval_benchmark_report.md.
+#
+# Fallbacks, in order: set DEFAULT_RETRIEVAL_MODE=hybrid for the previous Chroma path,
+# =bm25 for the plain lexical baseline, or ADVISU_LAB_DENSE=false to run the winner's
+# lexical half only (Recall@10 0.9178) when the E5 model is unavailable.
+DEFAULT_RETRIEVAL_MODE = os.getenv("DEFAULT_RETRIEVAL_MODE", "hybrid_meta").strip().lower()
 ENABLE_RERANKING = os.getenv("ENABLE_RERANKING", "true").strip().lower() == "true"
 BM25_TOP_K = int(os.getenv("BM25_TOP_K", "25"))
 DENSE_TOP_K = int(os.getenv("DENSE_TOP_K", "20"))

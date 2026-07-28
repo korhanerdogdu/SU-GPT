@@ -1,0 +1,28 @@
+{
+  "hybrid_bm25f_e5_meta": {
+    "n_queries": 238.0,
+    "recall@1": 0.8109243697478992,
+    "recall@3": 0.907563025210084,
+    "recall@5": 0.9411764705882353,
+    "recall@10": 0.957983193277311,
+    "recall@20": 0.9621848739495799,
+    "recall@50": 0.9663865546218487,
+    "evidence_set_recall@5": 0.9369747899159664,
+    "all_gold@5": 0.9327731092436975,
+    "evidence_set_recall@10": 0.9537815126050421,
+    "all_gold@10": 0.9495798319327731,
+    "evidence_set_recall@20": 0.957983193277311,
+    "all_gold@20": 0.9537815126050421,
+    "mrr@10": 0.8669934640522875,
+    "ndcg@10": 0.8863083034591853,
+    "hit@1": 0.8109243697478992,
+    "latency_mean_ms": 135.25203327881172,
+    "latency_p50_ms": 101.75166698172688,
+    "latency_p95_ms": 356.7658750107512,
+    "batch_seconds_total": 41.28264179104008,
+    "index_build_seconds": 3.161266415962018,
+    "index_bytes": 0,
+    "build_notes": "components=['bm25f', 'dense_e5_small']",
+    "latency_sample_n": 10
+  }
+}

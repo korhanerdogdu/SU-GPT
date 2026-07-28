@@ -1,0 +1,14 @@
+{
+  "first_stage_run": "../outputs/retrieval_lab/dev__pools",
+  "first_stage_method": "hybrid_bm25f_e5_meta",
+  "split": "dev",
+  "rerankers": [
+    "qwen3_06b_domain"
+  ],
+  "depths": [
+    10
+  ],
+  "n_queries": 12,
+  "corpus_fingerprint": "9918ab2b1f34ebe9",
+  "timestamp_utc": "2026-07-28T06:57:12Z"
+}

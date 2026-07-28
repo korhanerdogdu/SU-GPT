@@ -203,7 +203,13 @@ def test_mode_normalization():
     assert rm.normalize_mode("DENSE") == "dense"
     assert rm.normalize_mode("hybrid-rerank") == "hybrid_rerank"
     assert rm.normalize_mode("llm") == "llm_only"
-    assert set(rm.RETRIEVAL_MODES) == {"llm_only", "bm25", "dense", "hybrid", "hybrid_rerank"}
+    # `hybrid_meta` joined the set in the 2026-07-28 retrieval benchmark and is now the
+    # production default; the five original modes must all still be selectable so the
+    # evaluation track can keep ablating components and BM25 stays available as a fallback.
+    assert set(rm.RETRIEVAL_MODES) == {
+        "llm_only", "bm25", "dense", "hybrid", "hybrid_rerank", "hybrid_meta",
+    }
+    assert rm.normalize_mode("hybrid_meta") == "hybrid_meta"
 
 
 def test_llm_only_retrieves_nothing():

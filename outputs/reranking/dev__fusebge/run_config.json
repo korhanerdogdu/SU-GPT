@@ -1,0 +1,16 @@
+{
+  "first_stage_run": "../outputs/retrieval_lab/dev__pools",
+  "first_stage_method": "hybrid_bm25f_e5_meta",
+  "split": "dev",
+  "rerankers": [
+    "fuse_bge_first",
+    "fuse_bge_first_w2",
+    "fuse_bge_first_rules"
+  ],
+  "depths": [
+    10
+  ],
+  "n_queries": 238,
+  "corpus_fingerprint": "9918ab2b1f34ebe9",
+  "timestamp_utc": "2026-07-28T00:54:56Z"
+}

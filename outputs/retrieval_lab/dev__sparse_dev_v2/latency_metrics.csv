@@ -1,0 +1,3 @@
+method,latency_mean_ms,latency_p50_ms,latency_p95_ms,index_build_seconds,index_bytes,latency_sample_n
+metadata_bm25f,83.01,75.30,173.01,2.72,0,60
+metadata_filter_bm25f,82.40,74.49,161.62,2.39,0,60

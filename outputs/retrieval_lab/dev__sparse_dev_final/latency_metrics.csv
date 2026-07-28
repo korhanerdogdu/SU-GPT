@@ -1,0 +1,8 @@
+method,latency_mean_ms,latency_p50_ms,latency_p95_ms,index_build_seconds,index_bytes,latency_sample_n
+bm25_original,5.42,4.01,20.57,0.08,0,60
+bm25_full_corpus,39.47,40.32,73.48,1.08,0,60
+bm25_v2tok,53.49,50.28,107.56,2.05,0,60
+contextual_bm25,56.37,53.88,86.04,3.62,0,60
+bm25f,122.38,111.61,279.69,5.57,0,60
+metadata_bm25f,116.82,97.75,236.18,4.59,0,60
+metadata_filter_bm25f,236.67,167.62,790.87,5.60,0,60

@@ -1,0 +1,24 @@
+{
+  "split": "test",
+  "methods": [
+    "metadata_bm25f",
+    "metadata_filter_bm25f",
+    "hybrid_bm25f_e5_meta",
+    "hybrid_meta_rerank50"
+  ],
+  "n_items": 505,
+  "n_scorable": 499,
+  "corpus_fingerprint": "9918ab2b1f34ebe9",
+  "corpus_chunks": 30343,
+  "git_commit": "c0415b20e582481ca2a22cc9a4ada27a33b9ce5c",
+  "hardware": {
+    "platform": "macOS-15.0-arm64-arm-64bit",
+    "python": "3.12.9",
+    "machine": "arm64",
+    "torch": "2.13.0",
+    "device": "mps"
+  },
+  "top_k_max": 50,
+  "latency_sample": 30,
+  "timestamp_utc": "2026-07-27T23:07:28Z"
+}

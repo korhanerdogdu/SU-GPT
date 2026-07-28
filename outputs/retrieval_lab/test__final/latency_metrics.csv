@@ -1,0 +1,13 @@
+method,latency_mean_ms,latency_p50_ms,latency_p95_ms,index_build_seconds,index_bytes,latency_sample_n
+bm25_original,3.30,3.13,5.68,0.06,0,30
+bm25_full_corpus,38.58,37.46,64.23,0.59,0,30
+bm25_v2tok,40.63,40.00,69.44,1.19,0,30
+contextual_bm25,44.26,44.20,66.87,2.03,0,30
+bm25f,94.44,87.99,168.28,2.52,0,30
+metadata_bm25f,107.01,95.92,199.57,2.30,0,30
+metadata_filter_bm25f,97.27,89.42,160.53,2.33,0,30
+dense_minilm,20.16,18.25,29.43,0.05,46606848,30
+dense_e5_small,24.70,14.76,64.67,0.04,46606848,30
+hybrid_bm25f_e5,287.97,181.16,1132.09,3.00,0,30
+hybrid_bm25f_e5_meta,113.49,105.74,178.57,3.52,0,30
+hybrid_meta_rerank50,274.23,252.99,377.63,2.82,0,30

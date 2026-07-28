@@ -1,0 +1,18 @@
+{
+  "seed": 20260727,
+  "corpus_fingerprint": "9918ab2b1f34ebe9",
+  "corpus_chunks": 30343,
+  "counts": {
+    "train": 478,
+    "dev": 238,
+    "test": 505
+  },
+  "scorable": {
+    "train": 478,
+    "dev": 238,
+    "test": 499
+  },
+  "preserved_original": 22,
+  "split_policy": "by gold-chunk connected component; original benchmark pinned to test",
+  "limitation": "question wording is templated; BM25 numbers are an optimistic bound"
+}

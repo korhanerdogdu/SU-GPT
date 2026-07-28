@@ -28,6 +28,89 @@ CS 455
 
 You are working inside an existing project, not starting from scratch. The project was originally RagBot 2.0 and is now SU-GPT.
 
+## Retrieval + reranking overhaul (2026-07-28) — READ BEFORE TOUCHING RETRIEVAL
+
+This supersedes older retrieval notes in this file. Two benchmarks were run end to end; both
+have frozen pre-registrations, held-out test splits and machine-readable artifacts.
+
+### What changed in production
+
+| | Before | After |
+|---|---|---|
+| `DEFAULT_RETRIEVAL_MODE` | `hybrid` (Chroma) | **`hybrid_meta`** |
+| Ranking implementation | `catalog_retriever` + Chroma | **`server/retrieval_lab/`**, shared by benchmark and production |
+| Reranking | `hybrid_rerank` available | measured, **off by default** (`ADVISU_RERANK`) |
+
+`hybrid_meta` = field-weighted **BM25F** over the curriculum corpus, fused by **RRF** with
+**multilingual-e5-small**, then soft **metadata + record-type boosts**. Held-out test (n=499):
+**Recall@10 0.9419 vs 0.5992** for a fair BM25 baseline (+0.3427, 95% CI [+0.2986, +0.3888],
+p=0.0001, 178 improved / 7 harmed).
+
+### New modules — do not duplicate this logic elsewhere
+
+```
+server/retrieval_lab/           corpus, text, sparse (BM25/BM25F), dense, fusion, metrics, rerank, retrievers
+server/modules/lab_retriever.py production adapter (Chroma `where` -> in-memory scope, ranking -> Document)
+server/evaluation/              build_retrieval_benchmark, run_retrieval_lab, analyze_retrieval_lab,
+                                candidate_ceiling, run_reranking_lab, posthoc_fusion,
+                                make_retrieval_figures, make_reranking_figures
+docs/retrieval_benchmark_report.md, docs/reranking_benchmark_report.md, docs/retrieval_lab.md
+docs/*_winner_selection_preregistration.md
+```
+
+**The benchmark and production share one implementation.** `lab_retriever` builds the same
+`BM25FIndex` + `DenseIndex` + `apply_metadata_boost` the benchmark scored. If you change a fusion
+constant (`RRF_K=60`, `CANDIDATE_DEPTH=200`, `e5_small`) you invalidate every reported number.
+
+### Facts that will bite you if you forget them
+
+1. **`retrieval_lab` indexes ONLY curriculum data** — `course` (28,082) + `minor` (2,261). It has
+   **no review, exam or uploaded-document chunks**. A `{documentType: "review"}` filter raises
+   `RuntimeError` (deliberately) so `retrieval_modes` falls back to the Chroma hybrid path and
+   logs at ERROR. It used to return `[]` silently; that was a real production bug.
+2. **The shipped BM25 has `_SUBSET_CAP = 3000`** (`modules/bm25_retriever.py`). In standalone
+   `bm25` mode with no narrowing filter it scores an arbitrary ~10% slice of a 30,343-chunk
+   corpus. That is why `bm25_original` measures 0.0681 and `bm25_full_corpus` 0.5992.
+3. **Metadata scoping must be a PRE-filter.** Both `BM25Index.search` and `DenseIndex.search`
+   take `allowed`; filtering after ranking returns nothing for narrow scopes. A unit test guards this.
+4. **`metrics.recall_at_k` is really Hit@K** (any-gold). Use `hit_at_k` / `true_recall_at_k`
+   explicitly in new code. The old name is a deprecated alias kept for reproducibility.
+5. **Do not enable the incumbent CrossEncoder.** `existing_msmarco` measures **26 Hit@1 points
+   below no reranking at all** on this corpus.
+6. **Reranking depth stays at 10.** Deeper pools measurably drag worse candidates into the top 10
+   (ms-marco at depth 25: Hit@10 0.9580 → 0.8529), and the oracle ceiling only rises +0.013 from
+   depth 10 to 100.
+
+### Reranking: measured, not enabled
+
+`fuse_bge_first` (BGE-reranker-v2-m3 over metadata-prefixed docs, RRF-fused with the first-stage
+order) passes **every** quality criterion on held-out test — Hit@1 +0.0441 [+0.0180, +0.0721]
+p=0.0016, Recall@3 +0.0341, MRR@10 +0.0340, Hit@10 unchanged, no subgroup regression worse than
+−0.024 — but costs **1,471 ms P95** against a pre-registered 1,000 ms interactive budget.
+Per the frozen rule it ships behind a flag:
+
+```bash
+ADVISU_RERANK=fuse_bge_first    # enable (adds ~1.5 s P95)
+ADVISU_RERANK=off               # default
+ADVISU_LAB_DENSE=false          # drop the dense half: R@10 0.9178, but Hit@1 0.7715 (higher)
+```
+
+### Honest caveats carried forward
+
+- **The benchmark is templated.** 1,221 corpus-derived questions (478 train / 238 dev / 505 test),
+  gold chunk ids taken from real rows. Templated wording reuses corpus vocabulary and therefore
+  **favours lexical/structural signals**; ~19% of items use natural student phrasing to reduce it.
+  Real student query logs would settle this.
+- **Multi-evidence retrieval is poor** (AllGold@10 = 0.0625 — 1 of 16 test items). Reranking does
+  not help; the set is incomplete, not mis-ordered.
+- **Test was scored three times** for the retrieval benchmark (original → bug fix → cue fix). All
+  tuning used dev, but test numbers were observed between iterations. Treat the headline as
+  reliable to the nearest point, not the fourth decimal.
+- `e5_base`, `e5_large_instruct`, `bge-m3`, Qwen3-4B/8B, domain fine-tuning and listwise reranking
+  were **not run**; reasons are recorded in `docs/retrieval_lab.md` and the reranking report §9.
+
+---
+
 ## Current State (updated 2026-07-22)
 
 **Implemented**

@@ -12,10 +12,12 @@ So this module does not reimplement retrieval. It exposes the existing retriever
 comparable configurations:
 
     llm_only       no retrieval at all (baseline; will hallucinate course facts, that's the point)
-    bm25           lexical only
+    bm25           lexical only (the shipped BM25 - the benchmark's mandatory baseline)
     dense          vector only
     hybrid         lexical + vector fused, no reranking
-    hybrid_rerank  the production path (default)
+    hybrid_rerank  the previous production path
+    hybrid_meta    BM25F + E5 dense (RRF) + metadata/record-type boosts - the benchmarked
+                   winner and the current default; see docs/retrieval_benchmark_report.md
 
 Scoping invariant: every RAG mode receives the SAME `metadata_filter` that the profile-aware
 retrieval policy produced. Ablating the retriever must never widen the corpus, or the numbers
@@ -30,7 +32,9 @@ from langchain_core.documents import Document
 
 from modules.config import BM25_TOP_K, DENSE_TOP_K, ENABLE_RERANKING
 
-RETRIEVAL_MODES: tuple[str, ...] = ("llm_only", "bm25", "dense", "hybrid", "hybrid_rerank")
+RETRIEVAL_MODES: tuple[str, ...] = (
+    "llm_only", "bm25", "dense", "hybrid", "hybrid_rerank", "hybrid_meta",
+)
 RAG_MODES: tuple[str, ...] = tuple(m for m in RETRIEVAL_MODES if m != "llm_only")
 DEFAULT_MODE = "hybrid_rerank"
 
@@ -137,7 +141,34 @@ def retrieve(
         return RetrievalOutcome(mode=mode)
 
     started = time.perf_counter()
-    if mode == "dense":
+    if mode == "hybrid_meta":
+        # Benchmarked winner (docs/retrieval_benchmark_report.md): field-weighted BM25F over
+        # the structured curriculum corpus, fused by RRF with multilingual-E5-small, then the
+        # soft metadata/record-type boost. Held-out test Recall@10 0.9419 vs 0.5992 for the
+        # BM25 baseline. Runs through modules.lab_retriever, which is the SAME code the
+        # benchmark scored - there is no second implementation to drift.
+        #
+        # If its index cannot be built the request must still be answered, so we fall back to
+        # the Chroma hybrid path - but loudly. A silent downgrade would leave the app serving
+        # a weaker retriever than the one it reports using.
+        try:
+            from modules.lab_retriever import lab_search
+
+            candidates = lab_search(
+                query, top_k=max(candidate_k, top_k), metadata_filter=metadata_filter
+            )
+        except Exception as exc:
+            from logger import logger
+
+            logger.error(
+                "retrieval_modes: hybrid_meta unavailable (%s: %s); falling back to the Chroma "
+                "hybrid path for this request", type(exc).__name__, exc,
+            )
+            candidates = list(hybrid_search()) if hybrid_search else _dense_search(
+                vectorstore, query, candidate_k, metadata_filter
+            )
+            candidates = _tag(candidates, "hybrid_fallback")
+    elif mode == "dense":
         candidates = _dense_search(vectorstore, query, max(candidate_k, DENSE_TOP_K), metadata_filter)
     elif mode == "bm25":
         candidates = _bm25_search(vectorstore, query, max(candidate_k, BM25_TOP_K), metadata_filter)

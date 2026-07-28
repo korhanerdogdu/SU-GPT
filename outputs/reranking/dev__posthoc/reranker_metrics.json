@@ -1,0 +1,22 @@
+{
+  "fuse_qwen_first@10": {
+    "hit@1": 0.7899159663865546,
+    "hit@3": 0.9327731092436975,
+    "hit@10": 0.957983193277311,
+    "recall@1": 0.7857142857142857,
+    "recall@3": 0.9285714285714286,
+    "recall@5": 0.9411764705882353,
+    "recall@10": 0.9537815126050421,
+    "mrr@10": 0.8625050020008002,
+    "ndcg@10": 0.8833033966401141,
+    "map@10": 0.8583033213285313,
+    "evidence_set_recall@5": 0.9411764705882353,
+    "evidence_set_recall@10": 0.9537815126050421,
+    "all_gold@5": 0.9369747899159664,
+    "all_gold@10": 0.9495798319327731,
+    "n_queries": 238,
+    "depth": 10,
+    "latency_p95_ms": null,
+    "note": "post-hoc RRF over saved rankings; latency = sum of components"
+  }
+}

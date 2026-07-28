@@ -346,6 +346,134 @@ quality beyond the objective reference-number signal until they are filled in.
 
 ---
 
+## Retrieval benchmark (2026-07-28) — BM25 replaced
+
+Full method, statistics and caveats: **[`docs/retrieval_benchmark_report.md`](docs/retrieval_benchmark_report.md)**.
+Reproduction commands: **[`docs/retrieval_lab.md`](docs/retrieval_lab.md)**.
+Acceptance rule frozen *before* the test split was scored:
+**[`docs/retrieval_winner_selection_preregistration.md`](docs/retrieval_winner_selection_preregistration.md)**.
+
+### Result
+
+`hybrid_meta` (field-weighted BM25F + multilingual-E5-small fused by RRF + soft metadata and
+record-type boosts) is now the production default, replacing `hybrid`.
+
+| Method | Recall@10 | Hit@1 | MRR@10 | nDCG@10 | P95 |
+|---|---:|---:|---:|---:|---:|
+| `bm25_original` (as shipped, incl. 3000-doc cap) | 0.0681 | 0.0501 | 0.0567 | 0.0595 | 6 ms |
+| `bm25_full_corpus` (fair baseline) | 0.5992 | 0.3367 | 0.4029 | 0.4481 | 65 ms |
+| `metadata_bm25f` (lexical only) | 0.9178 | **0.7715** | 0.8169 | 0.8398 | 265 ms |
+| **`hybrid_meta` (default)** | **0.9419** | 0.7535 | 0.8228 | 0.8491 | 398 ms |
+
+**+0.3427 Recall@10** over the fair baseline, 95% CI [+0.2986, +0.3888], p = 0.0001,
+178 queries improved / 7 harmed / 314 tied (n = 499 held-out).
+
+![Recall@K](outputs/retrieval_lab/test__final_v3/figures/fig1_recall_at_k.png)
+
+![Improvement over BM25](outputs/retrieval_lab/test__final_v3/figures/fig2_delta_vs_bm25.png)
+
+### Why it wins (it is structure, not semantics)
+
+1. **Field weighting** (+0.136): 90.6% of the corpus is `degree_requirement_pool_course` rows —
+   near-identical prose differing *only* in program / catalog term / requirement category. BM25F
+   normalises each field by its own length, so a two-token course-code hit is not drowned by the body.
+2. **Metadata + record-type boosts** (+0.182): entity agreement lifts `catalog_year` queries from
+   0.500 to 1.000. A separate *record-granularity* signal fixed a real failure — "how many credits
+   of free electives are required" was returning individual course rows because 27,490 course rows
+   swamp 332 category rows.
+3. **Soft boosts beat hard filters** (+0.112): `metadata_filter_bm25f` scores 0.8056 with the same
+   extractor. A hard filter on a *predicted* entity is unrecoverable; a boost degrades gracefully.
+4. **The dense half adds only +0.024** — real but modest, and the only thing separating the hybrid
+   from the pure-lexical runner-up.
+
+### Negative results (kept, not hidden)
+
+- **Neither dense model beats BM25.** `dense_e5_small` 0.5832 vs baseline 0.5992;
+  `dense_minilm` 0.2685. Embeddings blur exactly the fields that disambiguate sibling rows.
+- **The Turkish tokenizer fix alone does nothing** (−0.0060, p = 0.249) even though it genuinely
+  repairs `müfredatında → ['m','fredat','nda']`. These queries are carried by course codes and
+  term numbers, not Turkish word tokens.
+- **The shipped BM25 is crippled by `_SUBSET_CAP = 3000`** in `modules/bm25_retriever.py`: in
+  standalone `bm25` mode it scores an arbitrary ~10% slice of a 30,343-chunk corpus, so gold
+  outside that window is unreachable at any K. That is the 0.0681 vs 0.5992 gap.
+
+![Subgroup performance](outputs/retrieval_lab/test__final_v3/figures/fig4_subgroups.png)
+
+---
+
+## Reranking benchmark (2026-07-28) — measured, NOT enabled by default
+
+Full report: **[`docs/reranking_benchmark_report.md`](docs/reranking_benchmark_report.md)** ·
+frozen rule: **[`docs/reranking_winner_selection_preregistration.md`](docs/reranking_winner_selection_preregistration.md)**
+
+### Candidate ceiling first
+
+A reranker can only reorder what the first stage retrieved, so the ceiling was computed before
+spending compute. Measured on dev (n = 238):
+
+| Depth | Candidate Hit | Oracle Hit@1 | Queries with no gold |
+|---:|---:|---:|---:|
+| 10 | 0.9580 | 0.9580 | 10 |
+| 25 | 0.9622 | 0.9622 | 9 |
+| 50 | 0.9664 | 0.9664 | 8 |
+| 100 | 0.9706 | 0.9706 | 7 |
+
+Depth 100 buys **+0.013** oracle Hit@1 over depth 10 for 10× the compute — so all reranking runs
+use **depth 10**, where `Hit@10` is also preserved by construction.
+
+![Candidate depth ablation](outputs/reranking/figures/fig9_candidate_depth.png)
+
+### Result: quality passes, latency fails
+
+`fuse_bge_first` (RRF of BGE-reranker-v2-m3 over metadata-prefixed documents + the first-stage
+order) on the held-out test split, n = 499:
+
+| Metric | Baseline | Fusion | Δ | 95% CI | p |
+|---|---:|---:|---:|---:|---:|
+| Hit@1 | 0.7535 | 0.7976 | **+0.0441** | [+0.0180, +0.0721] | 0.0016 |
+| Recall@1 | 0.7505 | 0.7946 | +0.0441 | [+0.0190, +0.0711] | 0.0015 |
+| Recall@3 | 0.8747 | 0.9088 | +0.0341 | [+0.0140, +0.0541] | 0.0017 |
+| MRR@10 | 0.8228 | 0.8567 | +0.0340 | [+0.0192, +0.0492] | 0.0001 |
+| nDCG@10 | 0.8491 | 0.8754 | +0.0263 | [+0.0154, +0.0374] | 0.0001 |
+| Hit@10 | 0.9419 | 0.9419 | 0.0000 | — | preserved exactly |
+
+All six quality criteria pass, with no subgroup regression worse than −0.024. **It fails the
+frozen latency criterion**: P95 1,471 ms against a 1,000 ms interactive budget. Per the
+pre-registration it is therefore **reported, not defaulted** — enable with
+`ADVISU_RERANK=fuse_bge_first` when the extra ~1.4 s is acceptable (batch jobs, evaluation).
+
+![Reranking quality vs latency](outputs/reranking/figures/fig6_quality_latency.png)
+
+### Reranking negative results
+
+- **Every zero-shot reranker alone lost to the first-stage order on dev.** The incumbent
+  `cross-encoder/ms-marco-MiniLM-L-6-v2` is the worst: Hit@1 0.5504 vs 0.8109.
+- **Document format dominates model choice.** Feeding the reranker metadata-prefixed documents
+  instead of raw body text is worth +0.193 Hit@1 for ms-marco and +0.071 for BGE. A reranker that
+  cannot see program / catalog year / category cannot rank on them.
+- **Deeper pools actively hurt.** At depth 25 ms-marco drags candidates from ranks 11–25 into the
+  top 10 and drops Hit@10 from 0.9580 to 0.8529.
+- **A domain instruction helps Qwen3** (0.7521 vs 0.7143 for the default instruction), but it is
+  still below baseline and costs ~2.3 s/query.
+- **The metadata rule reranker is nearly a no-op** (+0.008 Hit@1) — because the first stage
+  *already* applies metadata boosting, so the structural signal is consumed upstream.
+
+![Win / tie / loss](outputs/reranking/figures/fig5_win_tie_loss.png)
+
+### Which retriever for which query
+
+| Query type | Path | Evidence |
+|---|---|---|
+| Course, curriculum, program, minor, course advice | `hybrid_meta` | R@10 0.9419, Hit@1 0.7535 |
+| Low-resource / no dense model | `ADVISU_LAB_DENSE=false` → metadata BM25F | R@10 0.9178 but **Hit@1 0.7715 (higher)** |
+| Instructor reviews | existing Chroma hybrid | `retrieval_lab` indexes **no** review data — the filter now raises and falls back, logged at ERROR |
+| Exams, PDFs, uploaded documents | existing Chroma hybrid | same reason |
+| Graduation audit / remaining credits | deterministic `degree_audit` | `retrieval_policy` marks it authoritative and requires a profile |
+| Ambiguous / general | router, fuse if needed | — |
+| **Reranking** | **off by default** | quality wins are real but cost 1.5 s; incumbent ms-marco actively harms |
+
+---
+
 ## Known limitations / next work
 
 - **No long-conversation compaction**: chat history is stored in full, but only the last 5 turns

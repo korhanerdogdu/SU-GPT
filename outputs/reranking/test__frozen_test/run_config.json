@@ -1,0 +1,17 @@
+{
+  "first_stage_run": "../outputs/retrieval_lab/test__final_v3",
+  "first_stage_method": "hybrid_bm25f_e5_meta",
+  "split": "test",
+  "rerankers": [
+    "original_ranking",
+    "metadata_rule_rerank",
+    "bge_v2m3_structq",
+    "fuse_bge_first"
+  ],
+  "depths": [
+    10
+  ],
+  "n_queries": 499,
+  "corpus_fingerprint": "9918ab2b1f34ebe9",
+  "timestamp_utc": "2026-07-28T09:50:52Z"
+}

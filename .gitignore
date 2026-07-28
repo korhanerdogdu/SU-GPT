@@ -48,3 +48,8 @@ ACADEMIC_ADVISING_DATA_ROADMAP.md
 Thumbs.db
 .vscode/*
 !.vscode/extensions.json
+
+# Retrieval lab: cached corpus embeddings are large, machine-specific and fully
+# regenerable from the corpus (keyed by corpus fingerprint). Never commit them.
+outputs/retrieval_cache/
+outputs/retrieval_lab/*/rankings/
