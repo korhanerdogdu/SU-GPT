@@ -115,15 +115,15 @@ export default function LoginPage() {
         }}
       >
         <div className="relative w-full max-w-2xl">
-          {/* big = full lockup with the "Sabancı University · Academic Advisor" descriptor, drawn
-              as navy ink on transparent. The campus panel is always dark, so the mark rides a
-              white card with a deep soft shadow — this both makes the navy readable and gives the
-              login its floating "card on photo" hero. */}
-          <div className="inline-flex rounded-3xl bg-white p-6 shadow-[0_30px_80px_-20px_rgba(0,0,0,0.6)] ring-1 ring-black/10 sm:p-8">
+          {/* big = full lockup (navy ink). It reads best on a light ground, so it rides a soft
+              blue-white card that harmonises with the navy brand. The colour is an explicit hex,
+              NOT `.bg-white` — the dark theme repaints `.bg-white` to navy, which was making the
+              navy descriptor unreadable. */}
+          <div className="inline-block rounded-3xl bg-[#eef3fb] p-6 shadow-[0_28px_70px_-22px_rgba(0,0,0,0.65)] ring-1 ring-[#003B73]/10 sm:p-7">
             <img
               src="/assets/big.png"
               alt="adviSU — Sabancı University Academic Advisor"
-              className="w-[min(72vw,20rem)]"
+              className="w-[min(80vw,26rem)]"
             />
           </div>
 

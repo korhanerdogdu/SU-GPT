@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
-import { ArrowLeft, GraduationCap, Loader2 } from "lucide-react";
+import { ArrowLeft, FileSpreadsheet, GraduationCap, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/AuthContext";
 import ThemeToggle from "@/components/ThemeToggle";
+import { exportAuditXlsx } from "@/lib/export-xlsx";
 import {
   getCurricula,
   getDegreeAudit,
@@ -133,11 +134,23 @@ export default function ProfilePage() {
 
         {/* Audit */}
         <section className="rounded-xl border border-[#D8E6F3] bg-white p-5 shadow-sm">
-          <div className="mb-4 flex items-center justify-between">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-lg font-semibold text-[#003B73]">Degree audit</h2>
-            <Button onClick={handleAudit} disabled={auditing} variant="outline" className="border-[#004B93] text-[#004B93]">
-              {auditing ? <Loader2 className="mr-2 animate-spin" size={16} /> : null} Run audit
-            </Button>
+            <div className="flex items-center gap-2">
+              {audit && audit.categories && (
+                <Button
+                  onClick={() => exportAuditXlsx(audit, username)}
+                  variant="outline"
+                  size="sm"
+                  className="border-[#0f7a3d] text-[#0f7a3d] hover:bg-[#0f7a3d]/5"
+                >
+                  <FileSpreadsheet className="mr-1.5" size={15} /> Excel
+                </Button>
+              )}
+              <Button onClick={handleAudit} disabled={auditing} variant="outline" className="border-[#004B93] text-[#004B93]">
+                {auditing ? <Loader2 className="mr-2 animate-spin" size={16} /> : null} Run audit
+              </Button>
+            </div>
           </div>
 
           {!audit && (

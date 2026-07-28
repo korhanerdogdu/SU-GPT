@@ -1,4 +1,10 @@
-import { Compass, GraduationCap, LibraryBig, CalendarRange } from "lucide-react";
+import {
+  ArrowUpRight,
+  CalendarRange,
+  Compass,
+  GraduationCap,
+  LibraryBig,
+} from "lucide-react";
 import ChatInput from "./ChatInput";
 
 interface Props {
@@ -31,7 +37,7 @@ export default function EmptyState({ name, onSend, disabled }: Props) {
         <div className="absolute left-1/2 top-1/2 h-[42rem] w-[42rem] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[radial-gradient(circle,_rgba(214,161,58,0.16)_0%,_rgba(0,75,147,0.12)_38%,_transparent_70%)] blur-2xl" />
       </div>
 
-      <div className="relative flex w-full max-w-2xl flex-col items-center text-center">
+      <div className="relative flex w-full max-w-xl flex-col items-center text-center">
         <img
           src="/assets/small_witihoutbg.png"
           alt="adviSU"
@@ -49,17 +55,21 @@ export default function EmptyState({ name, onSend, disabled }: Props) {
           <ChatInput variant="hero" onSend={onSend} disabled={disabled} autoFocus />
         </div>
 
-        <div className="mt-6 flex flex-wrap items-center justify-center gap-2.5">
+        {/* Starters as a clean vertical list (ChatGPT-style): icon chip · label · hover arrow. */}
+        <div className="mt-5 w-full space-y-2 text-left">
           {STARTERS.map(({ label, icon: Icon }) => (
             <button
               key={label}
               type="button"
               onClick={() => onSend(label)}
               disabled={disabled}
-              className="group flex items-center gap-2 rounded-full border border-border bg-card px-4 py-2 text-sm text-foreground shadow-sm transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50"
+              className="group flex w-full items-center gap-3 rounded-2xl border border-border/70 bg-card/50 px-4 py-3 text-sm text-foreground backdrop-blur-sm transition-all hover:border-primary/30 hover:bg-card hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50"
             >
-              <Icon className="h-4 w-4 text-primary transition-transform group-hover:scale-110" />
-              {label}
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary transition-colors group-hover:bg-primary/15">
+                <Icon className="h-[1.05rem] w-[1.05rem]" />
+              </span>
+              <span className="flex-1 font-medium">{label}</span>
+              <ArrowUpRight className="h-4 w-4 shrink-0 -translate-x-1 text-muted-foreground opacity-0 transition-all group-hover:translate-x-0 group-hover:opacity-100" />
             </button>
           ))}
         </div>

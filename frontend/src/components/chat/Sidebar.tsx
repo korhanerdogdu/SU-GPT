@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { Link } from "react-router-dom";
 import {
   BookOpen,
@@ -58,6 +58,37 @@ export default function Sidebar({
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
 
+  // Drag-resizable width (persisted). Collapse is a separate control; this only tunes the
+  // expanded width between sensible bounds.
+  const MIN_W = 232;
+  const MAX_W = 480;
+  const [width, setWidth] = useState<number>(() => {
+    const stored = Number(localStorage.getItem("advisu-sidebar-width"));
+    return stored >= MIN_W && stored <= MAX_W ? stored : 288;
+  });
+  useEffect(() => {
+    localStorage.setItem("advisu-sidebar-width", String(width));
+  }, [width]);
+
+  function startResize(e: ReactMouseEvent) {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = width;
+    function onMove(ev: globalThis.MouseEvent) {
+      setWidth(Math.min(MAX_W, Math.max(MIN_W, startW + (ev.clientX - startX))));
+    }
+    function onUp() {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+    }
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }
+
   function beginRename(item: ConversationSummary) {
     setEditing(item.session_id);
     setDraft(item.title);
@@ -101,21 +132,22 @@ export default function Sidebar({
         />
       )}
       <aside
-        className={`fixed inset-y-0 left-0 z-40 flex w-[18rem] shrink-0 flex-col border-r border-border bg-card shadow-xl transition-transform md:static md:shadow-none ${
+        style={{ width }}
+        className={`fixed inset-y-0 left-0 z-40 flex shrink-0 flex-col border-r border-border bg-card shadow-xl transition-transform md:relative md:shadow-none ${
           mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
         }`}
       >
         <div className="flex items-center justify-between px-5 pb-4 pt-5">
-          {/* mid = compact horizontal lockup (navy ink on transparent). On dark surfaces it
-              rides a soft cream plate so the navy "SU" and book covers stay readable; on light
-              surfaces the sidebar is already pale, so the mark sits directly with no plate. */}
+          {/* mid = compact horizontal lockup (navy ink on transparent, now tightly trimmed so it
+              fills its box). In dark mode a soft white glow keeps the navy "SU" and book covers
+              legible without any plate. */}
           <img
             src="/assets/mid.png"
             alt="adviSU"
-            className={`w-auto ${
+            className={`h-12 w-auto ${
               resolvedTheme === "dark"
-                ? "h-9 rounded-lg bg-[#f7ede4] px-2.5 py-1.5 shadow-sm ring-1 ring-black/5"
-                : "h-10"
+                ? "[filter:drop-shadow(0_0_9px_rgba(255,255,255,0.6))]"
+                : ""
             }`}
           />
           <button
@@ -140,7 +172,7 @@ export default function Sidebar({
         </div>
 
         <div className="mt-5 flex-1 overflow-y-auto px-3 pb-4 scrollbar-thin">
-          <h3 className="mb-2 px-2 font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+          <h3 className="mb-2 px-2 text-xs font-medium text-muted-foreground/80">
             Sohbet geçmişi
           </h3>
           {conversations.length === 0 ? (
@@ -154,8 +186,8 @@ export default function Sidebar({
                 return (
                   <li
                     key={item.session_id}
-                    className={`group rounded-lg border ${
-                      active ? "border-primary/30 bg-primary/10" : "border-transparent hover:bg-muted"
+                    className={`group rounded-xl transition-colors ${
+                      active ? "bg-primary/10" : "hover:bg-muted/70"
                     }`}
                   >
                     <div className="flex items-start">
@@ -180,10 +212,12 @@ export default function Sidebar({
                         ) : (
                           <span className="flex items-center gap-1.5">
                             {item.pinned && <Pin className="h-3 w-3 shrink-0 text-primary" />}
-                            <span className="block truncate text-sm text-foreground">{item.title}</span>
+                            <span className={`block truncate text-[0.9rem] ${active ? "font-medium text-primary" : "text-foreground"}`}>
+                              {item.title}
+                            </span>
                           </span>
                         )}
-                        <span className="mt-0.5 block font-mono text-[9px] uppercase tracking-[0.12em] text-muted-foreground">
+                        <span className="mt-0.5 block text-[11px] text-muted-foreground">
                           {relativeTime(item.updated_at)}
                         </span>
                       </button>
@@ -244,6 +278,18 @@ export default function Sidebar({
               <LogOut className="h-4 w-4" />
             </button>
           </div>
+        </div>
+
+        {/* Drag handle: resize the sidebar width (desktop only). */}
+        <div
+          onMouseDown={startResize}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Kenar çubuğunu yeniden boyutlandır"
+          title="Sürükleyerek genişliği ayarla"
+          className="group absolute inset-y-0 -right-1 z-10 hidden w-2 cursor-col-resize md:block"
+        >
+          <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent transition-colors group-hover:bg-primary/50" />
         </div>
       </aside>
     </>

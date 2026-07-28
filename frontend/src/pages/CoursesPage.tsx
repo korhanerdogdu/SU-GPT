@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { ArrowLeft, BookOpen, Check, Loader2, Save, Search, Upload, X } from "lucide-react";
+import { ArrowLeft, BookOpen, Check, FileSpreadsheet, Loader2, Save, Search, Upload, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/AuthContext";
 import ThemeToggle from "@/components/ThemeToggle";
+import { exportCoursesXlsx } from "@/lib/export-xlsx";
 import {
   fetchCourses,
   fetchUserCourses,
@@ -172,12 +173,24 @@ export default function CoursesPage() {
       <main className="mx-auto grid max-w-5xl gap-6 p-6 md:grid-cols-2">
         {/* Completed courses — the answer to "what did I select?" */}
         <section className="rounded-xl border border-[#D8E6F3] bg-white p-5 shadow-sm">
-          <div className="mb-4 flex items-baseline justify-between gap-3">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-lg font-semibold text-[#003B73]">Completed courses</h2>
-            <span className="text-sm text-[#4A5568]">
-              <span className="font-semibold text-[#004B93]">{saved.length}</span> saved ·{" "}
-              <span className="font-semibold text-[#004B93]">{totalSu}</span> SU
-            </span>
+            <div className="flex items-center gap-3">
+              <span className="text-sm text-[#4A5568]">
+                <span className="font-semibold text-[#004B93]">{saved.length}</span> saved ·{" "}
+                <span className="font-semibold text-[#004B93]">{totalSu}</span> SU
+              </span>
+              {saved.length > 0 && (
+                <Button
+                  onClick={() => exportCoursesXlsx(saved, user?.username ?? "student")}
+                  variant="outline"
+                  size="sm"
+                  className="border-[#0f7a3d] text-[#0f7a3d] hover:bg-[#0f7a3d]/5"
+                >
+                  <FileSpreadsheet className="mr-1.5" size={15} /> Excel
+                </Button>
+              )}
+            </div>
           </div>
 
           {saved.length === 0 ? (
