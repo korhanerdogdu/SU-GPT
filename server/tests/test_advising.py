@@ -15,7 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ.setdefault("MONGO_URI", "mongodb://localhost:27017")  # lazy; never dialed in unit tests
 
-from modules import curriculum_registry, degree_audit
+from modules import curriculum_registry, degree_audit, course_planner
 from modules.retrieval_policy import build_metadata_filter, check_profile
 from modules.bm25_retriever import _tokenize, _is_narrowing
 from modules.conversation_memory import _automatic_title, extract_course_code, resolve_reference
@@ -266,6 +266,61 @@ def integration_tests():
     md = retrieve_documents(vs, "mathematics minor required courses", k=3, metadata_filter=mi)
     assert all(d.metadata.get("data_role") == "minor_requirement" for d in md)
     print("  integration: scope-isolation, hybrid exact-code, minor filter all OK")
+
+
+# ---- deterministic academic-stage planner ---------------------------------------------------
+
+_FRESHMAN_DONE = [
+    "IF 100", "MATH 101", "NS 101", "HIST 191", "SPS 101", "TLL 101", "CIP 101N",
+    "MATH 102", "NS 102", "AL 102", "HIST 192", "SPS 102", "TLL 102",
+]
+
+
+def test_planner_canonical_names_match_catalog():
+    # Failure D: names come from the canonical catalog, never invented.
+    assert course_planner.official_name("CS 308") == "Software Engineering"
+    assert course_planner.official_name("CS 300") == "Data Structures"
+    assert course_planner.official_name("CS 301") == "Algorithms"
+    assert course_planner.official_name("SPS 303") == "Law and Ethics"
+    assert course_planner.official_name("EE 417") == "Computer Vision"
+    assert course_planner.official_name("CS 412") == "Machine Learning"
+
+
+def test_planner_course_level():
+    assert course_planner.course_level("CS 445") == 400
+    assert course_planner.course_level("CS 201") == 200
+    assert course_planner.course_level("IF 100") == 100
+
+
+def test_planner_sophomore_gets_no_4xx_in_current_pool():
+    # Failure C: sophomore NLP student -> 4XX interest courses are FUTURE TARGETS, not current.
+    nlp = ["CS445", "CS455", "CS412", "EE417"]
+    ctx = course_planner.build_context("CS", _FRESHMAN_DONE + ["CS 201"], nlp)
+    # Isolate the actual sections (the words "future targets" also occur in the HARD RULES prose).
+    pool_start = ctx.index("CANDIDATE POOL")
+    future_start = ctx.index("FUTURE TARGETS (")
+    pool, future = ctx[pool_start:future_start], ctx[future_start:]
+    for code in ("CS 445", "CS 455", "CS 412", "EE 417"):
+        assert code not in pool, f"{code} must not be in the current candidate pool for a sophomore"
+        assert code in future, f"{code} should appear under future targets"
+    # 200-level required foundations ARE offered now
+    assert "CS 204" in pool and "MATH 203" in pool
+
+
+def test_planner_prioritizes_missing_university_courses():
+    a = course_planner.analyze("CS", ["IF 100", "MATH 101", "NS 101"])
+    assert a.stage == "freshman_foundation"
+    missing = course_planner.missing_university_courses("CS", ["IF 100", "MATH 101", "NS 101"])
+    codes = " ".join(missing)
+    assert "MATH 102" in codes and "AL 102" in codes  # still owed
+    assert "MATH 101" not in codes  # already done
+
+
+def test_planner_prereq_blocks_ineligible_foundation():
+    # DSA 210 needs MATH 203; a student without it should see DSA 210 blocked, not eligible.
+    a = course_planner.analyze("CS", _FRESHMAN_DONE + ["CS 201"])
+    assert "DSA210" in [pc.code for pc in a.blocked_foundations]
+    assert "DSA210" not in [pc.code for pc in a.eligible_foundations]
 
 
 def _run() -> int:

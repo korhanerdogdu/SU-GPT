@@ -70,6 +70,7 @@ from modules.response_formatter import (
 from modules.rag_router import route_query
 from modules import curriculum_registry
 from modules import degree_audit
+from modules import course_planner
 from modules import conversation_memory
 from modules.retrieval_policy import build_metadata_filter, check_profile
 from modules.source_indexer import ensure_sources_indexed
@@ -168,6 +169,21 @@ MINOR_INTENT_RE = re.compile(
     r"\b(minor|yandal|yan dal|yan-dal)\b",
     re.IGNORECASE,
 )
+
+# "Kalan üniversite derslerim neler?" — a personal listing of still-missing first-year University
+# Courses. Requires both the "university course" phrase AND a listing/remaining cue so a generic
+# "üniversite dersleri nedir?" definition question does not trigger the deterministic list.
+_UNIVERSITY_PHRASE_RE = re.compile(r"(üniversite|universite|university)\s*(ders|course)", re.IGNORECASE)
+_LISTING_CUE_RE = re.compile(
+    r"\b(kalan|kalanlar|kalanları|eksik|neler|nedir listele|listele|hangileri|hangi|kaldı|"
+    r"remaining|missing|left|which|what)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_university_courses_query(question: str) -> bool:
+    q = question or ""
+    return bool(_UNIVERSITY_PHRASE_RE.search(q) and _LISTING_CUE_RE.search(q))
 
 COURSE_DETAIL_INTENT_RE = re.compile(
     r"\b("
@@ -360,18 +376,26 @@ def _recommendation_question_for_llm(question: str, taken_codes: list[str]) -> s
     taken = ", ".join(taken_codes) if taken_codes else "none"
     interest = _interest_label(question) or "the requested area"
     return (
-        "COURSE_RECOMMENDATION_MODE. The user is asking for course recommendations, "
-        "not graduation audit. Do not mention graduation status, 125/125 credits, or "
-        "category audit unless the user explicitly asks for it in this same message. "
-        "Never start with any sentence about checking graduation status. "
-        f"The user already provided the interest area: {interest}. Do not ask another "
-        "clarifying question about the area; produce the course program now. "
-        f"Already taken course codes, do not recommend any of these: {taken}. "
-        "If the obvious courses in the requested area are already taken, say that clearly "
-        "and recommend adjacent untaken courses only. "
-        "Unless the user asks for a different count, recommend exactly 5 untaken courses. "
-        "For each course, include: course code, title, instructor if available in context, "
-        "why it fits the interest area, and the schedule if available. "
+        "COURSE_RECOMMENDATION_MODE. The user wants course recommendations, not a graduation "
+        "audit. Do not open with graduation status or 125/125 credits. "
+        f"Interest area already given: {interest}; do not ask again — produce the plan now.\n"
+        "DETERMINISTIC PLANNER IS AUTHORITATIVE. The context contains a block "
+        "'[Source: Deterministic academic-stage planner (authoritative)]' with the student's "
+        "academic stage, a CANDIDATE POOL, and FUTURE TARGETS. You MUST obey it:\n"
+        "- Recommend ONLY courses from that CANDIDATE POOL. Never introduce a course that is not "
+        "listed there.\n"
+        "- Write each course EXACTLY as its 'CODE — Official Name' from that block. Never rename, "
+        "translate, or invent a course title.\n"
+        "- Place missing University Courses first, then missing 2XX required foundations, then "
+        "eligible electives that fit the interest.\n"
+        "- If the block says the student is sophomore level or below, put NO 4XX course in the "
+        "current-semester plan. List advanced interest courses under a separate 'Gelecek hedefler' "
+        "(future targets) section only, and briefly say which prerequisites are needed first.\n"
+        "- Do NOT output any instructor, weekday, time, room or section information, and do not "
+        "write placeholders for them.\n"
+        f"- Never recommend an already-taken course: {taken}.\n"
+        "Give the current-semester plan as a short markdown list of 'CODE — Name — one-line why', "
+        "then the 'Gelecek hedefler' section if any. Keep the explanation in the user's language.\n"
         f"Original user question: {question}"
     )
 
@@ -1280,6 +1304,32 @@ async def ask_question(
                 "curriculum_unavailable": gate.data_unavailable,
             })
 
+        # Deterministic academic follow-up (Failure A / "Kalan üniversite derslerim neler?"):
+        # list the exact still-missing first-year University Courses from code — never inferred
+        # from a credit gap, and never sent to the out-of-domain fallback.
+        if _is_university_courses_query(original_question) and username:
+            completed = await get_completed_course_codes(username)
+            missing = course_planner.missing_university_courses(program, completed)
+            if missing:
+                body = (
+                    "Tamamlaman gereken birinci sınıf Üniversite Dersleri:\n"
+                    + "\n".join(f"- {m}" for m in missing)
+                )
+            else:
+                body = "Birinci sınıf Üniversite Derslerinin tamamını tamamlamışsın."
+            uni_result = _stamp({
+                "response": body,
+                "sources": ["Deterministic academic-stage planner"],
+                "source_chunk_ids": [],
+                "intent": "universite_dersleri",
+            })
+            await conversation_memory.append_turn(
+                session_id, username=username, question=original_question,
+                answer=body, intent="universite_dersleri",
+                term_code=profile.get("curriculum_term"),
+            )
+            return uni_result
+
         # Graduation arithmetic and its immediate follow-ups are deterministic. This keeps
         # context stable and prevents implementation narration from leaking into the answer.
         if (graduation_intent or graduation_plan_intent) and program and profile.get("curriculum_term"):
@@ -1394,7 +1444,24 @@ async def ask_question(
                 ),
             )
         if recommendation_intent:
-            context_docs = _recommendation_support_documents(effective_question, taken_codes) + context_docs
+            # Deterministic, student-specific planner: canonical course names + an ordered,
+            # prerequisite-checked candidate pool + hard rules (University-course debt first,
+            # sophomores get no current 4XX, advanced interest courses become future targets).
+            # Injected first so it outranks the softer interest-hint documents below.
+            interest_key = _extract_interest_key(effective_question)
+            interest_codes = list(INTEREST_COURSE_HINTS.get(interest_key or "", []))
+            planner_doc = Document(
+                page_content=course_planner.build_context(program, taken_codes, interest_codes),
+                metadata={
+                    "source": "Academic-stage planner",
+                    "document_type": "academic_stage_plan",
+                },
+            )
+            context_docs = (
+                [planner_doc]
+                + _recommendation_support_documents(effective_question, taken_codes)
+                + context_docs
+            )
         if prior_turns:
             context_docs.insert(0, _conversation_context_document(prior_turns))
         context_docs.insert(0, _intent_context_document(intent, taken_codes))
