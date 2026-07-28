@@ -115,15 +115,17 @@ export default function LoginPage() {
         }}
       >
         <div className="relative w-full max-w-2xl">
-          {/* Reversed (knockout) lockup — the navy type is knocked out to white so the mark sits
-              directly on the photograph with no plate behind it, while the gold and teal accents
-              survive. Generated from adviSU-logo.png; see adviSU-logo-reversed.png. The soft
-              drop-shadow is what holds it against the brighter parts of the campus image. */}
-          <img
-            src="/assets/adviSU-logo-reversed.png"
-            alt="adviSU — Sabancı University Academic Advisor"
-            className="w-[min(100%,33rem)] drop-shadow-[0_4px_24px_rgba(0,0,0,0.55)]"
-          />
+          {/* big = full lockup with the "Sabancı University · Academic Advisor" descriptor, drawn
+              as navy ink on transparent. The campus panel is always dark, so the mark rides a
+              white card with a deep soft shadow — this both makes the navy readable and gives the
+              login its floating "card on photo" hero. */}
+          <div className="inline-flex rounded-3xl bg-white p-6 shadow-[0_30px_80px_-20px_rgba(0,0,0,0.6)] ring-1 ring-black/10 sm:p-8">
+            <img
+              src="/assets/big.png"
+              alt="adviSU — Sabancı University Academic Advisor"
+              className="w-[min(72vw,20rem)]"
+            />
+          </div>
 
           <div className="mt-9 max-w-lg">
             <TypedTagline />

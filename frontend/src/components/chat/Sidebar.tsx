@@ -14,6 +14,7 @@ import {
   X,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import { useTheme } from "@/contexts/ThemeContext";
 import type { ConversationSummary } from "@/lib/api";
 
 interface SidebarProps {
@@ -53,6 +54,7 @@ export default function Sidebar({
   onPinChat,
 }: SidebarProps) {
   const { user, signOut } = useAuth();
+  const { resolvedTheme } = useTheme();
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
 
@@ -104,7 +106,18 @@ export default function Sidebar({
         }`}
       >
         <div className="flex items-center justify-between px-5 pb-4 pt-5">
-          <img src="/assets/adviSU-logo-reversed.png" alt="adviSU" className="theme-logo w-36" />
+          {/* mid = compact horizontal lockup (navy ink on transparent). On dark surfaces it
+              rides a soft cream plate so the navy "SU" and book covers stay readable; on light
+              surfaces the sidebar is already pale, so the mark sits directly with no plate. */}
+          <img
+            src="/assets/mid.png"
+            alt="adviSU"
+            className={`w-auto ${
+              resolvedTheme === "dark"
+                ? "h-9 rounded-lg bg-[#f7ede4] px-2.5 py-1.5 shadow-sm ring-1 ring-black/5"
+                : "h-10"
+            }`}
+          />
           <button
             type="button"
             onClick={mobileOpen ? onCloseMobile : onToggle}

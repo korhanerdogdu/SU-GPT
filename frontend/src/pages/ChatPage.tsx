@@ -4,6 +4,7 @@ import Sidebar from "@/components/chat/Sidebar";
 import ChatHeader from "@/components/chat/ChatHeader";
 import ChatMessages, { type Message } from "@/components/chat/ChatMessages";
 import ChatInput from "@/components/chat/ChatInput";
+import EmptyState from "@/components/chat/EmptyState";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   askQuestionStream,
@@ -199,10 +200,18 @@ export default function ChatPage() {
           profileReady={profileReady}
           onOpenMenu={() => setMobileSidebarOpen(true)}
         />
-        <div className="flex-1 overflow-y-auto scrollbar-thin">
-          <ChatMessages messages={messages} showSources={user?.role === "admin"} />
-        </div>
-        <ChatInput onSend={handleSend} disabled={busy} />
+        {messages.length === 0 ? (
+          // Empty state owns its own centered composer (Claude/Gemini style), so the docked
+          // bar is not rendered here — there is exactly one input on screen.
+          <EmptyState name={user?.username} onSend={handleSend} disabled={busy} />
+        ) : (
+          <>
+            <div className="flex-1 overflow-y-auto scrollbar-thin">
+              <ChatMessages messages={messages} showSources={user?.role === "admin"} />
+            </div>
+            <ChatInput variant="docked" onSend={handleSend} disabled={busy} />
+          </>
+        )}
       </main>
     </div>
   );

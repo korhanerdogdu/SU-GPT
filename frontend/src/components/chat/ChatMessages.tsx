@@ -34,27 +34,8 @@ export default function ChatMessages({ messages, showSources }: ChatMessagesProp
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages]);
 
-  if (messages.length === 0) {
-    return (
-      <div className="flex h-full items-center justify-center px-6 py-10">
-        <div className="flex w-full max-w-xl flex-col items-center text-center">
-          <img
-            src="/assets/adviSU-logo-reversed.png"
-            alt="adviSU"
-            className="theme-logo w-[min(80%,17rem)] drop-shadow-[0_4px_24px_rgba(0,0,0,0.35)]"
-          />
-          <h2 className="mt-8 text-[2rem] font-semibold leading-tight tracking-tight text-foreground sm:text-[2.35rem]">
-            Mezuniyete hazır mıyız?
-          </h2>
-          <p className="mt-4 max-w-xl text-[1.02rem] leading-relaxed text-muted-foreground">
-            Derslerini, kalan kredilerini, seçmelilerini veya mezuniyet koşullarını sor.
-            “CS 201’i aldım” yazarak ders geçmişini de anında güncelleyebilirsin.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
+  // The empty state (centered greeting + composer + starters) is owned by ChatPage/EmptyState;
+  // this component only renders once there is at least one message.
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-6 px-4 py-8 md:px-8">
       {messages.map((message) => (
