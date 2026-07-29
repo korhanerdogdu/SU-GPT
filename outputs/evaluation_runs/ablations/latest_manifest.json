@@ -1,0 +1,58 @@
+{
+  "status": "completed",
+  "created_at": "2026-06-07T20:43:04.528590+00:00",
+  "config": "/Users/selmanyilmaz/SU-GPT-clone/server/evaluation/ablation_configs.yaml",
+  "quick": false,
+  "limit": 2,
+  "results": [
+    {
+      "mode": "bm25",
+      "top_k": 3,
+      "status": "skipped",
+      "reason": "output already exists",
+      "path": "/Users/selmanyilmaz/SU-GPT-clone/outputs/evaluation_runs/ablations/mode-bm25__topk-3__limit-2.json"
+    },
+    {
+      "mode": "dense",
+      "top_k": 3,
+      "status": "completed",
+      "path": "/Users/selmanyilmaz/SU-GPT-clone/outputs/evaluation_runs/ablations/mode-dense__topk-3__limit-2.json",
+      "summary": {
+        "avg_recall_at_k": 0.5,
+        "avg_mrr_at_k": 0.5,
+        "avg_ndcg_at_k": 0.5,
+        "hit_rate": 0.5,
+        "avg_latency_ms": 14421.345,
+        "avg_retrieval_latency_ms": 14421.27,
+        "avg_rerank_latency_ms": 0.0
+      }
+    },
+    {
+      "mode": "hybrid_rerank",
+      "top_k": 3,
+      "status": "completed",
+      "path": "/Users/selmanyilmaz/SU-GPT-clone/outputs/evaluation_runs/ablations/mode-hybrid_rerank__topk-3__limit-2.json",
+      "summary": {
+        "avg_recall_at_k": 0.0,
+        "avg_mrr_at_k": 0.0,
+        "avg_ndcg_at_k": 0.0,
+        "hit_rate": 0.0,
+        "avg_latency_ms": 52436.605,
+        "avg_retrieval_latency_ms": 48381.645,
+        "avg_rerank_latency_ms": 4047.57
+      }
+    }
+  ],
+  "prompt_strategy_status": [
+    {
+      "prompt_strategy": "few_shot",
+      "status": "skipped",
+      "reason": "not implemented yet"
+    },
+    {
+      "prompt_strategy": "expert_routed",
+      "status": "skipped",
+      "reason": "not implemented yet"
+    }
+  ]
+}

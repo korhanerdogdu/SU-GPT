@@ -178,12 +178,17 @@ def upsert_documents(vectorstore: Chroma, documents: list[Document], ids: list[s
     if collection is None or embedding_function is None:
         vectorstore.add_documents(documents=documents, ids=ids)
         return
-    collection.upsert(
-        ids=ids,
-        documents=[doc.page_content for doc in documents],
-        metadatas=[doc.metadata for doc in documents],
-        embeddings=embedding_function.embed_documents([doc.page_content for doc in documents]),
-    )
+    max_batch_size = getattr(getattr(collection, "_client", None), "max_batch_size", None) or 5000
+    for start in range(0, len(documents), max_batch_size):
+        batch_docs = documents[start : start + max_batch_size]
+        batch_ids = ids[start : start + max_batch_size]
+        page_contents = [doc.page_content for doc in batch_docs]
+        collection.upsert(
+            ids=batch_ids,
+            documents=page_contents,
+            metadatas=[doc.metadata for doc in batch_docs],
+            embeddings=embedding_function.embed_documents(page_contents),
+        )
 
 
 def ingest_file_paths(

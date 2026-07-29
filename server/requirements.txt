@@ -31,6 +31,9 @@ python-pptx  # PPTX slide extraction (Section 2)
 python-docx  # DOCX paragraph extraction (Section 2)
 beautifulsoup4  # HTML source material extraction
 
+# Retrieval (Section 3)
+rank-bm25  # BM25 lexical retrieval for bm25/hybrid/hybrid_rerank modes
+
 # Environment Variables
 python-dotenv
 

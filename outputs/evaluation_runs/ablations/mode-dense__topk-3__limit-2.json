@@ -1,0 +1,75 @@
+{
+  "status": "completed",
+  "created_at": "2026-06-07T20:41:19.639838+00:00",
+  "mode": "dense",
+  "top_k": 3,
+  "limit": 2,
+  "num_questions": 2,
+  "summary": {
+    "avg_recall_at_k": 0.5,
+    "avg_mrr_at_k": 0.5,
+    "avg_ndcg_at_k": 0.5,
+    "hit_rate": 0.5,
+    "avg_latency_ms": 14421.345,
+    "avg_retrieval_latency_ms": 14421.27,
+    "avg_rerank_latency_ms": 0.0
+  },
+  "rows": [
+    {
+      "query_id": "q001",
+      "mode": "dense",
+      "top_k": 3,
+      "retrieved_chunk_ids": [
+        "course:6ebc1627164d24b444e586f6:198:dec4241c6758461e",
+        "course:a5b71b0dbfc3ca1f4b833e01:198:0e13cdd4fbed0601",
+        "course:f23868b9fb1f16c74380e488:198:a0c08dc0ecd55efc"
+      ],
+      "retrieved_sources": [
+        "MAN major 202501 free CS 201",
+        "MAN major 202401 free CS 201",
+        "MAN major 202502 free CS 201"
+      ],
+      "expected_chunk_ids": [
+        "course:5a6a448569ef18c6d8137810:142:94223d119f7e6650"
+      ],
+      "expected_sources": [
+        "course catalog CS201"
+      ],
+      "latency_ms": 15633.23,
+      "retrieval_latency_ms": 15633.16,
+      "rerank_latency_ms": 0.0,
+      "hit": false,
+      "recall_at_k": 0.0,
+      "mrr_at_k": 0.0,
+      "ndcg_at_k": 0.0
+    },
+    {
+      "query_id": "q002",
+      "mode": "dense",
+      "top_k": 3,
+      "retrieved_chunk_ids": [
+        "course:5a6a448569ef18c6d8137810:150:5f9083e5db8d5499",
+        "course:c74e3c7f53930769626fe9fb:146:a608d5e009139c5d",
+        "course:16351d03a0887ccbbfb5543a:160:8a80f00770d049c9"
+      ],
+      "retrieved_sources": [
+        "course catalog CS300",
+        "PSY major 202502 free CS 300",
+        "DSA major 202502 free CS 300"
+      ],
+      "expected_chunk_ids": [
+        "course:5a6a448569ef18c6d8137810:150:5f9083e5db8d5499"
+      ],
+      "expected_sources": [
+        "course catalog CS300"
+      ],
+      "latency_ms": 13209.46,
+      "retrieval_latency_ms": 13209.38,
+      "rerank_latency_ms": 0.0,
+      "hit": true,
+      "recall_at_k": 1.0,
+      "mrr_at_k": 1.0,
+      "ndcg_at_k": 1.0
+    }
+  ]
+}

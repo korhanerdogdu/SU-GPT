@@ -1,0 +1,26 @@
+\begin{figure}[H]
+\centering
+\resizebox{0.94\linewidth}{!}{%
+\begin{tikzpicture}[
+  font=\scriptsize,
+  node distance=0.82cm and 0.95cm,
+  box/.style={draw, rounded corners=2pt, align=center, text width=2.85cm, minimum height=0.78cm, fill=gray!8, inner sep=4pt},
+  arrow/.style={-{Latex[length=2mm]}, thick}
+]
+\node[box] (bench) {68-question\\benchmark JSONL};
+\node[box, right=of bench] (modes) {Retrieval modes\\dense, hybrid rerank};
+\node[box, right=of modes] (metrics) {Recall@6\\MRR@6, nDCG@6};
+\node[box, below=of modes] (gen) {LLM answer\\generation};
+\node[box, right=of gen] (outputs) {\texttt{results.jsonl}\\\texttt{summary\_}\\\texttt{metrics.json}};
+\node[box, below=of outputs] (tables) {Report CSV tables\\failure seeds};
+\draw[arrow] (bench) -- (modes);
+\draw[arrow] (modes) -- (metrics);
+\draw[arrow] (modes) -- (gen);
+\draw[arrow] (metrics) -- (outputs);
+\draw[arrow] (gen) -- (outputs);
+\draw[arrow] (outputs) -- (tables);
+\end{tikzpicture}
+}
+\caption{Evaluation pipeline implemented for the current measured pilot run. Full 68-question, six-mode execution is supported by the CLI but remains to be run before final numeric claims are frozen.}
+\label{fig:evaluation-flow}
+\end{figure}

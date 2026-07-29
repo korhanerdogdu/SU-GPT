@@ -1,0 +1,33 @@
+{
+  "overall": {
+    "num_rows": 20
+  },
+  "modes": {
+    "dense": {
+      "num_rows": 10,
+      "avg_recall_at_k": 0.2,
+      "avg_mrr_at_k": 0.15,
+      "avg_ndcg_at_k": 0.163093,
+      "chunk_hit_rate": 0.2,
+      "source_hit_rate": 0.1,
+      "avg_latency_ms": 20052.806,
+      "avg_retrieval_latency_ms": 18359.922,
+      "avg_rerank_latency_ms": 0.0,
+      "avg_generation_latency_ms": 1691.429,
+      "total_estimated_cost_usd": 0.00052968
+    },
+    "hybrid_rerank": {
+      "num_rows": 10,
+      "avg_recall_at_k": 0.1,
+      "avg_mrr_at_k": 0.1,
+      "avg_ndcg_at_k": 0.1,
+      "chunk_hit_rate": 0.1,
+      "source_hit_rate": 0.0,
+      "avg_latency_ms": 42220.538,
+      "avg_retrieval_latency_ms": 36604.044,
+      "avg_rerank_latency_ms": 3350.343,
+      "avg_generation_latency_ms": 2245.947,
+      "total_estimated_cost_usd": 0.00052668
+    }
+  }
+}

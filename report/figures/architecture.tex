@@ -1,0 +1,33 @@
+\begin{figure}[H]
+\centering
+\resizebox{0.96\linewidth}{!}{%
+\begin{tikzpicture}[
+  font=\scriptsize,
+  node distance=0.78cm and 0.95cm,
+  box/.style={draw, rounded corners=2pt, align=center, text width=2.45cm, minimum height=0.82cm, fill=blue!6, inner sep=4pt},
+  store/.style={draw, rounded corners=2pt, align=center, text width=2.55cm, minimum height=0.82cm, fill=green!8, inner sep=4pt},
+  model/.style={draw, rounded corners=2pt, align=center, text width=2.65cm, minimum height=0.82cm, fill=orange!10, inner sep=4pt},
+  arrow/.style={-{Latex[length=2mm]}, thick}
+]
+\node[box] (ui) {React/Vite\\Frontend};
+\node[box, right=of ui] (api) {FastAPI\\Backend};
+\node[box, right=of api] (router) {Intent Router\\and Guards};
+\node[store, below=of api] (mongo) {MongoDB\\Source of Truth};
+\node[store, right=of router] (chroma) {ChromaDB\\\texttt{su\_knowledge}};
+\node[model, below=of router] (embed) {MiniLM +\\Cross-Encoder};
+\node[model, right=of embed] (llm) {API-hosted\\LLM};
+\node[box, right=of llm] (answer) {Answer\\Sources + Chunk IDs};
+\draw[arrow] (ui) -- node[above]{question} (api);
+\draw[arrow] (api) -- (router);
+\draw[arrow] (router) -- node[above]{filters} (chroma);
+\draw[arrow] (chroma) |- (embed);
+\draw[arrow] (embed) -- node[below]{top-$k$} (llm);
+\draw[arrow] (mongo) -- node[left]{student context} (api);
+\draw[arrow] (api) |- (llm);
+\draw[arrow] (llm) -- (answer);
+\draw[arrow] (answer) |- (ui);
+\end{tikzpicture}
+}
+\caption{Runtime architecture of SU-GPT. The measured local configuration uses MongoDB via Docker and ChromaDB persistence; the storage contract is compatible with a later managed deployment.}
+\label{fig:architecture}
+\end{figure}
