@@ -1,15 +1,13 @@
-import { useEffect, useRef } from "react";
-import { Download, Loader2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Check, Copy, Download, Loader2 } from "lucide-react";
+import { Link } from "react-router-dom";
+import * as XLSX from "xlsx";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import "katex/dist/katex.min.css";
-import {
-  absoluteApiUrl,
-  type StructuredContent,
-  type StructuredTable,
-} from "@/lib/api";
+import { type StructuredContent, type StructuredTable } from "@/lib/api";
 
 export interface Message {
   id: string;
@@ -82,13 +80,11 @@ function MessageBubble({
             {message.structuredContent && (
               <StructuredSections content={message.structuredContent} />
             )}
-            {message.exportLinks && Object.keys(message.exportLinks).length > 0 && (
-              <ExportLinks links={message.exportLinks} />
-            )}
+            {/* Closing summary, written directly with no "Kısa Özet" heading. Export buttons live
+                on each table (top-right), never appended to the message. */}
             {!message.pending && message.summary && (
               <section className="mt-5 border-t border-border pt-4">
-                <h3 className="mb-1 font-semibold text-primary">Kısa Özet</h3>
-                <p className="leading-relaxed">{message.summary}</p>
+                <p className="leading-relaxed text-muted-foreground">{message.summary}</p>
               </section>
             )}
           </>
@@ -128,11 +124,48 @@ function withoutEmbeddedSummary(content: string, summary?: string) {
 function StructuredSections({ content }: { content: StructuredContent }) {
   const tables = content.tables ?? [];
   if (tables.length === 0) return null;
+  const crns = content.crns ?? [];
   return (
     <div className="mt-5 space-y-4 border-t border-border pt-4">
       {tables.map((table) => (
         <StructuredTableView key={table.id} table={table} />
       ))}
+      {crns.length > 0 && <CopyCrns crns={crns} />}
+      {content.kind === "course_schedule" && (
+        <Link
+          to="/schedule"
+          className="inline-flex items-center rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+        >
+          Ders Programına Git
+        </Link>
+      )}
+    </div>
+  );
+}
+
+/** "Copy CRNs" — one click puts the schedule's registration CRNs on the clipboard. */
+function CopyCrns({ crns }: { crns: string[] }) {
+  const [copied, setCopied] = useState(false);
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(crns.join(" "));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      /* clipboard blocked — no-op */
+    }
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <button
+        type="button"
+        onClick={copy}
+        className="flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs font-medium text-primary hover:bg-muted"
+      >
+        {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+        {copied ? "Kopyalandı" : "CRN'leri kopyala"}
+      </button>
+      <span className="font-mono text-[11px] text-muted-foreground">{crns.join(" ")}</span>
     </div>
   );
 }
@@ -155,18 +188,41 @@ function StructuredTableView({ table }: { table: StructuredTable }) {
     URL.revokeObjectURL(url);
   }
 
+  function downloadXlsx() {
+    const header = table.columns.map((column) => column.label);
+    const body = table.rows.map((row) =>
+      table.columns.map((column) => row[column.key] ?? ""),
+    );
+    const ws = XLSX.utils.aoa_to_sheet([header, ...body]);
+    ws["!cols"] = table.columns.map((column) => ({
+      wch: Math.max(12, Math.min(48, column.label.length + 6)),
+    }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Veri");
+    XLSX.writeFile(wb, `${table.id}.xlsx`);
+  }
+
   return (
     <section>
       <div className="mb-2 flex items-center justify-between gap-3">
         <h3 className="font-semibold text-foreground">{table.title}</h3>
         {table.exportable && (
-          <button
-            type="button"
-            onClick={downloadCsv}
-            className="flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
-          >
-            <Download className="h-3.5 w-3.5" /> CSV
-          </button>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <button
+              type="button"
+              onClick={downloadCsv}
+              className="flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              <Download className="h-3.5 w-3.5" /> CSV
+            </button>
+            <button
+              type="button"
+              onClick={downloadXlsx}
+              className="flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              <Download className="h-3.5 w-3.5" /> Excel
+            </button>
+          </div>
         )}
       </div>
       <div className="overflow-x-auto rounded-lg border border-border">
@@ -194,23 +250,6 @@ function StructuredTableView({ table }: { table: StructuredTable }) {
         </table>
       </div>
     </section>
-  );
-}
-
-function ExportLinks({ links }: { links: Record<string, string> }) {
-  return (
-    <div className="mt-4 flex flex-wrap gap-2">
-      {Object.entries(links).map(([label, path]) => (
-        <a
-          key={label}
-          href={absoluteApiUrl(path)}
-          className="flex items-center gap-1 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs font-medium text-primary hover:bg-muted"
-        >
-          <Download className="h-3.5 w-3.5" />
-          {label.split("_").join(" ").toUpperCase()}
-        </a>
-      ))}
-    </div>
   );
 }
 

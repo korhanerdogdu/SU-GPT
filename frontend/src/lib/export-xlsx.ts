@@ -1,5 +1,6 @@
 import * as XLSX from "xlsx";
 import type { Course, DegreeAudit } from "./api";
+import { formatMeeting, type ScheduleDocument } from "./schedule";
 
 /**
  * Real .xlsx export (SheetJS) built from the SAME structured data the pages render — never from
@@ -96,4 +97,42 @@ export function exportAuditXlsx(audit: DegreeAudit, username: string) {
   }
 
   XLSX.writeFile(wb, `advisu-mezuniyet-denetimi-${username}-${stamp()}.xlsx`);
+}
+
+/** Weekly schedule → a registration-ready sheet with every selected CRN and meeting. */
+export function exportScheduleXlsx(schedule: ScheduleDocument, username: string) {
+  const header = [
+    "Ders",
+    "Ders Adı",
+    "Tür",
+    "CRN",
+    "Section",
+    "Gün / Saat",
+    "Yer",
+    "Öğretim Üyesi",
+  ];
+  const body = schedule.items.map((item) => [
+    item.courseCode,
+    item.title,
+    item.component,
+    item.crn,
+    item.section,
+    item.meetings.length > 0 ? item.meetings.map(formatMeeting).join(", ") : "TBA",
+    item.location,
+    item.instructor,
+  ]);
+  const ws = XLSX.utils.aoa_to_sheet([
+    [`Dönem: ${schedule.termLabel}`],
+    [],
+    header,
+    ...body,
+  ]);
+  cols(ws, [14, 40, 18, 10, 10, 32, 36, 28]);
+  if (body.length > 0) {
+    const end = XLSX.utils.encode_cell({ r: body.length + 2, c: header.length - 1 });
+    ws["!autofilter"] = { ref: `A3:${end}` };
+  }
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Haftalık Program");
+  XLSX.writeFile(wb, `advisu-ders-programi-${username}-${stamp()}.xlsx`);
 }

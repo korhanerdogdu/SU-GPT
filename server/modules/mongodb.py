@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,14 @@ instructor_reviews = db["instructorReviews"]
 exams = db["exams"]
 embedding_cache = db["embeddingCache"]
 conversations = db["conversations"]
+
+
+class ScheduleRevisionConflict(RuntimeError):
+    """Raised when a manual edit was based on a stale saved-schedule revision."""
+
+    def __init__(self, current: dict[str, Any]):
+        super().__init__("Saved schedule was updated by another request")
+        self.current = current
 
 
 FALLBACK_COURSES = [
@@ -338,6 +347,70 @@ async def set_academic_profile(username: str, profile: dict[str, Any]) -> dict[s
         {"$set": {f"academic_profile.{k}": v for k, v in clean.items()}},
     )
     return await get_academic_profile(username)
+
+
+def _empty_user_schedule() -> dict[str, Any]:
+    return {"schedule": None, "revision": 0, "updated_at": None}
+
+
+async def get_user_schedule(username: str) -> dict[str, Any]:
+    """Return the user's editable weekly schedule and optimistic-lock metadata."""
+    user = await ensure_user(username)
+    stored = user.get("weekly_schedule") or {}
+    schedule = stored.get("schedule")
+    if not isinstance(schedule, dict):
+        return _empty_user_schedule()
+    return {
+        "schedule": schedule,
+        "revision": max(int(stored.get("revision") or 0), 0),
+        "updated_at": stored.get("updated_at"),
+    }
+
+
+async def set_user_schedule(
+    username: str,
+    schedule: dict[str, Any],
+    *,
+    expected_revision: int | None = None,
+) -> dict[str, Any]:
+    """Atomically replace one user's schedule.
+
+    ``expected_revision`` is optional for chat-generated replacement. Manual editors should send
+    the revision returned by GET; only one concurrent writer can then win and stale writes receive
+    a 409 from the API instead of silently overwriting a newer timetable.
+    """
+    if not isinstance(schedule, dict):
+        raise ValueError("schedule must be an object")
+    clean_username = str(username or "").strip()
+    if not clean_username:
+        raise ValueError("username is required")
+    if expected_revision is not None and expected_revision < 0:
+        raise ValueError("expected_revision cannot be negative")
+
+    await ensure_user(clean_username)
+    query: dict[str, Any] = {"username": clean_username}
+    if expected_revision == 0:
+        query["$or"] = [
+            {"weekly_schedule.revision": {"$exists": False}},
+            {"weekly_schedule.revision": 0},
+        ]
+    elif expected_revision is not None:
+        query["weekly_schedule.revision"] = expected_revision
+
+    updated_at = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    result = await users.update_one(
+        query,
+        {
+            "$set": {
+                "weekly_schedule.schedule": schedule,
+                "weekly_schedule.updated_at": updated_at,
+            },
+            "$inc": {"weekly_schedule.revision": 1},
+        },
+    )
+    if result.matched_count != 1:
+        raise ScheduleRevisionConflict(await get_user_schedule(clean_username))
+    return await get_user_schedule(clean_username)
 
 
 async def get_user_course_context(username: str | None) -> str:

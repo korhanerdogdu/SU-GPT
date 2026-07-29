@@ -4,6 +4,7 @@ import LoginPage from "./pages/LoginPage";
 import ChatPage from "./pages/ChatPage";
 import ProfilePage from "./pages/ProfilePage";
 import CoursesPage from "./pages/CoursesPage";
+import SchedulePage from "./pages/SchedulePage";
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const { isAuthenticated } = useAuth();
@@ -50,6 +51,14 @@ export default function App() {
         element={
           <RequireAuth>
             <CoursesPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/schedule"
+        element={
+          <RequireAuth>
+            <SchedulePage />
           </RequireAuth>
         }
       />

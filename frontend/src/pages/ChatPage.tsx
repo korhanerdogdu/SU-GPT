@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import Sidebar from "@/components/chat/Sidebar";
 import ChatHeader from "@/components/chat/ChatHeader";
@@ -13,11 +14,17 @@ import {
   getConversation,
   getProfile,
   listConversations,
+  saveUserSchedule,
   startNewSession,
   updateConversation,
   useSession,
   type ConversationSummary,
 } from "@/lib/api";
+import {
+  normaliseScheduleDocument,
+  scheduleFromStructuredContent,
+  storeLocalSchedule,
+} from "@/lib/schedule";
 
 function makeId() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -25,6 +32,7 @@ function makeId() {
 
 export default function ChatPage() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [messages, setMessages] = useState<Message[]>([]);
   const [busy, setBusy] = useState(false);
   const [sessionId, setSessionId] = useState<string>(() => currentSessionId());
@@ -102,6 +110,25 @@ export default function ChatPage() {
             : msg
         )
       );
+      const responseSchedule = normaliseScheduleDocument(res.schedule);
+      const generatedSchedule =
+        (responseSchedule?.items.length ? responseSchedule : null) ??
+        scheduleFromStructuredContent(res.structured_content);
+      if (generatedSchedule) {
+        storeLocalSchedule(user?.username, generatedSchedule);
+        toast.success("Yeni ders programın kaydedildi.", {
+          description: "Ders Programı sayfasında inceleyebilir ve düzenleyebilirsin.",
+          action: {
+            label: "Programa git",
+            onClick: () => navigate("/schedule"),
+          },
+        });
+        if (user?.username) {
+          void saveUserSchedule(user.username, generatedSchedule).catch(() => {
+            toast.warning("Program bu cihazda güvende; hesabına senkronize edilemedi.");
+          });
+        }
+      }
       void refreshConversations();
       setMobileSidebarOpen(false);
     } catch (err) {

@@ -15,6 +15,10 @@ server/.env
 server/uploaded_pdfs/
 server/uploaded_documents/
 server/chroma_store/
+# The production container writes to /app/chroma_store, which maps to this
+# repository-root directory in some local workflows. It is generated and can
+# be rebuilt from data/, so it must never be committed.
+chroma_store/
 sources/
 
 # Frontend

@@ -49,11 +49,14 @@ from modules.mongodb import (
     get_completed_course_codes,
     get_user_course_context,
     get_user_courses,
+    get_user_schedule,
     list_courses,
     mutate_user_courses_by_codes,
     seed_courses_from_catalog,
     set_academic_profile,
     set_user_courses,
+    set_user_schedule,
+    ScheduleRevisionConflict,
 )
 from modules.course_commands import parse_course_history_command
 from modules.profile_commands import parse_academic_profile_command, resolve_profile_update
@@ -71,6 +74,8 @@ from modules.rag_router import route_query
 from modules import curriculum_registry
 from modules import degree_audit
 from modules import course_planner
+from modules import major_advisor
+from modules import schedule_planner
 from modules import conversation_memory
 from modules.retrieval_policy import build_metadata_filter, check_profile
 from modules.source_indexer import ensure_sources_indexed
@@ -110,6 +115,69 @@ class ConversationUpdatePayload(BaseModel):
     pinned: bool | None = None
 
 
+class ScheduleSourcePayload(BaseModel):
+    name: str = Field(default="Sabanci University SUIS (BannerWeb)", max_length=200)
+    authority: str = Field(default="official", max_length=40)
+    snapshot_date: str = Field(default="", max_length=40)
+    scraped_at: str = Field(default="", max_length=60)
+
+
+class ScheduleMeetingPayload(BaseModel):
+    day_codes: list[str] = Field(default_factory=list, max_length=7)
+    day_names_tr: list[str] = Field(default_factory=list, max_length=7)
+    day_names_en: list[str] = Field(default_factory=list, max_length=7)
+    start_time: str | None = Field(default=None, max_length=5)
+    end_time: str | None = Field(default=None, max_length=5)
+    location: str = Field(default="", max_length=300)
+    instructors: str = Field(default="", max_length=300)
+    status: str = Field(default="tba", max_length=40)
+    start_date: str | None = Field(default=None, max_length=20)
+    end_date: str | None = Field(default=None, max_length=20)
+
+
+class ScheduleSectionPayload(BaseModel):
+    course_id: str = Field(default="", max_length=30)
+    title: str = Field(default="", max_length=300)
+    section_title: str = Field(default="", max_length=300)
+    crn: str = Field(default="", max_length=20)
+    section: str = Field(default="", max_length=30)
+    component: str = Field(default="Primary", max_length=60)
+    component_code: str = Field(default="", max_length=20)
+    component_label: str = Field(default="", max_length=60)
+    instructors: str = Field(default="", max_length=300)
+    locations: str = Field(default="", max_length=500)
+    tba: bool = False
+    meetings: list[ScheduleMeetingPayload] = Field(default_factory=list, max_length=14)
+    source_url: str = Field(default="", max_length=500)
+
+
+class ScheduleCoursePayload(BaseModel):
+    course_id: str = Field(min_length=1, max_length=30)
+    title: str = Field(default="", max_length=300)
+    sections: list[ScheduleSectionPayload] = Field(min_length=1, max_length=10)
+
+
+class WeeklySchedulePayload(BaseModel):
+    schema_version: int = Field(default=1, ge=1, le=1)
+    term: str = Field(min_length=6, max_length=6)
+    term_label: str = Field(default="", max_length=100)
+    generated_at: str = Field(default="", max_length=60)
+    origin: str = Field(default="manual", max_length=40)
+    # The string variant is accepted for the first schedule-page client, which sent
+    # source="manual". Persistence canonicalizes it to origin + the official source object.
+    source: ScheduleSourcePayload | str = Field(default_factory=ScheduleSourcePayload)
+    courses: list[ScheduleCoursePayload] = Field(default_factory=list, max_length=30)
+    crns: list[str] = Field(default_factory=list, max_length=100)
+    not_offered: list[str] = Field(default_factory=list, max_length=50)
+    unplaced: list[str] = Field(default_factory=list, max_length=50)
+    conflicts: list[dict] = Field(default_factory=list, max_length=100)
+
+
+class ScheduleSavePayload(BaseModel):
+    schedule: WeeklySchedulePayload
+    expected_revision: int | None = Field(default=None, ge=0)
+
+
 GRADUATION_INTENT_RE = re.compile(
     r"\b("
     r"mezuniyet|mezun|kredi|credit|credits|degree evaluation|degree audit|audit|"
@@ -139,6 +207,85 @@ EXPLICIT_RECOMMENDATION_RE = re.compile(
     r")",
     re.IGNORECASE,
 )
+
+# Menu option 5: a real, time-tabled, conflict-free weekly schedule (with CRNs), as opposed to the
+# times-less course list (ders_onerisi / "Hangi dersleri alayım"). Keyed off the word "program" /
+# "schedule" / "takvim" / "çakışmasız" — which the times-less list phrasing deliberately avoids.
+SCHEDULE_INTENT_RE = re.compile(
+    r"\b("
+    r"ders programı|ders programi|haftalık program|haftalik program|haftalık ders|haftalik ders|"
+    r"saatli program|saatli ders|çakışmasız|cakismasiz|program yap|program oluştur|program olustur|"
+    r"program çıkar|program cikar|program öner|program oner|takvim|weekly schedule|class schedule|"
+    r"schedule"
+    r")",
+    re.IGNORECASE,
+)
+
+# These two starters deliberately use natural student language instead of implementation labels.
+# They must remain deterministic even though their wording overlaps graduation/recommendation
+# keywords: "this term" opens the CRN-bearing timetable, while "until I graduate" keeps the
+# existing prerequisite-aware course-plan flow.
+CURRENT_TERM_SCHEDULE_RE = re.compile(
+    r"\b(?:bu|içinde bulunduğum|icinde bulundugum)\s+dönem\s+hangi\s+dersleri?\s+"
+    r"(?:alayım|alayim|almalıyım|almaliyim)\b|\bwhat\s+courses?\s+should\s+i\s+take\s+this\s+term\b",
+    re.IGNORECASE,
+)
+UNTIL_GRAD_RECOMMENDATION_RE = re.compile(
+    r"\bmezun\s+olana\s+kadar\s+hangi\s+dersleri?\s+(?:alayım|alayim|almalıyım|almaliyim)\b|"
+    r"\bwhat\s+courses?\s+should\s+i\s+take\s+until\s+i\s+graduate\b",
+    re.IGNORECASE,
+)
+
+HEAVY_LOAD_RE = re.compile(
+    r"\b(yoğun|yogun|ağır|agir|yüksek\s+tempo|yuksek\s+tempo|heavy|intensive)\b",
+    re.IGNORECASE,
+)
+HEAVY_NEGATION_RE = re.compile(
+    r"\b(?:yoğun|yogun|ağır|agir|heavy|intensive)\s+(?:olmasın|olmasin|istemiyorum|değil|degil|not)\b|"
+    r"\b(?:not|don't|do\s+not)\s+(?:heavy|intensive)\b",
+    re.IGNORECASE,
+)
+COURSE_COUNT_RE = re.compile(r"\b([1-8])\s*(?:tane\s*)?(?:ders|courses?)\b", re.IGNORECASE)
+COURSE_COUNT_WORD_RE = re.compile(
+    r"\b(bir|iki|üç|uc|dört|dort|beş|bes|altı|alti|yedi|sekiz|"
+    r"one|two|three|four|five|six|seven|eight)\s+(?:tane\s*)?(?:ders|courses?)\b",
+    re.IGNORECASE,
+)
+COURSE_COUNT_WORDS = {
+    "bir": 1, "iki": 2, "üç": 3, "uc": 3, "dört": 4, "dort": 4,
+    "beş": 5, "bes": 5, "altı": 6, "alti": 6, "yedi": 7, "sekiz": 8,
+    "one": 1, "two": 2, "three": 3, "four": 4,
+    "five": 5, "six": 6, "seven": 7, "eight": 8,
+}
+PAST_COURSE_COUNT_RE = re.compile(
+    r"^\s*(?:aldım|aldim|tamamladım|tamamladim|geçtim|gectim|bitirdim|"
+    r"completed|finished|passed|took)\b",
+    re.IGNORECASE,
+)
+
+
+def _recommendation_preferences(question: str) -> tuple[int, int, bool]:
+    """Return (soft course target, minimum SU credits, strict course-count limit).
+
+    Product invariant: a normal plan is at least 15 SU; an explicitly heavy plan is at least
+    18 SU. Only an explicit request for four-or-fewer courses is allowed to override the credit
+    floor, because the student's requested course-count cap is then the stronger constraint.
+    """
+    text = question or ""
+    numeric = COURSE_COUNT_RE.search(text)
+    word = COURSE_COUNT_WORD_RE.search(text)
+    count_match = numeric or word
+    requested_count = int(numeric.group(1)) if numeric else (
+        COURSE_COUNT_WORDS.get(word.group(1).lower()) if word else None
+    )
+    # "4 ders aldım" describes history, not a four-course request. Only the request form is
+    # allowed to relax the 15-SU product floor.
+    if count_match and PAST_COURSE_COUNT_RE.search(text[count_match.end():]):
+        requested_count = None
+    heavy = bool(HEAVY_LOAD_RE.search(text)) and not HEAVY_NEGATION_RE.search(text)
+    if requested_count is not None and requested_count <= 4:
+        return requested_count, 0, True
+    return requested_count or (6 if heavy else 5), 18 if heavy else 15, False
 
 STUDY_PLAN_INTENT_RE = re.compile(
     r"\b("
@@ -251,7 +398,7 @@ INTEREST_AREAS = {
 }
 
 COURSE_CODE_RE = re.compile(r"\b[A-Z]{2,5}\s*\d{3,5}\b", re.IGNORECASE)
-RECOMMENDATION_TERM = "202502"
+RECOMMENDATION_TERM = "202601"
 
 INTEREST_COURSE_HINTS = {
     "nlp": ["CS445", "CS455", "CS412", "CS415", "DSA440", "EE417", "ECON494", "CS460", "CS48004"],
@@ -357,6 +504,10 @@ def _resolve_intent(
         return "graduation_plan"
     if MINOR_INTENT_RE.search(question or ""):
         return "minor"
+    if CURRENT_TERM_SCHEDULE_RE.search(question or ""):
+        return "ders_programi"
+    if UNTIL_GRAD_RECOMMENDATION_RE.search(question or ""):
+        return "ders_onerisi"
     if _is_graduation_intent(question) and not _is_course_detail_like(question):
         return "mezuniyet_durumu"
     if _is_course_detail_like(question):
@@ -367,6 +518,10 @@ def _resolve_intent(
         return "major_secimi"
     if SPECIALIZATION_INTENT_RE.search(question or ""):
         return "alanda_ozellesme"
+    # A timetabled "program/schedule" request (option 5) is checked before the times-less course
+    # list (option 2) so the word "program" routes to the weekly-schedule builder.
+    if SCHEDULE_INTENT_RE.search(question or ""):
+        return "ders_programi"
     if _is_recommendation_intent(question):
         return "ders_onerisi"
     return detected_intent or "diger"
@@ -1006,6 +1161,54 @@ async def get_courses(search: str = "", limit: int = 200):
     return {"courses": await list_courses(search=search, limit=limit)}
 
 
+@app.get("/schedule/sections")
+async def search_schedule_sections(
+    term: str | None = None,
+    search: str = "",
+    limit: int = 80,
+    language: str = "tr",
+):
+    """Bounded search over the immutable official SUIS schedule snapshot."""
+    if len(search) > 120:
+        raise HTTPException(status_code=400, detail="search cannot exceed 120 characters")
+    if language not in {"tr", "en"}:
+        raise HTTPException(status_code=400, detail="language must be tr or en")
+    try:
+        return schedule_planner.search_sections_payload(
+            term=term,
+            search=search,
+            limit=limit,
+            language=language,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/schedule/courses/{course_code}/sections")
+async def get_schedule_course_sections(
+    course_code: str,
+    term: str | None = None,
+    language: str = "tr",
+):
+    """Return every lecture/lab/recitation option for one exact course."""
+    if len(course_code) > 30:
+        raise HTTPException(status_code=400, detail="course_code cannot exceed 30 characters")
+    if language not in {"tr", "en"}:
+        raise HTTPException(status_code=400, detail="language must be tr or en")
+    try:
+        return schedule_planner.course_sections_payload(
+            course_code,
+            term=term,
+            language=language,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (FileNotFoundError, LookupError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @app.get("/users/{username}/courses")
 async def get_selected_courses(username: str):
     return {"courses": await get_user_courses(username)}
@@ -1014,6 +1217,29 @@ async def get_selected_courses(username: str):
 @app.put("/users/{username}/courses")
 async def save_selected_courses(username: str, payload: CourseSelectionPayload):
     return {"courses": await set_user_courses(username, payload.course_ids, payload.statuses)}
+
+
+@app.get("/users/{username}/schedule")
+async def get_saved_schedule(username: str):
+    return await get_user_schedule(username)
+
+
+@app.put("/users/{username}/schedule")
+async def save_user_schedule(username: str, payload: ScheduleSavePayload):
+    try:
+        schedule = schedule_planner.validate_schedule_payload(payload.schedule.model_dump())
+        return await set_user_schedule(
+            username,
+            schedule,
+            expected_revision=payload.expected_revision,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ScheduleRevisionConflict as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"message": str(exc), "current": exc.current},
+        ) from exc
 
 
 @app.get("/users/{username}/profile")
@@ -1279,12 +1505,49 @@ async def ask_question(
         profile = await get_academic_profile(username) if username else {}
         program = (profile.get("major") or "").strip().upper()
 
+        # ---- Major-selection mini-test (deterministic; never mixes RAG or graduation audit) ----
+        # "Which major should I choose?" runs a bounded questionnaire and returns ONE definitive
+        # best-fit program. Turn 1 asks the questions; the student's reply is scored in code.
+        wc = working_context or {}
+        if wc.get("major_quiz_pending") and major_advisor.looks_like_answers(question):
+            rec = major_advisor.evaluate(question, current_major=program, language=language)
+            await conversation_memory.append_turn(
+                session_id, username=username, question=original_question, answer=rec.body,
+                intent="major_secimi",
+                working_context_updates={"major_quiz_pending": False, "recommended_major": rec.best},
+            )
+            return _stamp({
+                "response": rec.body, "summary": rec.summary,
+                "sources": [], "source_chunk_ids": [], "intent": "major_secimi",
+            })
+        if (
+            resolved_intent == "major_secimi"
+            and major_advisor.is_major_question(original_question)
+            and not wc.get("major_quiz_pending")
+        ):
+            quiz = major_advisor.build_quiz(language)
+            await conversation_memory.append_turn(
+                session_id, username=username, question=original_question, answer=quiz,
+                intent="major_secimi",
+                working_context_updates={"major_quiz_pending": True},
+            )
+            return _stamp({
+                "response": quiz, "sources": [], "source_chunk_ids": [], "intent": "major_secimi",
+            })
+
         graduation_plan_intent = resolved_intent == "graduation_plan"
         if graduation_plan_intent:
             intent = "graduation_plan"
+        schedule_intent = resolved_intent == "ders_programi"
+        if schedule_intent:
+            intent = "ders_programi"
         graduation_intent = intent == "mezuniyet_durumu"
         recommendation_intent = intent == "ders_onerisi"
-        if recommendation_intent and not _has_interest_area(question):
+        if (
+            recommendation_intent
+            and not _has_interest_area(question)
+            and not UNTIL_GRAD_RECOMMENDATION_RE.search(question or "")
+        ):
             return _stamp({
                 "response": "Hangi alana ilgilisin? Örn: NLP, Web, Data, Systems, AI, Security.",
                 "sources": [],
@@ -1303,6 +1566,117 @@ async def ask_question(
                 "profile_required": bool(gate.missing_fields),
                 "curriculum_unavailable": gate.data_unavailable,
             })
+
+        # Deterministic, balanced course recommendation. The recommendation must be correct and
+        # student-specific, not LLM-invented: the planner reads the student's completed courses +
+        # the official requirement file and returns a prerequisite-eligible, difficulty-balanced
+        # set (no hallucinated courses, canonical names, choice pools de-duplicated). Only runs
+        # when the profile is complete enough to be authoritative; otherwise the LLM path below
+        # handles it with the planner context.
+        if recommendation_intent and program and profile.get("curriculum_term") and username:
+            completed = await get_completed_course_codes(username)
+            interest_key = _extract_interest_key(question)
+            interest_codes = list(INTEREST_COURSE_HINTS.get(interest_key or "", []))
+            target_courses, minimum_su, strict_count = _recommendation_preferences(question)
+            plan = course_planner.build_plan(
+                program,
+                profile["curriculum_term"],
+                completed,
+                interest_codes,
+                target=target_courses,
+                minimum_su_credits=minimum_su,
+                exact_course_count=strict_count,
+            )
+            body, summary = course_planner.render_plan(
+                plan, language=language, interest_label=_interest_label(question)
+            )
+            rec_result = _stamp({
+                "response": body,
+                "summary": summary,
+                "structured_content": course_planner.plan_structured_content(plan, language=language),
+                "sources": ["Deterministic academic-stage planner"],
+                "source_chunk_ids": [],
+                "intent": "ders_onerisi",
+            })
+            await conversation_memory.append_turn(
+                session_id, username=username, question=original_question, answer=body,
+                intent="ders_onerisi", term_code=profile.get("curriculum_term"),
+                working_context_updates={"active_topic": "course_recommendation"},
+            )
+            return rec_result
+
+        # Menu option 5: a REAL, conflict-free weekly timetable with CRNs. Builds the same balanced
+        # course set as the recommendation, then attaches official SUIS section/time data and
+        # resolves overlaps in code. The response carries the CRN list for copy + Excel export.
+        if schedule_intent and username:
+            if not (program and profile.get("curriculum_term")):
+                return _stamp({
+                    "response": (
+                        "Haftalık ders programı hazırlayabilmem için önce akademik profilini "
+                        "(bölüm + müfredat dönemi) ayarlaman gerekiyor."
+                        if language == "tr" else
+                        "To build your weekly schedule I first need your academic profile "
+                        "(major + curriculum term)."
+                    ),
+                    "sources": [], "source_chunk_ids": [], "intent": "ders_programi",
+                    "profile_required": True,
+                })
+            completed = await get_completed_course_codes(username)
+            interest_key = _extract_interest_key(question)
+            interest_codes = list(INTEREST_COURSE_HINTS.get(interest_key or "", []))
+            target_courses, minimum_su, strict_count = _recommendation_preferences(question)
+            # Build a bounded candidate pool, then let the timetable solver choose the smallest
+            # conflict-free subset that still satisfies the requested 15/18-SU load. This avoids
+            # silently losing credits when one otherwise-good course combination has no compatible
+            # section assignment.
+            plan = course_planner.build_plan(
+                program,
+                profile["curriculum_term"],
+                completed,
+                interest_codes,
+                target=max(target_courses, 8),
+                minimum_su_credits=minimum_su,
+                exact_course_count=False,
+            )
+            timetable = schedule_planner.build_timetable_for_load(
+                [i.code for i in plan.recommended],
+                target_courses=target_courses,
+                minimum_su_credits=minimum_su,
+            )
+            body, summary = schedule_planner.render_timetable(timetable, language=language)
+            schedule_payload = schedule_planner.timetable_payload(
+                timetable,
+                language=language,
+            )
+            saved_schedule: dict | None = None
+            try:
+                # Persist the same canonical object returned to the client. The schedule page can
+                # therefore load a chat-created timetable even after a refresh or on another tab.
+                saved_schedule = await set_user_schedule(username, schedule_payload)
+            except Exception:
+                # The response payload still lets the frontend keep a local fallback when MongoDB
+                # is temporarily unavailable; schedule generation itself must remain usable.
+                logger.exception("Could not persist chat-generated weekly schedule")
+            sched_result = _stamp({
+                "response": body,
+                "summary": summary,
+                "schedule": schedule_payload,
+                "structured_content": schedule_planner.timetable_structured_content(
+                    timetable, language=language
+                ),
+                "sources": ["Sabancı SUIS course schedule (official)"],
+                "source_chunk_ids": [],
+                "intent": "ders_programi",
+            })
+            if saved_schedule:
+                sched_result["schedule_revision"] = saved_schedule["revision"]
+                sched_result["schedule_updated_at"] = saved_schedule["updated_at"]
+            await conversation_memory.append_turn(
+                session_id, username=username, question=original_question, answer=body,
+                intent="ders_programi", term_code=profile.get("curriculum_term"),
+                working_context_updates={"active_topic": "weekly_schedule"},
+            )
+            return sched_result
 
         # Deterministic academic follow-up (Failure A / "Kalan üniversite derslerim neler?"):
         # list the exact still-missing first-year University Courses from code — never inferred
@@ -1336,29 +1710,24 @@ async def ask_question(
             completed = await get_completed_course_codes(username) if username else []
             audit_result = degree_audit.audit(program, profile["curriculum_term"], completed)
             if graduation_plan_intent:
-                next_term = bool(re.search(
-                    r"\b(?:sonraki|gelecek)\s+dönem\b|\bnext semester\b",
-                    original_question,
-                    re.IGNORECASE,
-                ))
-                rendered_answer, summary = graduation_plan_answer(
-                    audit_result, next_term=next_term, language=language
-                )
+                # "What should I take next?" -> the balanced, prerequisite-eligible plan computed
+                # by the planner, NOT the raw missing-required list (which contains unreachable
+                # 3XX/4XX courses a lower-year student cannot take yet).
+                plan = course_planner.build_plan(program, profile["curriculum_term"], completed)
+                rendered_answer, summary = course_planner.render_plan(plan, language=language)
+                structured = course_planner.plan_structured_content(plan, language=language)
+                plan_sources = ["Deterministic academic-stage planner"]
             else:
                 rendered_answer, summary = audit_answer(audit_result, language=language)
+                structured = audit_structured_content(audit_result, language=language)
+                plan_sources = ["Deterministic degree audit"]
             result = _stamp({
                 "response": rendered_answer,
                 "summary": summary,
-                "structured_content": audit_structured_content(audit_result, language=language),
-                "sources": ["Deterministic degree audit"],
+                "structured_content": structured,
+                "sources": plan_sources,
                 "source_chunk_ids": [],
                 "intent": intent,
-                "export_links": {
-                    "courses_csv": f"/users/{username}/courses/export?format=csv",
-                    "courses_xlsx": f"/users/{username}/courses/export?format=xlsx",
-                    "audit_csv": f"/users/{username}/degree-audit/export?format=csv",
-                    "audit_xlsx": f"/users/{username}/degree-audit/export?format=xlsx",
-                },
             })
             await conversation_memory.append_turn(
                 session_id,

@@ -1,9 +1,9 @@
 import {
   ArrowUpRight,
   CalendarRange,
-  Compass,
   GraduationCap,
   LibraryBig,
+  ListChecks,
 } from "lucide-react";
 import ChatInput from "./ChatInput";
 
@@ -13,13 +13,29 @@ interface Props {
   disabled?: boolean;
 }
 
-/** Conversation starters. The label is sent verbatim, so each one is phrased as a real question
- *  that the router recognises (graduation audit / recommendation / major selection / minor). */
-const STARTERS: { label: string; icon: typeof GraduationCap }[] = [
-  { label: "Mezuniyet durumumu hesapla", icon: GraduationCap },
-  { label: "Ders programı yap", icon: CalendarRange },
-  { label: "Hangi bölümü seçmeliyim?", icon: Compass },
-  { label: "Yandal için hangi dersler gerekli?", icon: LibraryBig },
+/** The visible wording is also a real router-recognised prompt, so clicking a starter keeps the
+ * chat transcript natural while preserving the intended deterministic response type. */
+const STARTERS: { label: string; prompt: string; icon: typeof GraduationCap }[] = [
+  {
+    label: "Mezuniyet durumumu hesapla",
+    prompt: "Mezuniyet durumumu hesapla",
+    icon: GraduationCap,
+  },
+  {
+    label: "Bu dönem hangi dersleri alayım?",
+    prompt: "Bu dönem hangi dersleri alayım?",
+    icon: CalendarRange,
+  },
+  {
+    label: "Yandal için hangi dersler gerekli?",
+    prompt: "Yandal için hangi dersler gerekli?",
+    icon: LibraryBig,
+  },
+  {
+    label: "Mezun olana kadar hangi dersleri almalıyım?",
+    prompt: "Mezun olana kadar hangi dersleri almalıyım?",
+    icon: ListChecks,
+  },
 ];
 
 function displayName(name?: string): string {
@@ -57,11 +73,11 @@ export default function EmptyState({ name, onSend, disabled }: Props) {
 
         {/* Starters as a clean vertical list (ChatGPT-style): icon chip · label · hover arrow. */}
         <div className="mt-5 w-full space-y-2 text-left">
-          {STARTERS.map(({ label, icon: Icon }) => (
+          {STARTERS.map(({ label, prompt, icon: Icon }) => (
             <button
               key={label}
               type="button"
-              onClick={() => onSend(label)}
+              onClick={() => onSend(prompt)}
               disabled={disabled}
               className="group flex w-full items-center gap-3 rounded-2xl border border-border/70 bg-card/50 px-4 py-3 text-sm text-foreground backdrop-blur-sm transition-all hover:border-primary/30 hover:bg-card hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50"
             >

@@ -1,3 +1,10 @@
+import {
+  normaliseScheduleDocument,
+  scheduleToBackendPayload,
+  type ScheduleCatalogSection,
+  type ScheduleDocument,
+} from "./schedule";
+
 export const API_URL: string =
   (import.meta.env.VITE_API_URL as string) || "http://127.0.0.1:8000";
 
@@ -23,6 +30,7 @@ export interface AskResponse {
   summary?: string;
   sources: string[];
   structured_content?: StructuredContent | null;
+  schedule?: Record<string, unknown> | null;
   export_links?: Record<string, string>;
   profile_updated?: boolean;
   course_history?: {
@@ -60,6 +68,9 @@ export interface StructuredContent {
   missing_required_courses?: string[];
   warnings?: string[];
   sections?: StructuredContent[];
+  // Weekly-schedule (kind === "course_schedule"): the chosen CRNs, for the "copy CRNs" control.
+  crns?: string[];
+  term?: string;
 }
 
 export interface AcademicProfile {
@@ -396,3 +407,67 @@ export async function healthCheck(): Promise<{ message: string }> {
 }
 
 export const SUPPORTED_EXTENSIONS = [".pdf", ".pptx", ".docx", ".md", ".txt"];
+
+export interface ScheduleSectionsResponse {
+  term: string;
+  term_label: string;
+  total: number;
+  limit: number;
+  has_more: boolean;
+  sections: ScheduleCatalogSection[];
+}
+
+export interface UserScheduleResponse {
+  schedule: ScheduleDocument | null;
+  revision: number;
+  updatedAt: string | null;
+}
+
+export async function fetchScheduleSections(
+  search = "",
+  term = "202601",
+  limit = 80,
+): Promise<ScheduleSectionsResponse> {
+  const params = new URLSearchParams({ term, limit: String(limit) });
+  if (search.trim()) params.set("search", search.trim());
+  const res = await fetch(`${API_URL}/schedule/sections?${params.toString()}`);
+  return parseJsonOrThrow<ScheduleSectionsResponse>(res);
+}
+
+export async function getUserSchedule(username: string): Promise<UserScheduleResponse> {
+  const res = await fetch(`${API_URL}/users/${encodeURIComponent(username)}/schedule`);
+  const data = await parseJsonOrThrow<{
+    schedule?: unknown;
+    revision?: number;
+    updated_at?: string | null;
+  }>(res);
+  return {
+    schedule: normaliseScheduleDocument(data.schedule),
+    revision: data.revision ?? 0,
+    updatedAt: data.updated_at ?? null,
+  };
+}
+
+export async function saveUserSchedule(
+  username: string,
+  schedule: ScheduleDocument,
+  expectedRevision?: number,
+): Promise<UserScheduleResponse> {
+  const body: Record<string, unknown> = { schedule: scheduleToBackendPayload(schedule) };
+  if (expectedRevision != null) body.expected_revision = expectedRevision;
+  const res = await fetch(`${API_URL}/users/${encodeURIComponent(username)}/schedule`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await parseJsonOrThrow<{
+    schedule?: unknown;
+    revision?: number;
+    updated_at?: string | null;
+  }>(res);
+  return {
+    schedule: normaliseScheduleDocument(data.schedule) ?? schedule,
+    revision: data.revision ?? (expectedRevision ?? 0) + 1,
+    updatedAt: data.updated_at ?? schedule.updatedAt,
+  };
+}

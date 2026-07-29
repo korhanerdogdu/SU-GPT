@@ -15,7 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ.setdefault("MONGO_URI", "mongodb://localhost:27017")  # lazy; never dialed in unit tests
 
-from modules import curriculum_registry, degree_audit, course_planner
+from modules import curriculum_registry, degree_audit, course_planner, major_advisor, schedule_planner
 from modules.retrieval_policy import build_metadata_filter, check_profile
 from modules.bm25_retriever import _tokenize, _is_narrowing
 from modules.conversation_memory import _automatic_title, extract_course_code, resolve_reference
@@ -295,8 +295,7 @@ def test_planner_course_level():
 def test_planner_sophomore_gets_no_4xx_in_current_pool():
     # Failure C: sophomore NLP student -> 4XX interest courses are FUTURE TARGETS, not current.
     nlp = ["CS445", "CS455", "CS412", "EE417"]
-    ctx = course_planner.build_context("CS", _FRESHMAN_DONE + ["CS 201"], nlp)
-    # Isolate the actual sections (the words "future targets" also occur in the HARD RULES prose).
+    ctx = course_planner.build_context("CS", _FRESHMAN_DONE + ["CS 201"], nlp, term="202401")
     pool_start = ctx.index("CANDIDATE POOL")
     future_start = ctx.index("FUTURE TARGETS (")
     pool, future = ctx[pool_start:future_start], ctx[future_start:]
@@ -316,11 +315,255 @@ def test_planner_prioritizes_missing_university_courses():
     assert "MATH 101" not in codes  # already done
 
 
-def test_planner_prereq_blocks_ineligible_foundation():
-    # DSA 210 needs MATH 203; a student without it should see DSA 210 blocked, not eligible.
-    a = course_planner.analyze("CS", _FRESHMAN_DONE + ["CS 201"])
-    assert "DSA210" in [pc.code for pc in a.blocked_foundations]
-    assert "DSA210" not in [pc.code for pc in a.eligible_foundations]
+def test_planner_prereq_blocks_required_3xx_for_sophomore():
+    # A CS sophomore who only finished CS 201 must see CS 300 (needs CS 204) BLOCKED, and CS 204
+    # (needs CS 201, satisfied) ELIGIBLE. Foundations are the program's REAL required courses.
+    a = course_planner.analyze("CS", _FRESHMAN_DONE + ["CS 201"], term="202401")
+    blocked = [code for code, _ in a.blocked_foundations]
+    eligible = [pc.code for pc in a.eligible_foundations]
+    assert "CS300" in blocked and "CS204" in eligible
+    assert "CS300" not in eligible
+
+
+def test_plan_never_recommends_non_required_elective_phys113():
+    # Failure: PHYS 113 is an ELECTIVE for CS, not a requirement. The planner must never present
+    # it (or any non-required course) as a next-semester foundation.
+    plan = course_planner.build_plan("CS", "202401", _FRESHMAN_DONE + ["CS 201"], [])
+    codes = {i.code for i in plan.recommended}
+    assert "PHYS113" not in codes
+    assert not any(course_planner.course_level(c) >= 400 for c in codes)  # no 4XX for a sophomore
+
+
+def test_plan_dedupes_math_choice_and_names_linear_algebra():
+    # MATH 201 (Linear Algebra) OR MATH 212 is a choice pool: recommend exactly one, and never
+    # both; and the linear-algebra course must be named from the catalog, not invented.
+    plan = course_planner.build_plan("CS", "202401", _FRESHMAN_DONE + ["CS 201"], [])
+    codes = [i.code for i in plan.recommended]
+    assert not ("MATH201" in codes and "MATH212" in codes)
+    assert "MATH212" not in plan.deferred_required  # the alternative is not "also owed"
+    assert course_planner.official_name("MATH 201") == "Linear Algebra"
+    # If the student already did MATH 212, no linear-algebra course is recommended again.
+    done = course_planner.build_plan("CS", "202401", _FRESHMAN_DONE + ["CS 201", "MATH 212"], [])
+    assert all(c not in ("MATH201", "MATH212") for c in [i.code for i in done.recommended])
+
+
+def test_plan_is_difficulty_balanced():
+    # No more than two courses may share a subject prefix, so a term is never three MATH courses.
+    plan = course_planner.build_plan("CS", "202401", _FRESHMAN_DONE + ["CS 201"], [])
+    from collections import Counter
+    subjects = Counter(course_planner.re.match(r"[A-Z]+", c.code).group(0) for c in plan.recommended)
+    assert all(count <= 2 for count in subjects.values()), subjects
+
+
+def test_plan_excludes_unreachable_required_and_offers_light_fillers():
+    # The reported "sonraki dönem" bug: unreachable 3XX (CS 300/301/303) must NOT be recommended;
+    # lighter University-category courses balance the term instead.
+    plan = course_planner.build_plan("CS", "202401", _FRESHMAN_DONE + ["CS 201"], [])
+    codes = {i.code for i in plan.recommended}
+    for blocked in ("CS300", "CS301", "CS303", "CS395"):
+        assert blocked not in codes
+    assert "CS204" in codes                      # the reachable required course IS offered
+    assert codes & {"PROJ201", "SPS303"}         # a light University filler rounds out the term
+
+
+def test_normal_plan_reaches_fifteen_su_credit_floor():
+    plan = course_planner.build_plan("CS", "202401", _FRESHMAN_DONE + ["CS 201"], [])
+    assert sum(item.su for item in plan.recommended) >= 15
+    assert plan.credit_shortfall == 0
+
+
+def test_heavy_plan_reaches_eighteen_su_credit_floor():
+    plan = course_planner.build_plan(
+        "CS", "202401", _FRESHMAN_DONE + ["CS 201"], [],
+        target=6, minimum_su_credits=18,
+    )
+    assert sum(item.su for item in plan.recommended) >= 18
+    assert len(plan.recommended) >= 6
+
+
+def test_explicit_four_course_limit_may_stay_below_credit_floor():
+    plan = course_planner.build_plan(
+        "CS", "202401", _FRESHMAN_DONE + ["CS 201"], [],
+        target=4, minimum_su_credits=0, exact_course_count=True,
+    )
+    assert len(plan.recommended) == 4
+    assert sum(item.su for item in plan.recommended) < 15
+
+
+def test_heavy_weekly_timetable_keeps_eighteen_su_after_section_placement():
+    candidates = course_planner.build_plan(
+        "CS", "202401", _FRESHMAN_DONE + ["CS 201"], [],
+        target=8, minimum_su_credits=18,
+    )
+    timetable = schedule_planner.build_timetable_for_load(
+        [item.code for item in candidates.recommended],
+        target_courses=6,
+        minimum_su_credits=18,
+        term="202601",
+    )
+    placed_codes = [course_planner.normalize_code(lecture.course_id) for lecture, _ in timetable.placed]
+    placed_su = sum(int((course_planner.resolve(code) or {}).get("su_credits") or 0) for code in placed_codes)
+    assert len(timetable.placed) >= 6
+    assert placed_su >= 18
+    assert not timetable.unplaced and not timetable.not_offered
+
+
+# ---- major-selection mini-test --------------------------------------------------------------
+def test_major_quiz_question_detection():
+    assert major_advisor.is_major_question("Hangi bölümü seçmeliyim?")
+    assert major_advisor.is_major_question("which major should I pick")
+    assert not major_advisor.is_major_question("mezuniyet durumum ne")
+
+
+def test_major_quiz_answer_detection():
+    assert major_advisor.looks_like_answers("1a 2c 3a 4b 5a")
+    assert major_advisor.looks_like_answers("a c b a b")
+    assert not major_advisor.looks_like_answers("mezuniyet durumumu hesapla")
+
+
+def test_major_quiz_scores_definitive_best():
+    # All software/AI answers -> CS; the recommendation is definitive (one best-fit + a runner-up).
+    rec = major_advisor.evaluate("1a 2a 3a 4a 5a", current_major="CS", language="tr")
+    assert rec.best == "CS" and rec.second is not None
+    assert "CS" in rec.summary
+    # Mechanical/robotics answers point to ME, not CS.
+    rec2 = major_advisor.evaluate("1c 2a 3d 4c 5c", current_major="CS", language="tr")
+    assert rec2.best in {"ME", "EE"}
+
+
+def test_major_quiz_keyword_fallback():
+    rec = major_advisor.evaluate("psikolojiye ve insan davranışına çok ilgim var", language="tr")
+    assert rec.best == "PSY" and rec.used_keywords
+
+
+# ---- weekly timetable (option 5: real, conflict-free schedule) ------------------------------
+_SOPHOMORE_PLAN = ["CS 204", "MATH 201", "MATH 203", "PROJ 201", "SPS 303"]
+
+
+def test_timetable_is_conflict_free():
+    tt = schedule_planner.build_timetable(_SOPHOMORE_PLAN)
+    secs = tt.all_sections
+    assert secs, "no sections chosen"
+    for i in range(len(secs)):
+        for j in range(i + 1, len(secs)):
+            assert not secs[i].conflicts_with(secs[j]), (
+                f"clash: {secs[i].course_id} {secs[i].crn} vs {secs[j].course_id} {secs[j].crn}"
+            )
+    assert len(tt.placed) == len(_SOPHOMORE_PLAN)   # all offered courses got a slot
+    assert tt.crns and len(tt.crns) == len(set(tt.crns))  # CRNs present and unique
+    # TBA meetings (PROJ 201) are kept, never dropped.
+    assert any(s.course_id.replace(" ", "") == "PROJ201" for s in secs)
+
+
+def test_timetable_reports_not_offered_course():
+    tt = schedule_planner.build_timetable(["CS 204", "ZZZ 999"])
+    assert "ZZZ999" in tt.not_offered
+    assert all(s.course_id.replace(" ", "") != "ZZZ999" for s in tt.all_sections)
+
+
+def test_timetable_structured_content_carries_crns_and_crn_column():
+    tt = schedule_planner.build_timetable(_SOPHOMORE_PLAN)
+    sc = schedule_planner.timetable_structured_content(tt, language="tr")
+    assert sc["kind"] == "course_schedule"
+    assert sc["crns"] == tt.crns and sc["crns"]
+    table = sc["tables"][0]
+    assert table["exportable"] is True
+    assert any(col["key"] == "crn" for col in table["columns"])  # Excel export includes CRNs
+
+
+def test_timetable_payload_is_calendar_ready_and_matches_example_crns():
+    tt = schedule_planner.build_timetable(_SOPHOMORE_PLAN, term="202601")
+    payload = schedule_planner.timetable_payload(
+        tt,
+        language="tr",
+        generated_at="2026-07-28T20:00:00Z",
+    )
+    assert payload["schema_version"] == 1
+    assert payload["term"] == "202601"
+    assert payload["term_label"] == "Fall 2026-2027 (Güz)"
+    assert payload["origin"] == "chatbot"
+    assert payload["generated_at"] == "2026-07-28T20:00:00Z"
+    assert payload["crns"] == [
+        "10218", "10223", "10842", "10855", "10875", "10880", "10775", "11030", "11045",
+    ]
+    assert [course["course_id"] for course in payload["courses"]] == _SOPHOMORE_PLAN
+
+    sections = [section for course in payload["courses"] for section in course["sections"]]
+    cs_lecture = next(section for section in sections if section["crn"] == "10218")
+    assert [(m["day_codes"], m["start_time"], m["end_time"]) for m in cs_lecture["meetings"]] == [
+        (["M"], "16:40", "18:30"),
+        (["W"], "12:40", "13:30"),
+    ]
+    assert cs_lecture["meetings"][0]["location"] == "Fac. of Engin. and Nat. Sci. G077"
+    proj = next(section for section in sections if section["crn"] == "10775")
+    assert proj["tba"] is True
+    assert not any(m["start_time"] for m in proj["meetings"])
+    assert payload["conflicts"] == []
+
+
+def test_schedule_catalog_search_is_bounded_and_exposes_official_meetings():
+    result = schedule_planner.search_sections_payload(term="202601", search="CS204", limit=2)
+    assert result["term"] == "202601" and result["limit"] == 2
+    assert result["total"] > 2 and result["has_more"] is True
+    assert len(result["sections"]) == 2
+    assert all(section["course_id"] == "CS 204" for section in result["sections"])
+    assert all("meetings" in section for section in result["sections"])
+
+    exact = schedule_planner.course_sections_payload("cs204", term="202601")
+    by_crn = {section["crn"]: section for section in exact["sections"]}
+    assert {"10218", "10223"} <= set(by_crn)
+    assert by_crn["10218"]["component"] == "Primary"
+    assert by_crn["10223"]["component"] == "Laboratory"
+    assert by_crn["10223"]["meetings"][0]["day_codes"] == ["F"]
+
+
+def test_manual_schedule_canonicalization_allows_blank_crn_and_detects_conflict():
+    payload = {
+        "schema_version": 1,
+        "term": "202601",
+        "term_label": "Fall 2026-2027 (Güz)",
+        "source": "manual",
+        "courses": [
+            {
+                "course_id": "CUSTOM 101",
+                "title": "Özel çalışma",
+                "sections": [{
+                    "crn": "",
+                    "section": "M1",
+                    "component": "Manual",
+                    "meetings": [{"day_codes": ["M"], "start_time": "10:00", "end_time": "11:00"}],
+                }],
+            },
+            {
+                "course_id": "CS 204",
+                "title": "Advanced Programming",
+                "sections": [{
+                    "crn": "10218",
+                    "section": "0",
+                    "component": "Primary",
+                    "meetings": [{"day_codes": ["M"], "start_time": "10:30", "end_time": "11:30"}],
+                }],
+            },
+        ],
+    }
+    clean = schedule_planner.validate_schedule_payload(payload)
+    assert clean["origin"] == "manual"
+    assert clean["source"]["authority"] == "official"
+    assert clean["crns"] == ["10218"]
+    assert clean["courses"][0]["sections"][0]["tba"] is False
+    assert clean["conflicts"] == [{
+        "first_course_id": "CUSTOM 101", "first_crn": "",
+        "second_course_id": "CS 204", "second_crn": "10218",
+        "day_code": "M", "start_time": "10:30", "end_time": "11:00",
+    }]
+
+
+def test_timetable_real_times_are_24h_and_ordered():
+    tt = schedule_planner.build_timetable(["MATH 203"])
+    lecture = tt.placed[0][0]
+    assert lecture.slots, "MATH 203 lecture should have real meeting times"
+    for slot in lecture.slots:
+        assert 0 <= slot.start < slot.end <= 24 * 60
 
 
 def _run() -> int:

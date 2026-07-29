@@ -197,6 +197,14 @@ embedding model, so it is slower than later starts. MongoDB, Chroma, uploads, an
 cache use named volumes to avoid Windows/macOS bind-mount permission differences. Stop with
 `docker compose down`; add `-v` only when you explicitly want to erase local application data.
 
+### Render deployment
+
+The repository includes [`render.yaml`](render.yaml) for the `advisu-v2-dev` branch and a complete
+dashboard-equivalent checklist in [`docs/deployment-render.md`](docs/deployment-render.md).
+The backend must use repository-root Docker context `.` with Dockerfile `server/Dockerfile`; the
+frontend is a Render Static Site built with pinned Node 22 + pnpm and an SPA rewrite to
+`/index.html`. Never place API keys, MongoDB credentials, or passwords in Git.
+
 ### 1. Backend
 ```powershell
 cd server
@@ -207,7 +215,7 @@ python -m uvicorn main:app --reload   # http://127.0.0.1:8000  (health: /test)
 ```
 
 ### 2. Environment (`.env` in the project root)
-The backend reads a single `.env` (there is no committed `.env.example`; `.env` is gitignored).
+Copy the committed `.env.example` to `.env`; the real `.env` remains gitignored.
 
 ```env
 # Required for chat answers:
@@ -241,8 +249,8 @@ npm run test:advising     # (optional) run the invariant test suite
 ### 4. Frontend
 ```powershell
 cd frontend
-npm install
-npm run dev               # http://localhost:5173
+corepack pnpm install --frozen-lockfile
+corepack pnpm dev         # http://localhost:5173
 ```
 Override the API base with `frontend/.env` → `VITE_API_URL=http://127.0.0.1:8000`.
 

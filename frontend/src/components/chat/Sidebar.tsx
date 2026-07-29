@@ -2,6 +2,7 @@ import { useEffect, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { Link } from "react-router-dom";
 import {
   BookOpen,
+  CalendarDays,
   ChevronLeft,
   GraduationCap,
   LogOut,
@@ -110,6 +111,14 @@ export default function Sidebar({
         >
           <PanelLeftOpen className="h-5 w-5" />
         </button>
+        <Link
+          to="/schedule"
+          aria-label="Ders programı"
+          title="Ders programı"
+          className="mt-3 rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-primary"
+        >
+          <CalendarDays className="h-5 w-5" />
+        </Link>
         <button
           type="button"
           onClick={onNewChat}
@@ -256,6 +265,9 @@ export default function Sidebar({
         </div>
 
         <div className="border-t border-border px-4 py-4">
+          <Link to="/schedule" className="sidebar-link">
+            <CalendarDays className="h-4 w-4" /> Ders Programı
+          </Link>
           <Link to="/courses" className="sidebar-link">
             <BookOpen className="h-4 w-4" /> Ders geçmişi
           </Link>
