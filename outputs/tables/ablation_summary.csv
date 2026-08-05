@@ -1,13 +1,5 @@
-cell,mode,top_k,candidate_k,prompt_strategy,questions,recall@top_k,mrr@top_k,ndcg@top_k,mean_total_ms,wall_clock_s
-bm25|top_k=3|cand_k=20|prompt=basic,bm25,3,20,basic,22,0.3750,0.2604,0.2894,322.5,7.1
-bm25|top_k=5|cand_k=20|prompt=basic,bm25,5,20,basic,22,0.3750,0.2604,0.2894,248.8,5.5
-bm25|top_k=10|cand_k=20|prompt=basic,bm25,10,20,basic,22,0.4375,0.2693,0.3103,255.4,5.6
-dense|top_k=3|cand_k=20|prompt=basic,dense,3,20,basic,22,0.1250,0.0938,0.1019,116.2,2.6
-dense|top_k=5|cand_k=20|prompt=basic,dense,5,20,basic,22,0.1875,0.1094,0.1289,109.3,2.4
-dense|top_k=10|cand_k=20|prompt=basic,dense,10,20,basic,22,0.2500,0.1172,0.1486,108.5,2.4
-hybrid|top_k=3|cand_k=20|prompt=basic,hybrid,3,20,basic,22,0.6250,0.5312,0.5558,499.7,11.0
-hybrid|top_k=5|cand_k=20|prompt=basic,hybrid,5,20,basic,22,0.6250,0.5312,0.5558,668.8,14.7
-hybrid|top_k=10|cand_k=20|prompt=basic,hybrid,10,20,basic,22,0.7500,0.5480,0.5963,480.7,10.6
-hybrid_rerank|top_k=3|cand_k=20|prompt=basic,hybrid_rerank,3,20,basic,22,0.3125,0.3125,0.3125,762.4,16.8
-hybrid_rerank|top_k=5|cand_k=20|prompt=basic,hybrid_rerank,5,20,basic,22,0.3750,0.3281,0.3394,526.6,11.6
-hybrid_rerank|top_k=10|cand_k=20|prompt=basic,hybrid_rerank,10,20,basic,22,0.5625,0.3553,0.4022,536.3,11.8
+file,status,mode,top_k,limit,num_questions,avg_recall_at_k,avg_mrr_at_k,avg_ndcg_at_k,hit_rate,avg_latency_ms,note
+mode-bm25__topk-3__limit-2.json,completed,bm25,3,2,2,1.0,1.0,1.0,1.0,42425.17,Measured by ablation_runner.py.
+mode-dense__topk-3__limit-1.json,completed,dense,3,1,1,0.0,0.0,0.0,0.0,16580.08,Measured by ablation_runner.py.
+mode-dense__topk-3__limit-2.json,completed,dense,3,2,2,0.5,0.5,0.5,0.5,14421.345,Measured by ablation_runner.py.
+mode-hybrid_rerank__topk-3__limit-2.json,completed,hybrid_rerank,3,2,2,0.0,0.0,0.0,0.0,52436.605,Measured by ablation_runner.py.

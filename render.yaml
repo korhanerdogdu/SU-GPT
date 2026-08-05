@@ -1,0 +1,109 @@
+# Render Blueprint for the production-like demo environment.
+#
+# The backend intentionally uses the repository root as its Docker context:
+# server/Dockerfile copies both server/ and data/. The frontend is a native
+# static site so Render can serve it from its CDN and apply the SPA rewrite.
+services:
+  - type: web
+    name: advisu-backend
+    runtime: docker
+    plan: free
+    branch: advisu-v2-dev
+    autoDeployTrigger: commit
+    dockerfilePath: ./server/Dockerfile
+    dockerContext: .
+    healthCheckPath: /test
+    maxShutdownDelaySeconds: 30
+    buildFilter:
+      paths:
+        - server/**
+        - data/**
+        - .dockerignore
+        - render.yaml
+    envVars:
+      - key: PORT
+        value: "10000"
+      - key: LLM_PROVIDER
+        value: groq
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL_NAME
+        value: llama-3.3-70b-versatile
+      - key: MONGO_URI
+        sync: false
+      - key: MONGO_DB_NAME
+        value: advisu
+      - key: ADMIN_USERNAME
+        value: admin
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: STUDENT_USERNAME
+        value: student
+      - key: STUDENT_PASSWORD
+        sync: false
+      - key: CATALOG_DATA_DIR
+        value: /app/data
+      - key: DEGREE_DATA_DIR
+        value: /app/data
+      - key: CATALOG_TERM_CODES
+        value: "202601"
+      - key: CHROMA_PERSIST_DIR
+        value: /app/chroma_store
+      - key: DEFAULT_RETRIEVAL_MODE
+        value: hybrid_meta
+      - key: DEFAULT_PROMPT_STRATEGY
+        value: structured_lookup
+      - key: AUTO_SEED_COURSES
+        value: "true"
+      # Chroma ingestion downloads/builds embeddings and can exceed 512 MB.
+      # Keep it off on Free. Enable it only with enough memory and persistent
+      # storage, or prebuild the index in a separate controlled job.
+      - key: AUTO_BUILD_VECTOR_INDEX
+        value: "false"
+      # The lexical BM25F+metadata fallback remains available and was measured
+      # at Recall@10 0.9178. This avoids loading a second dense model on Free.
+      - key: ADVISU_LAB_DENSE
+        value: "false"
+      - key: ADVISU_RERANK
+        value: "off"
+      - key: EMBEDDING_DEVICE
+        value: cpu
+      - key: EMBEDDING_BATCH_SIZE
+        value: "8"
+      - key: TOKENIZERS_PARALLELISM
+        value: "false"
+
+  - type: web
+    name: advisu-frontend
+    runtime: static
+    branch: advisu-v2-dev
+    autoDeployTrigger: commit
+    rootDir: frontend
+    buildCommand: corepack enable && corepack prepare pnpm@10.28.0 --activate && pnpm install --frozen-lockfile && pnpm build
+    staticPublishPath: ./dist
+    buildFilter:
+      paths:
+        - frontend/**
+        - render.yaml
+    envVars:
+      - key: NODE_VERSION
+        value: 22.23.1
+      - key: VITE_API_URL
+        value: https://advisu-backend.onrender.com
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    headers:
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
+      - path: /*
+        name: Referrer-Policy
+        value: strict-origin-when-cross-origin
+      - path: /*
+        name: Permissions-Policy
+        value: camera=(), microphone=(), geolocation=()

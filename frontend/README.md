@@ -18,9 +18,9 @@ chat pages built on shadcn/ui + Tailwind.
 
 ```bash
 cd frontend
-npm install
+corepack pnpm install --frozen-lockfile
 cp .env.example .env       # only if you want to point at a non-default backend
-npm run dev
+corepack pnpm dev
 ```
 
 Open <http://localhost:5173>.
@@ -35,6 +35,11 @@ python -m uvicorn main:app --reload
 
 The frontend hits `http://127.0.0.1:8000` by default. Override via
 `VITE_API_URL` in `.env`.
+
+Node is pinned in `.node-version`; pnpm is pinned by the build configuration. CI and Render must
+use `pnpm install --frozen-lockfile`, so every dependency change must commit the matching
+`pnpm-lock.yaml` update. For Render Static Site settings and the required React Router rewrite,
+see [`../docs/deployment-render.md`](../docs/deployment-render.md).
 
 CORS is already wide open on the backend (`allow_origins=["*"]`) so no
 changes are needed there.
@@ -77,3 +82,10 @@ frontend/
 ├── tsconfig.json
 └── vite.config.ts
 ```
+
+## Design acknowledgement
+
+The weekly schedule builder is an original AdviSU implementation inspired by
+[aburakayaz/SUchedule](https://github.com/aburakayaz/suchedule), an MIT-licensed schedule-building
+interface created for Sabancı University students. The acknowledgement is also shown as a visible
+link in the schedule page header.

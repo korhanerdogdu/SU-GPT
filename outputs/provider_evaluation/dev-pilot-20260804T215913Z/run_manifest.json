@@ -1,0 +1,41 @@
+{
+  "base_commit": "5a6949c1e2e5b0603d8c1c88820f590099000f34",
+  "candidate_configurations": [
+    "deepseek_basic"
+  ],
+  "candidate_execution": "serial_no_cross_treatment_concurrency",
+  "comparison_baseline": "immutable_legacy_worktree",
+  "created_at": "2026-08-04T22:04:22.675592+00:00",
+  "dataset_role": "development_pilot_not_final",
+  "dirty_diff_sha256": "3f3e1001911453813ffe96fbf20d5ff43f8427fb04890b39bb84be1a70d14532",
+  "production_default_changed": false,
+  "raw_prompts_persisted": false,
+  "raw_responses_persisted": false,
+  "reasoning_persisted": false,
+  "repetitions": 3,
+  "retrieval": {
+    "candidate_depth": 10,
+    "mode": "hybrid_meta",
+    "top_k": 6
+  },
+  "run_id": "dev-pilot-20260804T215913Z",
+  "schema_version": 1,
+  "selected_item_ids": [
+    "g0052",
+    "g0054",
+    "g0099",
+    "g0285",
+    "g0485",
+    "g0545",
+    "g0568",
+    "g0677",
+    "g0025",
+    "g0047",
+    "g0048",
+    "g0057",
+    "g0097",
+    "g0125",
+    "g0162",
+    "g0166"
+  ]
+}

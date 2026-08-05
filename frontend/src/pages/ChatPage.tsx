@@ -1,22 +1,33 @@
 import { useCallback, useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import Sidebar from "@/components/chat/Sidebar";
 import ChatHeader from "@/components/chat/ChatHeader";
 import ChatMessages, { type Message } from "@/components/chat/ChatMessages";
 import ChatInput from "@/components/chat/ChatInput";
+import EmptyState from "@/components/chat/EmptyState";
 import { useAuth } from "@/contexts/AuthContext";
+import { useLocale } from "@/contexts/LocaleContext";
 import {
   askQuestionStream,
   currentSessionId,
   deleteConversation,
   getConversation,
   getProfile,
+  getUsage,
   listConversations,
+  saveUserSchedule,
   startNewSession,
   updateConversation,
   useSession,
   type ConversationSummary,
+  type UsageStatus,
 } from "@/lib/api";
+import {
+  normaliseScheduleDocument,
+  scheduleFromStructuredContent,
+  storeLocalSchedule,
+} from "@/lib/schedule";
 
 function makeId() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -24,11 +35,14 @@ function makeId() {
 
 export default function ChatPage() {
   const { user } = useAuth();
+  const { t } = useLocale();
+  const navigate = useNavigate();
   const [messages, setMessages] = useState<Message[]>([]);
   const [busy, setBusy] = useState(false);
   const [sessionId, setSessionId] = useState<string>(() => currentSessionId());
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [profileReady, setProfileReady] = useState(true); // assume ok until told otherwise
+  const [usage, setUsage] = useState<UsageStatus | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => localStorage.getItem("advisu-sidebar-collapsed") === "true",
   );
@@ -63,6 +77,19 @@ export default function ChatPage() {
       cancelled = true;
     };
   }, [user?.username]);
+
+  const refreshUsage = useCallback(async () => {
+    if (!user?.username) return;
+    try {
+      setUsage(await getUsage(user.username));
+    } catch {
+      // The meter is informational; a failed read must not block chat.
+    }
+  }, [user?.username]);
+
+  useEffect(() => {
+    void refreshUsage();
+  }, [refreshUsage]);
 
   async function handleSend(text: string) {
     const pendingId = makeId();
@@ -101,17 +128,37 @@ export default function ChatPage() {
             : msg
         )
       );
+      const responseSchedule = normaliseScheduleDocument(res.schedule);
+      const generatedSchedule =
+        (responseSchedule?.items.length ? responseSchedule : null) ??
+        scheduleFromStructuredContent(res.structured_content);
+      if (generatedSchedule) {
+        storeLocalSchedule(user?.username, generatedSchedule);
+        toast.success(t("chat.scheduleSaved"), {
+          description: t("chat.scheduleSavedDescription"),
+          action: {
+            label: t("chat.goSchedule"),
+            onClick: () => navigate("/schedule"),
+          },
+        });
+        if (user?.username) {
+          void saveUserSchedule(user.username, generatedSchedule).catch(() => {
+            toast.warning(t("chat.scheduleOffline"));
+          });
+        }
+      }
       void refreshConversations();
+      void refreshUsage();
       setMobileSidebarOpen(false);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Request failed";
+      const message = err instanceof Error ? err.message : t("chat.requestFailed");
       toast.error(message);
       setMessages((m) =>
         m.map((msg) =>
           msg.id === pendingId
             ? {
                 ...msg,
-                content: `Sorry — the backend returned an error: ${message}`,
+                content: t("chat.backendError", { message }),
                 pending: false,
               }
             : msg
@@ -141,7 +188,7 @@ export default function ChatPage() {
         }))
       );
     } catch {
-      toast.error("Could not open that conversation.");
+      toast.error(t("chat.openFailed"));
     }
   }
 
@@ -151,7 +198,7 @@ export default function ChatPage() {
       if (id === sessionId) handleNewChat();
       void refreshConversations();
     } catch {
-      toast.error("Could not delete that conversation.");
+      toast.error(t("chat.deleteFailed"));
     }
   }
 
@@ -160,7 +207,7 @@ export default function ChatPage() {
       await updateConversation(id, { title });
       void refreshConversations();
     } catch {
-      toast.error("Sohbet yeniden adlandırılamadı.");
+      toast.error(t("chat.renameFailed"));
     }
   }
 
@@ -169,7 +216,7 @@ export default function ChatPage() {
       await updateConversation(id, { pinned });
       void refreshConversations();
     } catch {
-      toast.error("Sabitleme değiştirilemedi.");
+      toast.error(t("chat.pinFailed"));
     }
   }
 
@@ -197,12 +244,21 @@ export default function ChatPage() {
       <main className="flex min-w-0 flex-1 flex-col">
         <ChatHeader
           profileReady={profileReady}
+          usage={usage}
           onOpenMenu={() => setMobileSidebarOpen(true)}
         />
-        <div className="flex-1 overflow-y-auto scrollbar-thin">
-          <ChatMessages messages={messages} showSources={user?.role === "admin"} />
-        </div>
-        <ChatInput onSend={handleSend} disabled={busy} />
+        {messages.length === 0 ? (
+          // Empty state owns its own centered composer (Claude/Gemini style), so the docked
+          // bar is not rendered here — there is exactly one input on screen.
+          <EmptyState name={user?.username} onSend={handleSend} disabled={busy} />
+        ) : (
+          <>
+            <div className="flex-1 overflow-y-auto scrollbar-thin">
+              <ChatMessages messages={messages} showSources={user?.role === "admin"} />
+            </div>
+            <ChatInput variant="docked" onSend={handleSend} disabled={busy} />
+          </>
+        )}
       </main>
     </div>
   );

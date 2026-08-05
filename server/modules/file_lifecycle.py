@@ -8,81 +8,24 @@ from typing import Any
 from fastapi import UploadFile
 
 from modules.config import DOCUMENT_STORAGE_DIR
-from modules.load_vectorstore import get_vectorstore, ingest_file_paths, ingest_text_source
+from modules.load_vectorstore import _read_validated_upload, get_vectorstore, ingest_file_paths
 from modules.source_of_truth import (
     content_hash_bytes,
-    content_hash_text,
     exams,
     instructor_reviews,
     soft_delete_source,
     source_id_for,
     source_documents,
-    upsert_source_document,
     upload_batches,
     utc_now,
 )
 
 
-WHATSAPP_LINE_RE = re.compile(
-    r"^(?P<date>\d{1,2}[./]\d{1,2}[./]\d{2,4}),?\s+"
-    r"(?P<time>\d{1,2}:\d{2})(?:\s?[AP]M)?\s+-\s+"
-    r"(?:(?P<author>[^:]+):\s+)?(?P<body>.*)$"
-)
-BRACKET_WHATSAPP_LINE_RE = re.compile(
-    r"^\[(?P<date>\d{1,2}[./]\d{1,2}[./]\d{2,4})\s+"
-    r"(?P<time>\d{1,2}:\d{2})(?::\d{2})?\]\s+"
-    r"(?:(?P<author>[^:]+):\s+)?(?P<body>.*)$"
-)
-PII_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+|\+?\d[\d\s().-]{7,}\d")
-
-
 def create_pending_whatsapp_batch(upload: UploadFile, uploaded_by: str = "admin") -> dict[str, Any]:
-    content = upload.file.read()
-    content_hash = content_hash_bytes(content)
-    source_id = source_id_for("review", content_hash)
-    batch_id = f"whatsapp:{content_hash[:24]}"
-    storage_key = _save_bytes(content, "whatsapp", f"{content_hash[:16]}-{_safe_filename(upload.filename)}")
-    text = _decode_text(content)
-    messages = parse_whatsapp_export(text)
-    now = utc_now()
-
-    upsert_source_document(
-        source_id=source_id,
-        document_type="review",
-        file_name=upload.filename or "whatsapp.txt",
-        storage_key=str(storage_key),
-        content_hash=content_hash,
-        status="pending",
-        created_by=uploaded_by,
-        metadata={"batchId": batch_id, "documentType": "review", "sourceId": source_id},
+    del upload, uploaded_by
+    raise RuntimeError(
+        "Private chat ingestion is permanently disabled; use the consent-based course-only review service."
     )
-    upload_batches.update_one(
-        {"batchId": batch_id},
-        {
-            "$set": {
-                "batchId": batch_id,
-                "sourceId": source_id,
-                "type": "whatsapp",
-                "status": "pending",
-                "storageKey": str(storage_key),
-                "fileName": upload.filename or "whatsapp.txt",
-                "contentHash": content_hash,
-                "uploadedBy": uploaded_by,
-                "messageCount": len(messages),
-                "preview": [message["text"] for message in messages[:8]],
-                "updatedAt": now,
-            },
-            "$setOnInsert": {"createdAt": now},
-        },
-        upsert=True,
-    )
-    return {
-        "batchId": batch_id,
-        "sourceId": source_id,
-        "status": "pending",
-        "messageCount": len(messages),
-        "preview": [message["text"] for message in messages[:8]],
-    }
 
 
 def confirm_whatsapp_batch(
@@ -91,74 +34,10 @@ def confirm_whatsapp_batch(
     approved: bool = True,
     approved_by: str = "admin",
 ) -> dict[str, Any]:
-    batch = upload_batches.find_one({"batchId": batch_id})
-    if not batch:
-        raise ValueError(f"Upload batch not found: {batch_id}")
-
-    now = utc_now()
-    if not approved:
-        upload_batches.update_one(
-            {"batchId": batch_id},
-            {"$set": {"status": "rejected", "approvedBy": approved_by, "updatedAt": now}},
-        )
-        source_documents.update_one(
-            {"sourceId": batch["sourceId"]},
-            {"$set": {"status": "rejected", "updatedAt": now}},
-        )
-        return {"batchId": batch_id, "sourceId": batch["sourceId"], "status": "rejected"}
-
-    storage_key = str(batch.get("storageKey") or "")
-    raw_text = Path(storage_key).read_text(encoding="utf-8", errors="replace")
-    messages = parse_whatsapp_export(raw_text)
-    normalized_text = "\n".join(message["text"] for message in messages)
-
-    for index, message in enumerate(messages):
-        review_hash = content_hash_text(f"{batch['sourceId']}:{index}:{message['text']}")
-        instructor_reviews.update_one(
-            {"reviewId": f"review:{review_hash[:24]}"},
-            {
-                "$set": {
-                    "reviewId": f"review:{review_hash[:24]}",
-                    "sourceId": batch["sourceId"],
-                    "uploadBatchId": batch_id,
-                    "text": message["text"],
-                    "author": message.get("author") or "",
-                    "messageDate": message.get("date") or "",
-                    "status": "approved",
-                    "updatedAt": now,
-                },
-                "$setOnInsert": {"createdAt": now},
-            },
-            upsert=True,
-        )
-
-    chunks = ingest_text_source(
-        text=normalized_text,
-        source_name=str(batch.get("fileName") or "whatsapp.txt"),
-        document_type="review",
-        source_id=batch["sourceId"],
-        storage_key=storage_key,
-        created_by=approved_by,
-        extra_metadata={"uploadBatchId": batch_id, "reviewStatus": "approved"},
+    del batch_id, approved, approved_by
+    raise RuntimeError(
+        "Private chat and instructor-review ingestion is permanently disabled."
     )
-    upload_batches.update_one(
-        {"batchId": batch_id},
-        {
-            "$set": {
-                "status": "indexed",
-                "approvedBy": approved_by,
-                "approvedAt": now,
-                "chunksCreated": chunks,
-                "updatedAt": now,
-            }
-        },
-    )
-    return {
-        "batchId": batch_id,
-        "sourceId": batch["sourceId"],
-        "status": "indexed",
-        "chunks": chunks,
-    }
 
 
 def ingest_exam_upload(
@@ -170,10 +49,13 @@ def ingest_exam_upload(
     exam_type: str = "",
     uploaded_by: str = "admin",
 ) -> dict[str, Any]:
-    content = upload.file.read()
+    filename = Path(str(upload.filename or "exam.pdf")).name
+    if Path(filename).suffix.lower() != ".pdf":
+        raise ValueError("Unsupported upload file type")
+    content = _read_validated_upload(upload, ".pdf")
     content_hash = content_hash_bytes(content)
     source_id = source_id_for("exam", content_hash)
-    storage_key = _save_bytes(content, "exams", f"{content_hash[:16]}-{_safe_filename(upload.filename)}")
+    storage_key = _save_bytes(content, "exams", f"{content_hash[:16]}-{_safe_filename(filename)}")
     chunks = ingest_file_paths(
         [str(storage_key)],
         document_type="exam",
@@ -256,34 +138,6 @@ def cascade_delete_source(source_id: str, *, hard: bool = False) -> dict[str, An
     }
 
 
-def parse_whatsapp_export(raw_text: str) -> list[dict[str, str]]:
-    messages: list[dict[str, str]] = []
-    current: dict[str, str] | None = None
-    for raw_line in raw_text.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        match = BRACKET_WHATSAPP_LINE_RE.match(line) or WHATSAPP_LINE_RE.match(line)
-        if match:
-            if current:
-                messages.append(current)
-            body = _clean_message(match.group("body"))
-            current = {
-                "date": match.group("date") or "",
-                "time": match.group("time") or "",
-                "author": _clean_message(match.group("author") or ""),
-                "text": body,
-            }
-            continue
-        if current:
-            current["text"] = f"{current['text']} {_clean_message(line)}".strip()
-        else:
-            current = {"date": "", "time": "", "author": "", "text": _clean_message(line)}
-    if current:
-        messages.append(current)
-    return [message for message in messages if message.get("text")]
-
-
 def _save_bytes(content: bytes, category: str, filename: str) -> Path:
     target_dir = Path(DOCUMENT_STORAGE_DIR) / category
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -296,14 +150,3 @@ def _safe_filename(filename: str | None) -> str:
     name = Path(filename or "upload.txt").name
     safe = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("._")
     return safe or "upload.txt"
-
-
-def _decode_text(content: bytes) -> str:
-    try:
-        return content.decode("utf-8")
-    except UnicodeDecodeError:
-        return content.decode("utf-8", errors="replace")
-
-
-def _clean_message(text: str) -> str:
-    return PII_RE.sub("[redacted]", text or "").strip()

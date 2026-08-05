@@ -1,13 +1,19 @@
 import { useState, type KeyboardEvent } from "react";
 import { ArrowUp } from "lucide-react";
+import { useLocale } from "@/contexts/LocaleContext";
 
 interface Props {
   onSend: (text: string) => void;
   disabled?: boolean;
+  /** "docked" pins the composer to the bottom bar; "hero" renders it plain for the centered
+   *  empty state (Claude/Gemini style) with a softer, floating shadow. */
+  variant?: "docked" | "hero";
+  autoFocus?: boolean;
 }
 
-export default function ChatInput({ onSend, disabled }: Props) {
+export default function ChatInput({ onSend, disabled, variant = "docked", autoFocus }: Props) {
   const [value, setValue] = useState("");
+  const { t } = useLocale();
 
   function submit() {
     const text = value.trim();
@@ -23,32 +29,51 @@ export default function ChatInput({ onSend, disabled }: Props) {
     }
   }
 
+  const hero = variant === "hero";
+
+  // No hard focus outline: focus only softens the shadow, never draws a blue rectangle border.
+  const box = (
+    <div
+      className={`flex items-end gap-2 rounded-2xl border border-border bg-background px-4 transition-shadow ${
+        hero
+          ? "py-3 shadow-[0_18px_50px_-18px_rgba(2,20,45,0.5)] focus-within:shadow-[0_22px_60px_-16px_rgba(0,75,147,0.4)]"
+          : "py-2.5 shadow-sm focus-within:shadow-md"
+      }`}
+    >
+      <textarea
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={handleKey}
+        rows={1}
+        autoFocus={autoFocus}
+        placeholder={t("chat.placeholder")}
+        disabled={disabled}
+        className={`flex-1 resize-none bg-transparent text-foreground placeholder:text-muted-foreground focus:outline-none focus-visible:ring-0 focus-visible:ring-offset-0 disabled:opacity-50 ${
+          hero ? "py-1.5 text-[0.95rem]" : "py-1.5 text-sm"
+        }`}
+        style={{ maxHeight: 160 }}
+      />
+      <button
+        type="button"
+        onClick={submit}
+        disabled={!value.trim() || disabled}
+        aria-label={t("chat.send")}
+        className={`flex shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground transition-colors hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40 ${
+          hero ? "h-10 w-10" : "h-9 w-9"
+        }`}
+      >
+        <ArrowUp className={hero ? "h-5 w-5" : "h-4 w-4"} />
+      </button>
+    </div>
+  );
+
+  if (hero) {
+    return <div className="w-full">{box}</div>;
+  }
+
   return (
     <div className="border-t border-border bg-card/80 px-4 py-4 backdrop-blur-xl md:px-8">
-      <div className="mx-auto flex max-w-4xl items-end gap-2 rounded-2xl border border-border bg-background px-4 py-2.5 shadow-sm transition-colors focus-within:border-primary">
-        <textarea
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          onKeyDown={handleKey}
-          rows={1}
-          placeholder="Mezuniyetini sor veya “CS 201’i aldım” yaz…"
-          disabled={disabled}
-          className="flex-1 resize-none bg-transparent py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none disabled:opacity-50"
-          style={{ maxHeight: 120 }}
-        />
-        <button
-          type="button"
-          onClick={submit}
-          disabled={!value.trim() || disabled}
-          aria-label="Send message"
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground transition-colors hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          <ArrowUp className="h-4 w-4" />
-        </button>
-      </div>
-      <p className="mx-auto mt-2 max-w-4xl px-1 text-center font-mono text-[9px] uppercase tracking-[0.16em] text-muted-foreground">
-        Enter: gönder · Shift + Enter: yeni satır
-      </p>
+      <div className="mx-auto max-w-4xl">{box}</div>
     </div>
   );
 }

@@ -3,7 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from modules.document_loaders import SUPPORTED_EXTENSIONS, load_document
-from modules.load_vectorstore import _records_to_chunks, get_vectorstore, upsert_documents
+from modules.load_vectorstore import (
+    _records_to_chunks,
+    get_vectorstore,
+    upsert_documents,
+    validate_public_ingest_path,
+)
 
 
 SOURCE_BATCH_SIZE = 512
@@ -56,6 +61,13 @@ def ingest_source_directory(sources_dir: str) -> int:
 
 
 def _iter_source_files(root: Path):
+    root = root.resolve()
     for path in sorted(root.rglob("*")):
-        if path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS:
-            yield path
+        try:
+            resolved = validate_public_ingest_path(path, allowed_root=root)
+        except ValueError:
+            # Auto-indexing fails closed per source: private/escaped paths are omitted without
+            # preventing unrelated official course material from being indexed.
+            continue
+        if resolved.is_file() and resolved.suffix.lower() in SUPPORTED_EXTENSIONS:
+            yield resolved

@@ -30,11 +30,12 @@ from typing import Any, Callable, Sequence
 
 from langchain_core.documents import Document
 
-from modules.config import BM25_TOP_K, DENSE_TOP_K, ENABLE_RERANKING
+from modules.config import BM25_TOP_K, DENSE_TOP_K, ENABLE_RERANKING, RETRIEVAL_CANDIDATE_K
 
 RETRIEVAL_MODES: tuple[str, ...] = (
     "llm_only", "bm25", "dense", "hybrid", "hybrid_rerank", "hybrid_meta",
 )
+SUPPORTED_MODES = RETRIEVAL_MODES
 RAG_MODES: tuple[str, ...] = tuple(m for m in RETRIEVAL_MODES if m != "llm_only")
 DEFAULT_MODE = "hybrid_rerank"
 
@@ -198,3 +199,49 @@ def retrieve(
         outcome.documents = candidates[:top_k]
 
     return outcome
+
+
+def run_retrieval_mode(
+    mode: str,
+    query: str,
+    vectorstore: Any,
+    *,
+    top_k: int,
+    metadata_filter: dict[str, Any] | None = None,
+    candidate_k: int = RETRIEVAL_CANDIDATE_K,
+    hybrid_search: Callable[[], list[Document]] | None = None,
+) -> dict[str, Any]:
+    """Serialize the current dispatcher for legacy evaluation scripts."""
+    outcome = retrieve(
+        mode,
+        vectorstore=vectorstore,
+        query=query,
+        top_k=top_k,
+        candidate_k=candidate_k,
+        metadata_filter=metadata_filter,
+        hybrid_search=hybrid_search,
+    )
+    results: list[dict[str, Any]] = []
+    for rank, doc in enumerate(outcome.documents, start=1):
+        metadata = dict(doc.metadata or {})
+        results.append({
+            "rank": rank,
+            "text": doc.page_content,
+            "metadata": metadata,
+            "chunk_id": metadata.get("chunk_id") or metadata.get("chunkId"),
+            "retriever": metadata.get("_retriever"),
+            "score": metadata.get("_score"),
+            "rrf_score": metadata.get("_rrf_score"),
+            "rerank_score": metadata.get("_rerank_score"),
+        })
+    return {
+        "mode": outcome.mode,
+        "results": results,
+        "context_documents": list(outcome.documents),
+        "candidate_count": outcome.candidate_count,
+        "reranked": outcome.reranked,
+        "timings_ms": {
+            "retrieval_ms": outcome.retrieval_ms,
+            "rerank_ms": outcome.rerank_ms,
+        },
+    }

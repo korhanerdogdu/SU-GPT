@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { Link } from "react-router-dom";
 import {
   BookOpen,
+  CalendarDays,
   ChevronLeft,
   GraduationCap,
   LogOut,
@@ -14,7 +15,10 @@ import {
   X,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import { useTheme } from "@/contexts/ThemeContext";
 import type { ConversationSummary } from "@/lib/api";
+import { useLocale } from "@/contexts/LocaleContext";
+import { translate, type Locale } from "@/localization/resources";
 
 interface SidebarProps {
   conversations: ConversationSummary[];
@@ -30,13 +34,13 @@ interface SidebarProps {
   onPinChat: (sessionId: string, pinned: boolean) => void;
 }
 
-function relativeTime(iso: string | null): string {
+function relativeTime(iso: string | null, locale: Locale): string {
   if (!iso) return "";
   const minutes = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
-  if (minutes < 1) return "şimdi";
-  if (minutes < 60) return `${minutes} dk`;
-  if (minutes < 1440) return `${Math.round(minutes / 60)} sa`;
-  return `${Math.round(minutes / 1440)} gün`;
+  if (minutes < 1) return translate(locale, "time.now");
+  if (minutes < 60) return translate(locale, "time.minute", { count: minutes });
+  if (minutes < 1440) return translate(locale, "time.hour", { count: Math.round(minutes / 60) });
+  return translate(locale, "time.day", { count: Math.round(minutes / 1440) });
 }
 
 export default function Sidebar({
@@ -53,8 +57,41 @@ export default function Sidebar({
   onPinChat,
 }: SidebarProps) {
   const { user, signOut } = useAuth();
+  const { resolvedTheme } = useTheme();
+  const { locale, t } = useLocale();
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+
+  // Drag-resizable width (persisted). Collapse is a separate control; this only tunes the
+  // expanded width between sensible bounds.
+  const MIN_W = 232;
+  const MAX_W = 480;
+  const [width, setWidth] = useState<number>(() => {
+    const stored = Number(localStorage.getItem("advisu-sidebar-width"));
+    return stored >= MIN_W && stored <= MAX_W ? stored : 288;
+  });
+  useEffect(() => {
+    localStorage.setItem("advisu-sidebar-width", String(width));
+  }, [width]);
+
+  function startResize(e: ReactMouseEvent) {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = width;
+    function onMove(ev: globalThis.MouseEvent) {
+      setWidth(Math.min(MAX_W, Math.max(MIN_W, startW + (ev.clientX - startX))));
+    }
+    function onUp() {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+    }
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }
 
   function beginRename(item: ConversationSummary) {
     setEditing(item.session_id);
@@ -72,15 +109,23 @@ export default function Sidebar({
         <button
           type="button"
           onClick={onToggle}
-          aria-label="Sohbet geçmişini aç"
+          aria-label={t("chat.openHistory")}
           className="rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground"
         >
           <PanelLeftOpen className="h-5 w-5" />
         </button>
+        <Link
+          to="/schedule"
+          aria-label={t("sidebar.schedule")}
+          title={t("sidebar.schedule")}
+          className="mt-3 rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-primary"
+        >
+          <CalendarDays className="h-5 w-5" />
+        </Link>
         <button
           type="button"
           onClick={onNewChat}
-          aria-label="Yeni sohbet"
+          aria-label={t("sidebar.newChat")}
           className="mt-4 rounded-lg bg-primary p-2 text-primary-foreground"
         >
           <MessageSquarePlus className="h-5 w-5" />
@@ -95,20 +140,32 @@ export default function Sidebar({
         <button
           className="fixed inset-0 z-30 bg-black/40 md:hidden"
           onClick={onCloseMobile}
-          aria-label="Menüyü kapat"
+          aria-label={t("sidebar.closeMenu")}
         />
       )}
       <aside
-        className={`fixed inset-y-0 left-0 z-40 flex w-[18rem] shrink-0 flex-col border-r border-border bg-card shadow-xl transition-transform md:static md:shadow-none ${
+        style={{ width }}
+        className={`fixed inset-y-0 left-0 z-40 flex shrink-0 flex-col border-r border-border bg-card shadow-xl transition-transform md:relative md:shadow-none ${
           mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
         }`}
       >
         <div className="flex items-center justify-between px-5 pb-4 pt-5">
-          <img src="/assets/adviSU-logo-reversed.png" alt="adviSU" className="theme-logo w-36" />
+          {/* mid = compact horizontal lockup (navy ink on transparent, now tightly trimmed so it
+              fills its box). In dark mode a soft white glow keeps the navy "SU" and book covers
+              legible without any plate. */}
+          <img
+            src="/assets/mid.png"
+            alt="adviSU"
+            className={`h-12 w-auto ${
+              resolvedTheme === "dark"
+                ? "[filter:drop-shadow(0_0_9px_rgba(255,255,255,0.6))]"
+                : ""
+            }`}
+          />
           <button
             type="button"
             onClick={mobileOpen ? onCloseMobile : onToggle}
-            aria-label="Sohbet geçmişini gizle"
+            aria-label={t("sidebar.hideHistory")}
             className="rounded-lg p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
           >
             {mobileOpen ? <X className="h-5 w-5" /> : <ChevronLeft className="h-5 w-5" />}
@@ -122,17 +179,17 @@ export default function Sidebar({
             className="flex w-full items-center gap-2.5 rounded-xl border border-border bg-background px-3 py-2.5 text-sm font-medium text-foreground hover:bg-muted"
           >
             <MessageSquarePlus className="h-4 w-4 text-primary" />
-            Yeni sohbet
+            {t("sidebar.newChat")}
           </button>
         </div>
 
         <div className="mt-5 flex-1 overflow-y-auto px-3 pb-4 scrollbar-thin">
-          <h3 className="mb-2 px-2 font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
-            Sohbet geçmişi
+          <h3 className="mb-2 px-2 text-xs font-medium text-muted-foreground/80">
+            {t("sidebar.history")}
           </h3>
           {conversations.length === 0 ? (
             <p className="px-2 text-xs leading-relaxed text-muted-foreground">
-              İlk sorundan sonra sohbetlerin burada görünecek.
+              {t("sidebar.empty")}
             </p>
           ) : (
             <ul className="space-y-1">
@@ -141,8 +198,8 @@ export default function Sidebar({
                 return (
                   <li
                     key={item.session_id}
-                    className={`group rounded-lg border ${
-                      active ? "border-primary/30 bg-primary/10" : "border-transparent hover:bg-muted"
+                    className={`group rounded-xl transition-colors ${
+                      active ? "bg-primary/10" : "hover:bg-muted/70"
                     }`}
                   >
                     <div className="flex items-start">
@@ -167,18 +224,20 @@ export default function Sidebar({
                         ) : (
                           <span className="flex items-center gap-1.5">
                             {item.pinned && <Pin className="h-3 w-3 shrink-0 text-primary" />}
-                            <span className="block truncate text-sm text-foreground">{item.title}</span>
+                            <span className={`block truncate text-[0.9rem] ${active ? "font-medium text-primary" : "text-foreground"}`}>
+                              {item.title}
+                            </span>
                           </span>
                         )}
-                        <span className="mt-0.5 block font-mono text-[9px] uppercase tracking-[0.12em] text-muted-foreground">
-                          {relativeTime(item.updated_at)}
+                        <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                          {relativeTime(item.updated_at, locale)}
                         </span>
                       </button>
                       <div className="flex pt-1.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
                         <button
                           type="button"
                           onClick={() => onPinChat(item.session_id, !item.pinned)}
-                          aria-label={item.pinned ? "Sabitlemeyi kaldır" : "Sohbeti sabitle"}
+                          aria-label={item.pinned ? t("sidebar.unpin") : t("sidebar.pin")}
                           className="rounded p-1 text-muted-foreground hover:bg-background hover:text-foreground"
                         >
                           {item.pinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
@@ -186,7 +245,7 @@ export default function Sidebar({
                         <button
                           type="button"
                           onClick={() => beginRename(item)}
-                          aria-label="Sohbeti yeniden adlandır"
+                          aria-label={t("sidebar.rename")}
                           className="rounded p-1 text-muted-foreground hover:bg-background hover:text-foreground"
                         >
                           <Pencil className="h-3.5 w-3.5" />
@@ -194,7 +253,7 @@ export default function Sidebar({
                         <button
                           type="button"
                           onClick={() => onDeleteChat(item.session_id)}
-                          aria-label="Sohbeti sil"
+                          aria-label={t("sidebar.delete")}
                           className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
@@ -209,28 +268,43 @@ export default function Sidebar({
         </div>
 
         <div className="border-t border-border px-4 py-4">
+          <Link to="/schedule" className="sidebar-link">
+            <CalendarDays className="h-4 w-4" /> {t("schedule.title")}
+          </Link>
           <Link to="/courses" className="sidebar-link">
-            <BookOpen className="h-4 w-4" /> Ders geçmişi
+            <BookOpen className="h-4 w-4" /> {t("sidebar.courseHistory")}
           </Link>
           <Link to="/profile" className="sidebar-link">
-            <GraduationCap className="h-4 w-4" /> Profil ve mezuniyet
+            <GraduationCap className="h-4 w-4" /> {t("sidebar.profile")}
           </Link>
           <div className="mt-3 flex items-center justify-between border-t border-border pt-3">
             <div className="min-w-0">
               <p className="truncate text-sm font-medium text-foreground">{user?.username}</p>
               <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                {user?.role === "admin" ? "Yönetici" : "Öğrenci"}
+                {user?.role === "admin" ? t("common.admin") : t("common.student")}
               </p>
             </div>
             <button
               type="button"
               onClick={signOut}
               className="rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground"
-              aria-label="Çıkış yap"
+              aria-label={t("sidebar.signOut")}
             >
               <LogOut className="h-4 w-4" />
             </button>
           </div>
+        </div>
+
+        {/* Drag handle: resize the sidebar width (desktop only). */}
+        <div
+          onMouseDown={startResize}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={t("sidebar.resize")}
+          title={t("sidebar.resizeTitle")}
+          className="group absolute inset-y-0 -right-1 z-10 hidden w-2 cursor-col-resize md:block"
+        >
+          <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent transition-colors group-hover:bg-primary/50" />
         </div>
       </aside>
     </>

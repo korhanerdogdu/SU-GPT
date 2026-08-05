@@ -15,6 +15,10 @@ server/.env
 server/uploaded_pdfs/
 server/uploaded_documents/
 server/chroma_store/
+# The production container writes to /app/chroma_store, which maps to this
+# repository-root directory in some local workflows. It is generated and can
+# be rebuilt from data/, so it must never be committed.
+chroma_store/
 sources/
 
 # Frontend
@@ -53,3 +57,19 @@ Thumbs.db
 # regenerable from the corpus (keyed by corpus fingerprint). Never commit them.
 outputs/retrieval_cache/
 outputs/retrieval_lab/*/rankings/
+# Provider pilot dumps are local by default. The explicitly re-included development runs contain
+# only the redacted row schema (no prompts, response text, reasoning, headers, or raw errors) and
+# are committed so reviewers can recompute the rejected exploratory aggregates.
+outputs/provider_evaluation/*
+!outputs/provider_evaluation/dev-pilot-20260804T120357Z/
+!outputs/provider_evaluation/dev-pilot-20260804T215913Z/
+outputs/provider_evaluation/dev-pilot-20260804T120357Z/*
+outputs/provider_evaluation/dev-pilot-20260804T215913Z/*
+!outputs/provider_evaluation/dev-pilot-20260804T120357Z/*.redacted.jsonl
+!outputs/provider_evaluation/dev-pilot-20260804T120357Z/run_manifest.json
+!outputs/provider_evaluation/dev-pilot-20260804T120357Z/artifact_checksums.json
+!outputs/provider_evaluation/dev-pilot-20260804T120357Z/FINALIZED
+!outputs/provider_evaluation/dev-pilot-20260804T215913Z/*.redacted.jsonl
+!outputs/provider_evaluation/dev-pilot-20260804T215913Z/run_manifest.json
+!outputs/provider_evaluation/dev-pilot-20260804T215913Z/artifact_checksums.json
+!outputs/provider_evaluation/dev-pilot-20260804T215913Z/FINALIZED

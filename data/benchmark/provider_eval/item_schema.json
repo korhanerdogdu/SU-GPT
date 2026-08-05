@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://advisu.local/schemas/provider-evaluation-item-v1.json",
+  "title": "adviSU provider evaluation item",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "id",
+    "question",
+    "language",
+    "category"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "cluster_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Independent sampling unit. Related paraphrases/source/profile variants share an ID; the harness defaults to item id when omitted."
+    },
+    "question": {
+      "type": "string",
+      "minLength": 1
+    },
+    "provider_prompt": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Exact application prompt with frozen context, materialized before either provider is called. Required by the sealed final-run gate."
+    },
+    "context_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "SHA-256 of the canonical frozen retrieval context for this paired item."
+    },
+    "frozen_context": {
+      "description": "Canonical pre-provider retrieval evidence used to recompute context_sha256.",
+      "oneOf": [
+        {"type": "array"},
+        {"type": "object"},
+        {"type": "string"}
+      ]
+    },
+    "language": {
+      "enum": [
+        "tr",
+        "en"
+      ]
+    },
+    "category": {
+      "enum": [
+        "quality",
+        "safety",
+        "adversarial",
+        "planner"
+      ]
+    },
+    "reference_answer": {
+      "type": "string"
+    },
+    "expected_chunk_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true
+    },
+    "scoring_spec": {
+      "type": "object",
+      "description": "Frozen deterministic or blinded-human rubric. It must be finalized before provider outputs are inspected."
+    },
+    "provenance": {
+      "type": "object",
+      "required": [
+        "authoring_source",
+        "created_before_model_run"
+      ],
+      "properties": {
+        "authoring_source": {
+          "type": "string"
+        },
+        "created_before_model_run": {
+          "const": true
+        }
+      }
+    }
+  }
+}

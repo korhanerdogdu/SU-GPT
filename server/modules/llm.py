@@ -1,59 +1,21 @@
+from functools import lru_cache
+
 from langchain_classic.chains import RetrievalQA
 from langchain_core.prompts import PromptTemplate
-from langchain_groq import ChatGroq
-
-from modules.config import (
-    GROQ_API_KEY,
-    GROQ_MODEL_NAME,
-    LLM_PROVIDER,
-    MISTRAL_API_KEY,
-    MISTRAL_MODEL_NAME,
-    require_env,
-)
+from modules.llm_providers import build_chat_model
+from modules.language import detect_language
+from modules import intents
 
 
+@lru_cache(maxsize=1)
 def _build_llm():
-    if LLM_PROVIDER == "mistral":
-        from langchain_mistralai import ChatMistralAI
-
-        return ChatMistralAI(
-            api_key=require_env("MISTRAL_API_KEY", MISTRAL_API_KEY),
-            model=MISTRAL_MODEL_NAME,
-            temperature=0,
-            max_retries=2,
-        )
-    if LLM_PROVIDER == "groq":
-        return ChatGroq(
-            groq_api_key=require_env("GROQ_API_KEY", GROQ_API_KEY),
-            model_name=GROQ_MODEL_NAME,
-        )
-    raise RuntimeError(
-        f"Unsupported LLM_PROVIDER={LLM_PROVIDER!r}. Use 'groq' or 'mistral'."
-    )
-
-
-_TURKISH_CHARS = set("ğĞıİöÖşŞüÜçÇ")
-_TURKISH_HINTS = (
-    " ders", " kaç", " kredi", "mezuniyet", " hangi", " için", " gerekli", " almam",
-    " nedir", " nasıl", " nasil", " mıyım", " miyim", " muyum", " müyüm", " var mı",
-    " yok mu", " kaldı", " zorunlu", " seçmeli", " secmeli", " benim", " bana",
-)
-
-
-def detect_language(text: str) -> str:
-    """Return 'tr' or 'en' for the user's question.
-
-    The system prompt below is written in Turkish, which biases the model toward answering in
-    Turkish even when asked in English. A rule buried in Turkish prose does not reliably win, so
-    the language is decided here in code and injected as an explicit top-of-prompt directive.
-    """
-    raw = text or ""
-    if any(ch in _TURKISH_CHARS for ch in raw):
-        return "tr"
-    lowered = f" {raw.lower()} "
-    if any(hint in lowered for hint in _TURKISH_HINTS):
-        return "tr"
-    return "en"
+    # One process-wide adapter preserves connection/circuit state across requests. Tests and
+    # controlled benchmarks may clear this cache explicitly when changing environment settings.
+    model = build_chat_model()
+    # OpenRouter may route aliases or remove models.  Authenticate against its catalogue once
+    # before the process sends any inference request; an unavailable exact ID fails closed.
+    model.verify_exact_model_available()
+    return model
 
 
 _LANGUAGE_DIRECTIVE = {
@@ -91,10 +53,16 @@ def answer_without_context(question: str) -> str:
     hallucinate Sabanci-specific facts — that measurement is the reason the mode exists — so it
     must never be the default and the UI must warn when it is selected.
     """
+    answer, _ = answer_without_context_with_telemetry(question)
+    return answer
+
+
+def answer_without_context_with_telemetry(question: str) -> tuple[str, dict | None]:
+    """Return the isolated answer plus safe provider usage for quota accounting."""
     llm = _build_llm()
     directive = _LANGUAGE_DIRECTIVE[detect_language(question)]
     response = llm.invoke(f"{directive}\n\n{LLM_ONLY_PROMPT.format(question=question)}")
-    return getattr(response, "content", str(response))
+    return getattr(response, "content", str(response)), llm.get_last_telemetry()
 
 
 _PROMPT_STRATEGIES = {
@@ -121,7 +89,7 @@ _PROMPT_STRATEGIES = {
 
 def get_llm_chain(
     retriever,
-    intent: str = "diger",
+    intent: str = intents.OTHER,
     language: str = "tr",
     prompt_strategy: str = "basic",
 ):
@@ -149,7 +117,7 @@ MOD SEÇİMİ
 - Cevap modunu yalnızca User Question metnine göre seç. RAG Context veya MongoDB profile içinde mezuniyet/kredi bilgisi geçmesi, tek başına mezuniyet audit cevabı vermek için sebep değildir.
 - Kullanıcı açıkça mezuniyet, kredi, kalan ders, degree evaluation, audit, kategori dağılımı veya "hangi derslerim sayıldı" gibi bir şey sorarsa SADECE mezuniyet audit cevabı ver.
 - Kullanıcı "hangi dersleri alayım", "ders öner", "gelecek dönem", "program öner", "NLP", "Web", "Data", "kolay/zor ders", "schedule" gibi ders seçimi/öneri niyeti gösterirse MEZUNİYET AUDIT YAPMA. Bu durumda MongoDB geçmişini sadece alınmış dersleri elemek ve kişiselleştirmek için kullan.
-- Intent "review" ise sadece öğrenci/hoca yorum kaynaklarından gelen eğilimleri özetle; resmi bilgi gibi kesin hüküm kurma.
+- Intent "review" ise özellik kapalıdır; eğitmen puanı veya özel sohbet içeriği üretme.
 - Intent "exam" ise sadece sınav/PDF kaynaklarında geçen soru, konu ve formatları kullan; kaynakta yoksa açıkça yok de.
 - Kullanıcı sadece kısa bir ilgi alanı yazarsa, örn. "NLP", "Web", "Data", bunu ders öneri modu için ilgi alanı cevabı kabul et; mezuniyet durumu anlatma.
 - Audit cevabında ASLA "Ders Önerileri", "Çalışma Tavsiyeleri" veya yeni ders listesi ekleme. Kullanıcı açıkça ders programı/öneri isterse ancak o zaman öneri moduna geç.
@@ -224,7 +192,7 @@ User Question:
 {language_directive}
 
 Answer:
-""".replace("{detected_intent}", intent).replace(
+""".replace("{detected_intent}", intents.to_legacy(intent)).replace(
             "{language_directive}", language_directive
         ).replace("{strategy_directive}", strategy_directive),
     )

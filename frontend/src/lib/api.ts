@@ -1,3 +1,11 @@
+import {
+  normaliseScheduleDocument,
+  scheduleToBackendPayload,
+  type ScheduleCatalogSection,
+  type ScheduleDocument,
+} from "./schedule";
+import { getStoredLocale, translate } from "@/localization/resources";
+
 export const API_URL: string =
   (import.meta.env.VITE_API_URL as string) || "http://127.0.0.1:8000";
 
@@ -18,11 +26,27 @@ export const RETRIEVAL_MODES = [
 
 export type RetrievalMode = (typeof RETRIEVAL_MODES)[number]["value"];
 
+/** Daily question quota. `exempt` is true for the admin account and for unauthenticated callers. */
+export interface UsageStatus {
+  limit: number;
+  used: number;
+  remaining: number;
+  resets_at: string;
+  exempt: boolean;
+  allowed: boolean;
+}
+
 export interface AskResponse {
   response: string;
+  /** Present whenever the request was metered, so the header can update without a refetch. */
+  usage?: UsageStatus;
+  /** Set when the content-safety gate answered instead of the advisor. */
+  safety_category?: string;
+  rate_limited?: boolean;
   summary?: string;
   sources: string[];
   structured_content?: StructuredContent | null;
+  schedule?: Record<string, unknown> | null;
   export_links?: Record<string, string>;
   profile_updated?: boolean;
   course_history?: {
@@ -60,6 +84,9 @@ export interface StructuredContent {
   missing_required_courses?: string[];
   warnings?: string[];
   sections?: StructuredContent[];
+  // Weekly-schedule (kind === "course_schedule"): the chosen CRNs, for the "copy CRNs" control.
+  crns?: string[];
+  term?: string;
 }
 
 export interface AcademicProfile {
@@ -67,6 +94,7 @@ export interface AcademicProfile {
   degree_code: string | null;
   admission_term: string | null;
   curriculum_term: string | null;
+  academic_year: number | null;
   minor_codes: string[];
   profile_status: string;
 }
@@ -115,6 +143,9 @@ export interface DegreeAudit {
 export interface AuthResponse {
   username: string;
   role: string;
+  access_token: string;
+  token_type: "bearer";
+  expires_at: number;
 }
 
 export interface Course {
@@ -145,10 +176,22 @@ export interface UploadResponse {
 
 async function parseJsonOrThrow<T>(res: Response): Promise<T> {
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`HTTP ${res.status}${text ? ` — ${text}` : ""}`);
+    await res.text().catch(() => "");
+    throw new Error(translate(getStoredLocale(), "errors.http", { status: res.status }));
   }
   return res.json() as Promise<T>;
+}
+
+function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  try {
+    const raw = localStorage.getItem("su-gpt-auth");
+    const auth = raw ? (JSON.parse(raw) as { accessToken?: string }) : null;
+    return auth?.accessToken
+      ? { ...extra, Authorization: `Bearer ${auth.accessToken}` }
+      : extra;
+  } catch {
+    return extra;
+  }
 }
 
 function getSessionId(): string {
@@ -199,19 +242,24 @@ export interface Conversation extends ConversationSummary {
 }
 
 export async function listConversations(username: string): Promise<ConversationSummary[]> {
-  const res = await fetch(`${API_URL}/users/${encodeURIComponent(username)}/conversations`);
+  const res = await fetch(`${API_URL}/users/${encodeURIComponent(username)}/conversations`, {
+    headers: authHeaders(),
+  });
   const data = await parseJsonOrThrow<{ conversations: ConversationSummary[] }>(res);
   return data.conversations ?? [];
 }
 
 export async function getConversation(sessionId: string): Promise<Conversation> {
-  const res = await fetch(`${API_URL}/conversations/${encodeURIComponent(sessionId)}`);
+  const res = await fetch(`${API_URL}/conversations/${encodeURIComponent(sessionId)}`, {
+    headers: authHeaders(),
+  });
   return parseJsonOrThrow<Conversation>(res);
 }
 
 export async function deleteConversation(sessionId: string): Promise<void> {
   const res = await fetch(`${API_URL}/conversations/${encodeURIComponent(sessionId)}`, {
     method: "DELETE",
+    headers: authHeaders(),
   });
   await parseJsonOrThrow(res);
 }
@@ -222,7 +270,7 @@ export async function updateConversation(
 ): Promise<ConversationSummary> {
   const res = await fetch(`${API_URL}/conversations/${encodeURIComponent(sessionId)}`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(changes),
   });
   return parseJsonOrThrow<ConversationSummary>(res);
@@ -246,7 +294,7 @@ export async function askQuestion(
       // ignore corrupt local auth state
     }
   }
-  const res = await fetch(`${API_URL}/ask/`, { method: "POST", body: form });
+  const res = await fetch(`${API_URL}/ask/`, { method: "POST", headers: authHeaders(), body: form });
   return parseJsonOrThrow<AskResponse>(res);
 }
 
@@ -271,10 +319,14 @@ export async function askQuestionStream(
     }
   }
 
-  const res = await fetch(`${API_URL}/ask/stream`, { method: "POST", body: form });
+  const res = await fetch(`${API_URL}/ask/stream`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: form,
+  });
   if (!res.ok || !res.body) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`HTTP ${res.status}${text ? ` — ${text}` : ""}`);
+    await res.text().catch(() => "");
+    throw new Error(translate(getStoredLocale(), "errors.http", { status: res.status }));
   }
 
   const reader = res.body.getReader();
@@ -320,7 +372,9 @@ export async function getCurricula(): Promise<{
 }
 
 export async function getProfile(username: string): Promise<AcademicProfile> {
-  const res = await fetch(`${API_URL}/users/${encodeURIComponent(username)}/profile`);
+  const res = await fetch(`${API_URL}/users/${encodeURIComponent(username)}/profile`, {
+    headers: authHeaders(),
+  });
   const data = await parseJsonOrThrow<{ profile: AcademicProfile }>(res);
   return data.profile;
 }
@@ -331,15 +385,24 @@ export async function saveProfile(
 ): Promise<AcademicProfile> {
   const res = await fetch(`${API_URL}/users/${encodeURIComponent(username)}/profile`, {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(profile),
   });
   const data = await parseJsonOrThrow<{ profile: AcademicProfile }>(res);
   return data.profile;
 }
 
+export async function getUsage(username: string): Promise<UsageStatus> {
+  const res = await fetch(`${API_URL}/users/${encodeURIComponent(username)}/usage`, {
+    headers: authHeaders(),
+  });
+  return parseJsonOrThrow<UsageStatus>(res);
+}
+
 export async function getDegreeAudit(username: string): Promise<DegreeAudit> {
-  const res = await fetch(`${API_URL}/users/${encodeURIComponent(username)}/degree-audit`);
+  const res = await fetch(`${API_URL}/users/${encodeURIComponent(username)}/degree-audit`, {
+    headers: authHeaders(),
+  });
   return parseJsonOrThrow<DegreeAudit>(res);
 }
 
@@ -361,7 +424,9 @@ export async function fetchCourses(search = ""): Promise<Course[]> {
 }
 
 export async function fetchUserCourses(username: string): Promise<Course[]> {
-  const res = await fetch(`${API_URL}/users/${encodeURIComponent(username)}/courses`);
+  const res = await fetch(`${API_URL}/users/${encodeURIComponent(username)}/courses`, {
+    headers: authHeaders(),
+  });
   const data = await parseJsonOrThrow<{ courses: Course[] }>(res);
   return data.courses;
 }
@@ -373,7 +438,7 @@ export async function saveUserCourses(
 ): Promise<Course[]> {
   const res = await fetch(`${API_URL}/users/${encodeURIComponent(username)}/courses`, {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ course_ids: courseIds, statuses }),
   });
   const data = await parseJsonOrThrow<{ courses: Course[] }>(res);
@@ -385,6 +450,7 @@ export async function uploadDocuments(files: File[]): Promise<UploadResponse> {
   for (const f of files) form.append("files", f, f.name);
   const res = await fetch(`${API_URL}/upload_documents/`, {
     method: "POST",
+    headers: authHeaders(),
     body: form,
   });
   return parseJsonOrThrow<UploadResponse>(res);
@@ -396,3 +462,176 @@ export async function healthCheck(): Promise<{ message: string }> {
 }
 
 export const SUPPORTED_EXTENSIONS = [".pdf", ".pptx", ".docx", ".md", ".txt"];
+
+export interface ScheduleSectionsResponse {
+  term: string;
+  term_label: string;
+  total: number;
+  limit: number;
+  has_more: boolean;
+  sections: ScheduleCatalogSection[];
+}
+
+export interface ScheduleCourseSectionsResponse {
+  term: string;
+  term_label: string;
+  course_id: string;
+  title: string;
+  sections: ScheduleCatalogSection[];
+}
+
+export interface UserScheduleResponse {
+  schedule: ScheduleDocument | null;
+  revision: number;
+  updatedAt: string | null;
+}
+
+export async function fetchScheduleSections(
+  search = "",
+  term = "202601",
+  limit = 80,
+): Promise<ScheduleSectionsResponse> {
+  const params = new URLSearchParams({ term, limit: String(limit) });
+  if (search.trim()) params.set("search", search.trim());
+  const res = await fetch(`${API_URL}/schedule/sections?${params.toString()}`);
+  return parseJsonOrThrow<ScheduleSectionsResponse>(res);
+}
+
+export async function fetchScheduleCourseSections(
+  courseCode: string,
+  term = "202601",
+): Promise<ScheduleCourseSectionsResponse> {
+  const params = new URLSearchParams({ term, language: "tr" });
+  const res = await fetch(
+    `${API_URL}/schedule/courses/${encodeURIComponent(courseCode)}/sections?${params.toString()}`,
+  );
+  return parseJsonOrThrow<ScheduleCourseSectionsResponse>(res);
+}
+
+export async function getUserSchedule(username: string): Promise<UserScheduleResponse> {
+  const res = await fetch(`${API_URL}/users/${encodeURIComponent(username)}/schedule`, {
+    headers: authHeaders(),
+  });
+  const data = await parseJsonOrThrow<{
+    schedule?: unknown;
+    revision?: number;
+    updated_at?: string | null;
+  }>(res);
+  return {
+    schedule: normaliseScheduleDocument(data.schedule),
+    revision: data.revision ?? 0,
+    updatedAt: data.updated_at ?? null,
+  };
+}
+
+export async function saveUserSchedule(
+  username: string,
+  schedule: ScheduleDocument,
+  expectedRevision?: number,
+): Promise<UserScheduleResponse> {
+  const body: Record<string, unknown> = { schedule: scheduleToBackendPayload(schedule) };
+  if (expectedRevision != null) body.expected_revision = expectedRevision;
+  const res = await fetch(`${API_URL}/users/${encodeURIComponent(username)}/schedule`, {
+    method: "PUT",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+  const data = await parseJsonOrThrow<{
+    schedule?: unknown;
+    revision?: number;
+    updated_at?: string | null;
+  }>(res);
+  return {
+    schedule: normaliseScheduleDocument(data.schedule) ?? schedule,
+    revision: data.revision ?? (expectedRevision ?? 0) + 1,
+    updatedAt: data.updated_at ?? schedule.updatedAt,
+  };
+}
+
+export const COURSE_REVIEW_DIMENSIONS = [
+  "difficulty",
+  "workload",
+  "learning_value",
+  "organization",
+  "overall_satisfaction",
+] as const;
+
+export type CourseReviewDimension = (typeof COURSE_REVIEW_DIMENSIONS)[number];
+
+export interface CourseReviewPolicy {
+  enabled: boolean;
+  course_only: true;
+  instructor_ratings_allowed: false;
+  private_chat_ingestion_allowed: false;
+  explicit_consent_required: true;
+  minimum_aggregate_reviews: number;
+  rating_dimensions: CourseReviewDimension[];
+  message: string;
+}
+
+export interface CourseReviewSubmission {
+  course_code: string;
+  difficulty: number;
+  workload: number;
+  learning_value: number;
+  organization: number;
+  overall_satisfaction: number;
+  comment?: string;
+  consent: true;
+  consent_version: "course-review-v1";
+}
+
+export interface CourseReviewPublic {
+  reviewId: string;
+  courseCode: string;
+  ratings: Record<CourseReviewDimension, number>;
+  moderationState: "pending" | "approved" | "rejected";
+}
+
+export interface CourseReviewAggregate {
+  available: boolean;
+  message?: string;
+  courseCode?: string;
+  reviewCount?: number;
+  averages?: Record<CourseReviewDimension, number>;
+  distributions?: Record<CourseReviewDimension, Record<string, number>>;
+}
+
+export async function fetchCourseReviewPolicy(locale = getStoredLocale()): Promise<CourseReviewPolicy> {
+  const res = await fetch(`${API_URL}/course-reviews/policy?language=${locale}`);
+  return parseJsonOrThrow<CourseReviewPolicy>(res);
+}
+
+export async function submitCourseReview(
+  payload: CourseReviewSubmission,
+  locale = getStoredLocale(),
+): Promise<{ review: CourseReviewPublic; message: string }> {
+  const res = await fetch(`${API_URL}/course-reviews?language=${locale}`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(payload),
+  });
+  return parseJsonOrThrow(res);
+}
+
+export async function fetchCourseReviewAggregate(
+  courseCode: string,
+  locale = getStoredLocale(),
+): Promise<CourseReviewAggregate> {
+  const res = await fetch(
+    `${API_URL}/course-reviews/${encodeURIComponent(courseCode)}/aggregate?language=${locale}`,
+    { headers: authHeaders() },
+  );
+  return parseJsonOrThrow(res);
+}
+
+export async function deleteMyCourseReview(
+  courseCode: string,
+  locale = getStoredLocale(),
+): Promise<{ deleted: true; message: string }> {
+  const res = await fetch(
+    `${API_URL}/course-reviews/${encodeURIComponent(courseCode)}?language=${locale}`,
+    { method: "DELETE", headers: authHeaders() },
+  );
+  return parseJsonOrThrow(res);
+}

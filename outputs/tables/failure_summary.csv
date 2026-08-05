@@ -1,12 +1,2 @@
-mode,error_type,count
-bm25,insufficient_context,1
-bm25,retrieval_miss,10
-bm25,unsupported_answer,2
-dense,retrieval_miss,13
-hybrid,retrieval_miss,4
-hybrid,retrieval_noise,2
-hybrid_rerank,retrieval_miss,4
-hybrid_rerank,retrieval_noise,5
-llm_only,generation_hallucination,8
-llm_only,insufficient_context,4
-llm_only,unsupported_answer,6
+error_type,mode,count
+retrieval_miss,hybrid_rerank,2

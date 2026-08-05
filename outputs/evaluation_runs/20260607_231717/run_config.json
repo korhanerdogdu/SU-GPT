@@ -1,0 +1,19 @@
+{
+  "timestamp": "20260607_231717",
+  "benchmark_path": "/Users/selmanyilmaz/SU-GPT-clone/data/benchmark/questions.jsonl",
+  "num_questions": 10,
+  "modes": [
+    "dense",
+    "hybrid_rerank"
+  ],
+  "limit": 10,
+  "top_k": 6,
+  "retrieval_only": false,
+  "prompt_strategy": "basic",
+  "expert_mode": "auto",
+  "token_estimate_heuristic": "len(text)//4",
+  "estimated_cost_rates_per_1k_tokens": {
+    "prompt": 5e-05,
+    "completion": 8e-05
+  }
+}

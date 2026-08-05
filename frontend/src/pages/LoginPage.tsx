@@ -1,25 +1,86 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import { Eye, EyeOff, Lock, User } from "lucide-react";
+import { ArrowRight, ArrowUp, Eye, EyeOff, KeyRound, UserRound } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/contexts/AuthContext";
-import { SAMPLE_QUESTIONS } from "@/lib/sample-questions";
+import { useLocale } from "@/contexts/LocaleContext";
+import { useTheme } from "@/contexts/ThemeContext";
 import ThemeToggle from "@/components/ThemeToggle";
+import LanguageToggle from "@/components/LanguageToggle";
+import { sampleQuestions } from "@/lib/sample-questions";
 
-/** Short lines, typed one word at a time. Written from the student's side of the screen. */
-const TAGLINES = [
-  "See what you have left.",
-  "Check electives and minors.",
-  "Answers from official curriculum data.",
-];
+/**
+ * Sign-in screen.
+ *
+ * The hero is a mock composer that types out the questions students actually bring here. Those
+ * questions are the product — showing one being asked says more than any description of it — and
+ * typing them keeps the screen alive without decoration that means nothing.
+ *
+ * The page follows the app theme rather than pinning its own colours, and it is sized to fit the
+ * viewport on desktop: a login screen that scrolls has failed at its one job.
+ */
 
+const TYPE_MS = 42;
+const DELETE_MS = 18;
+const HOLD_MS = 2000;
+
+/** Types one question, holds it, clears it, moves to the next. Cycles forever. */
+function useTypedQuestion(questions: readonly string[], enabled: boolean) {
+  const [index, setIndex] = useState(0);
+  const [text, setText] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const timer = useRef<number>();
+
+  // Restart cleanly when the interface language changes mid-cycle.
+  useEffect(() => {
+    setIndex(0);
+    setText("");
+    setDeleting(false);
+  }, [questions]);
+
+  useEffect(() => {
+    if (!enabled) {
+      setText(questions[index] ?? "");
+      return;
+    }
+    const target = questions[index] ?? "";
+
+    if (!deleting && text === target) {
+      timer.current = window.setTimeout(() => setDeleting(true), HOLD_MS);
+    } else if (deleting && text === "") {
+      setDeleting(false);
+      setIndex((current) => (current + 1) % questions.length);
+    } else {
+      timer.current = window.setTimeout(
+        () =>
+          setText((current) =>
+            deleting ? current.slice(0, -1) : target.slice(0, current.length + 1),
+          ),
+        deleting ? DELETE_MS : TYPE_MS,
+      );
+    }
+    return () => window.clearTimeout(timer.current);
+  }, [text, deleting, index, questions, enabled]);
+
+  // Reduced motion: no typing, just swap the whole question on a slow timer.
+  useEffect(() => {
+    if (enabled) return;
+    const id = window.setInterval(
+      () => setIndex((current) => (current + 1) % questions.length),
+      5000,
+    );
+    return () => window.clearInterval(id);
+  }, [enabled, questions.length]);
+
+  return { text, index };
+}
 
 function usePrefersReducedMotion() {
   const [reduced, setReduced] = useState(
-    () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false
+    () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false,
   );
   useEffect(() => {
     const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -30,54 +91,78 @@ function usePrefersReducedMotion() {
   return reduced;
 }
 
-function TypedTagline() {
+/** The signature: the product's own composer, asking the product's own questions. */
+function AskDemo() {
+  const { locale, t } = useLocale();
   const reduced = usePrefersReducedMotion();
-  const [line, setLine] = useState(0);
-  const [shown, setShown] = useState(0);
-
-  const words = TAGLINES[line].split(" ");
-  const complete = shown >= words.length;
-
-  // `shown` MUST be a dependency: without it the effect never re-runs after the first word
-  // and the line stalls one word in.
-  useEffect(() => {
-    if (reduced) return; // honour reduced motion: first line, fully shown, no cycling
-    if (!complete) {
-      const t = setTimeout(() => setShown((n) => n + 1), 130);
-      return () => clearTimeout(t);
-    }
-    const t = setTimeout(() => {
-      setLine((i) => (i + 1) % TAGLINES.length);
-      setShown(0);
-    }, 2400);
-    return () => clearTimeout(t);
-  }, [reduced, complete, line, shown]);
-
-  const visible = reduced ? words : words.slice(0, shown);
+  const questions = useMemo(() => sampleQuestions(locale), [locale]);
+  const { text, index } = useTypedQuestion(questions, !reduced);
+  const upNext = useMemo(
+    () => [1, 2].map((step) => questions[(index + step) % questions.length]),
+    [questions, index],
+  );
 
   return (
-    // Height is reserved for the longest line so cycling never shifts the layout.
-    <p className="flex min-h-[4.5rem] flex-wrap items-start gap-x-[0.32em] text-2xl font-semibold leading-snug tracking-tight text-white sm:text-3xl">
-      {visible.map((word, i) => (
+    <div className="mt-9 w-full max-w-xl">
+      <p className="font-ledger text-[0.68rem] uppercase tracking-[0.18em] text-muted-foreground">
+        {t("login.askLabel")}
+      </p>
+
+      <div className="mt-3 flex items-center gap-3 rounded-2xl border border-border bg-card px-4 py-3.5 shadow-lg shadow-black/5">
+        <p className="flex min-h-[2.75rem] min-w-0 flex-1 items-center text-[1.02rem] leading-snug text-foreground">
+          {text}
+          <span
+            aria-hidden="true"
+            className="ml-[3px] inline-block h-[1.15em] w-[2px] translate-y-[0.22em] bg-sabanci-gold motion-safe:animate-pulse"
+          />
+        </p>
         <span
-          key={`${line}-${i}`}
-          className="inline-block animate-in fade-in slide-in-from-bottom-1 duration-300"
+          aria-hidden="true"
+          className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-primary text-primary-foreground"
         >
-          {word}
+          <ArrowUp className="h-4 w-4" />
         </span>
-      ))}
-      <span
-        aria-hidden="true"
-        className="ml-0.5 inline-block h-[1.05em] w-[3px] translate-y-[0.16em] rounded-sm bg-sabanci-gold animate-pulse"
-      />
-      <span className="sr-only">{TAGLINES[line]}</span>
-    </p>
+      </div>
+
+      {/* Position in the cycle, then the two questions queued up next. The chips are part of the
+          same mock as the composer — deliberately not buttons, because nothing here can be
+          clicked until you are signed in, and a control that does nothing is worse than a label. */}
+      <div className="mt-4 flex items-center gap-1.5" aria-hidden="true">
+        {questions.map((question, dot) => (
+          <span
+            key={question}
+            className={`h-[3px] rounded-full transition-all duration-300 ${
+              dot === index ? "w-6 bg-sabanci-gold" : "w-2.5 bg-border"
+            }`}
+          />
+        ))}
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center gap-2" aria-hidden="true">
+        {upNext.map((question) => (
+          <span
+            key={question}
+            className="max-w-full truncate rounded-full border border-border bg-card/60 px-3 py-1.5 text-[0.78rem] text-muted-foreground backdrop-blur-sm"
+          >
+            {question}
+          </span>
+        ))}
+      </div>
+
+      {/* The live region carries the whole question, so a screen reader never reads a half-typed
+          string letter by letter. */}
+      <p className="sr-only" aria-live="polite">
+        {questions[index]}
+      </p>
+    </div>
   );
 }
 
 export default function LoginPage() {
   const navigate = useNavigate();
   const { signIn } = useAuth();
+  const { t } = useLocale();
+  const { resolvedTheme } = useTheme();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -86,7 +171,7 @@ export default function LoginPage() {
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (!username.trim() || !password.trim()) {
-      toast.error("Please enter both a username and a password.");
+      toast.error(t("login.missingFields"));
       return;
     }
     setSubmitting(true);
@@ -94,144 +179,196 @@ export default function LoginPage() {
       await signIn(username.trim(), password);
       navigate("/", { replace: true });
     } catch {
-      toast.error("Invalid credentials. Use admin / admin for this demo.");
+      toast.error(t("login.invalid"));
     } finally {
       setSubmitting(false);
     }
   }
 
+  // The supplied dark-ground lockup (new.png, matte removed by
+  // server/scripts/make_logo_transparent.py) on dark; the navy original on light, where its
+  // white "SU" and white descriptor would disappear into the background.
+  const logo =
+    resolvedTheme === "dark" ? "/assets/adviSU-logo-dark.png" : "/assets/adviSU-logo.png";
+
   return (
-    // min-h-screen rather than a hard h-screen + overflow-hidden: on a short laptop the brand
-    // column is taller than the viewport, and clipping it silently is worse than letting the
-    // page scroll. Both panels still stretch to full height on normal screens.
-    <div className="flex min-h-screen w-screen flex-col lg:flex-row">
-      {/* ── Left: paper panel. The lockup was drawn for a light ground, so it sits here natively. */}
-      <section
-        className="relative flex flex-1 flex-col justify-center overflow-hidden bg-cover bg-center px-8 py-12 sm:px-14 lg:items-center lg:px-16 lg:py-0"
-        style={{
-          backgroundImage:
-            // Heavy navy wash: the campus stays readable as place, never as competing detail.
-            "linear-gradient(180deg, rgba(5,12,24,0.90) 0%, rgba(0,32,66,0.93) 55%, rgba(4,10,22,0.95) 100%), url(/assets/campus.jpg)",
-        }}
-      >
-        <div className="relative w-full max-w-2xl">
-          {/* Reversed (knockout) lockup — the navy type is knocked out to white so the mark sits
-              directly on the photograph with no plate behind it, while the gold and teal accents
-              survive. Generated from adviSU-logo.png; see adviSU-logo-reversed.png. The soft
-              drop-shadow is what holds it against the brighter parts of the campus image. */}
-          <img
-            src="/assets/adviSU-logo-reversed.png"
-            alt="adviSU — Sabancı University Academic Advisor"
-            className="w-[min(100%,33rem)] drop-shadow-[0_4px_24px_rgba(0,0,0,0.55)]"
-          />
+    // Fits the viewport on desktop — no scrolling to reach the form. Mobile stacks and scrolls,
+    // which is the only honest option for two panels on a phone.
+    <div className="flex min-h-screen w-full flex-col bg-background text-foreground lg:h-screen lg:min-h-0 lg:flex-row lg:overflow-hidden">
+      {/* ── Left: what students ask. */}
+      <section className="relative flex flex-1 flex-col overflow-hidden px-6 pb-12 pt-10 sm:px-12 lg:overflow-y-auto lg:px-14 lg:py-10 xl:px-20">
+        {/* Campus photograph across the outer half of the panel, cropped to its centre. It is
+            masked to nothing at its inner edge so it reads as the panel receding into place
+            rather than as a picture pasted next to the text. */}
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-y-0 right-0 w-1/2"
+          style={{
+            backgroundImage: "url(/assets/campus.jpg)",
+            backgroundSize: "cover",
+            backgroundPosition: "10% center",
+            filter: "saturate(0.62) contrast(0.94)",
+            maskImage:
+              "linear-gradient(90deg, transparent 0%, rgba(0,0,0,0.45) 30%, rgba(0,0,0,0.85) 65%, #000 100%)",
+            WebkitMaskImage:
+              "linear-gradient(90deg, transparent 0%, rgba(0,0,0,0.45) 30%, rgba(0,0,0,0.85) 65%, #000 100%)",
+          }}
+        />
 
-          <div className="mt-9 max-w-lg">
-            <TypedTagline />
-          </div>
+        {/* Veil + the two brand washes. Built from `--background`, so it darkens the photo in the
+            dark theme and lightens it in the light one without branching on the theme — which the
+            `dark:` variant could not do here anyway, since index.html pins `class="dark"`. */}
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0"
+          style={{
+            background:
+              "linear-gradient(90deg, hsl(var(--background)) 0%, hsl(var(--background)) 34%, hsl(var(--background) / 0.90) 58%, hsl(var(--background) / 0.74) 100%), " +
+              "linear-gradient(180deg, hsl(var(--background) / 0.55) 0%, transparent 30%, transparent 62%, hsl(var(--background) / 0.65) 100%), " +
+              "radial-gradient(ellipse 60% 55% at 15% 25%, hsl(var(--primary) / 0.14) 0%, transparent 62%), " +
+              "radial-gradient(ellipse 50% 45% at 85% 90%, rgba(214,161,58,0.10) 0%, transparent 60%)",
+          }}
+        />
 
-          {/* Sample questions, set as quotations: what the product is for, in the student's own
-              words. Plain UI sans (not italic) at a larger size and higher contrast, so they read
-              as real questions with weight rather than as decorative pull-quotes. */}
-          {/* pl-10 on the whole block so the label and every quote share one left edge; only the
-              ornament hangs into the margin, which is how a pulled quote should sit. */}
-          {/* Wide enough that every question sits on one line — a wrapped question reads as a
-              paragraph and loses its punch. */}
-          <div className="relative mt-9 max-w-2xl pl-10">
-            <span
-              aria-hidden="true"
-              className="pointer-events-none absolute left-0 top-[0.42em] select-none font-serif text-[4.5rem] leading-none text-sabanci-gold/40"
-            >
-              &ldquo;
-            </span>
-            <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-sabanci-light/50">
-              Students ask
+        {/* The lockup sits top-left and large, straight on the panel — no halo, no plate.
+            Which file depends on the theme, and it has to: the knockout carries a white "SU" and
+            a white descriptor, which is what makes it read on the dark panel, and exactly what
+            would make it vanish on the light one. */}
+        <img
+          src={logo}
+          alt="adviSU — Sabancı University Academic Advisor"
+          className="relative w-[min(72vw,17rem)] shrink-0 lg:w-[min(40vw,19rem)] xl:w-[21rem]"
+        />
+
+        {/* Takes the remaining height so the copy stays optically centred under the lockup. */}
+        <div className="relative flex w-full flex-1 items-center pt-8 lg:pt-0">
+          <div className="w-full max-w-2xl">
+            <p className="font-ledger text-[0.7rem] uppercase tracking-[0.2em] text-muted-foreground">
+              {t("login.eyebrow")}
             </p>
-            <div className="mt-4">
-              <ul className="space-y-3 [text-shadow:0_1px_12px_rgba(0,0,0,0.6)]">
-                {SAMPLE_QUESTIONS.map((question, i) => (
-                  <li
-                    key={question}
-                    style={{ animationDelay: `${300 + i * 120}ms` }}
-                    className="animate-in fade-in slide-in-from-bottom-2 fill-mode-both duration-500 text-[1.15rem] font-medium leading-snug tracking-tight text-white/95"
-                  >
-                    &ldquo;{question}&rdquo;
-                  </li>
-                ))}
-              </ul>
-            </div>
+
+            <h1 className="mt-3 font-display text-[2.15rem] font-extrabold leading-[1.04] tracking-[-0.028em] sm:text-[2.9rem] lg:text-[3.25rem]">
+              {t("login.headlineTop")}
+              <br />
+              <span className="text-muted-foreground">{t("login.headlineBottom")}</span>
+            </h1>
+
+            <p className="mt-4 max-w-lg text-[1rem] leading-relaxed text-muted-foreground">
+              {t("login.lede")}
+            </p>
+
+            <AskDemo />
           </div>
         </div>
-
       </section>
 
-      {/* ── Right: the form. Deep navy, deliberately quiet — all the character lives on the left. */}
-      <section className="relative flex w-full flex-col justify-center border-t border-border bg-card px-8 py-14 text-card-foreground sm:px-14 lg:w-[30rem] lg:shrink-0 lg:border-l lg:border-t-0 lg:px-12 xl:w-[34rem]">
-        <ThemeToggle className="absolute right-5 top-5" />
+      {/* ── Right: the form. Quiet, so the one action is obvious. */}
+      <section className="relative flex w-full flex-col justify-center border-t border-border bg-card px-6 py-12 sm:px-12 lg:w-[28rem] lg:shrink-0 lg:overflow-y-auto lg:border-l lg:border-t-0 lg:py-8 xl:w-[32rem] xl:px-14">
+        <div className="absolute right-5 top-5 flex items-center gap-2">
+          <LanguageToggle />
+          <ThemeToggle />
+        </div>
+
         <div className="mx-auto w-full max-w-sm">
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">Welcome back</h1>
-          <p className="mt-1.5 text-sm text-muted-foreground">
-            Sign in to continue to adviSU.
+          <h2 className="font-display text-[1.65rem] font-semibold tracking-[-0.02em]">
+            {t("login.welcome")}
+          </h2>
+          <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
+            {t("login.subtitle")}
           </p>
 
-          <form onSubmit={handleSubmit} className="mt-9 space-y-5">
+          <form onSubmit={handleSubmit} className="mt-8 space-y-4">
             <div className="space-y-1.5">
-              <Label htmlFor="username" className="text-foreground">
-                Username
+              <Label
+                htmlFor="username"
+                className="font-ledger text-[0.68rem] uppercase tracking-[0.14em] text-muted-foreground"
+              >
+                {t("login.username")}
               </Label>
-              <div className="relative">
-                <User className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  id="username"
-                  autoComplete="username"
-                  placeholder="admin"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  className="border-border bg-background pl-9 text-foreground placeholder:text-muted-foreground"
-                />
-              </div>
+              <Input
+                id="username"
+                autoComplete="username"
+                placeholder="student"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                className="h-11 rounded-xl border-border bg-background px-4 focus-visible:border-sabanci-gold focus-visible:ring-1 focus-visible:ring-sabanci-gold focus-visible:ring-offset-0"
+              />
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="password" className="text-foreground">
-                Password
+              <Label
+                htmlFor="password"
+                className="font-ledger text-[0.68rem] uppercase tracking-[0.14em] text-muted-foreground"
+              >
+                {t("login.password")}
               </Label>
               <div className="relative">
-                <Lock className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   id="password"
                   type={showPassword ? "text" : "password"}
                   autoComplete="current-password"
-                  placeholder="admin"
+                  placeholder={t("login.passwordHint")}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="border-border bg-background pl-9 pr-9 text-foreground placeholder:text-muted-foreground"
+                  className="h-11 rounded-xl border-border bg-background px-4 pr-11 focus-visible:border-sabanci-gold focus-visible:ring-1 focus-visible:ring-sabanci-gold focus-visible:ring-offset-0"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword((s) => !s)}
-                  aria-label={showPassword ? "Hide password" : "Show password"}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 rounded text-muted-foreground transition-colors hover:text-foreground"
+                  aria-label={showPassword ? t("login.hidePassword") : t("login.showPassword")}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 rounded-md p-1 text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sabanci-gold"
                 >
                   {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
               </div>
             </div>
 
+            {/* Sabancı blue warming into the gold at the far end — the two brand colours in the
+                one place the page wants you to look. */}
             <Button
               type="submit"
-              size="xl"
-              className="w-full bg-primary text-primary-foreground hover:opacity-90"
+              style={{
+                backgroundImage:
+                  "linear-gradient(100deg, hsl(var(--primary)) 0%, hsl(var(--primary)) 42%, #B98A3C 88%, #D6A13A 100%)",
+              }}
+              className="group h-11 w-full rounded-xl text-[0.95rem] font-semibold text-primary-foreground shadow-md transition-all hover:brightness-110 focus-visible:ring-2 focus-visible:ring-sabanci-gold focus-visible:ring-offset-2 focus-visible:ring-offset-card disabled:opacity-60"
               disabled={submitting}
             >
-              {submitting ? "Signing in…" : "Sign in"}
+              {submitting ? t("login.submitting") : t("login.submit")}
+              {!submitting && (
+                <ArrowRight className="ml-2 h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+              )}
             </Button>
           </form>
 
-          <p className="mt-7 border-t border-border pt-5 text-sm text-muted-foreground">
-            Student demo <span className="font-mono text-foreground">student / student</span>
-            {" · "}Admin <span className="font-mono text-foreground">admin / admin</span>
-          </p>
+          <div className="mt-8 border-t border-border pt-5">
+            <p className="font-ledger text-[0.66rem] uppercase tracking-[0.14em] text-muted-foreground">
+              {t("login.demoHeading")}
+            </p>
+            <dl className="mt-2.5 space-y-1.5 font-ledger text-[0.78rem]">
+              <div className="flex items-center gap-3">
+                <dt className="flex w-[7.5rem] shrink-0 items-center gap-2 text-muted-foreground">
+                  <UserRound className="h-3.5 w-3.5 shrink-0" />
+                  {t("login.demoAccounts")}
+                </dt>
+                <dd className="border-l border-border pl-3">student / student</dd>
+              </div>
+              <div className="flex items-center gap-3">
+                <dt className="flex w-[7.5rem] shrink-0 items-center gap-2 text-muted-foreground">
+                  <KeyRound className="h-3.5 w-3.5 shrink-0" />
+                  {t("login.adminAccount")}
+                </dt>
+                <dd className="border-l border-border pl-3">admin / admin</dd>
+              </div>
+            </dl>
+          </div>
         </div>
+
+        {/* Honest attribution: this is a course project, not a university publication, so it does
+            not claim a Sabancı copyright. */}
+        <p className="absolute inset-x-0 bottom-4 px-6 text-center font-ledger text-[0.66rem] text-muted-foreground/70 sm:px-12">
+          {t("login.footer")}
+        </p>
       </section>
     </div>
   );

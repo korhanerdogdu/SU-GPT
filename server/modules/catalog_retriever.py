@@ -88,7 +88,8 @@ def retrieve_documents(
     documents: list[Document] = []
 
     for where in filters:
-        documents.extend(_exact_get(vectorstore, where, limit=max(k * 3, 12)))
+        if _is_selective_filter(where):
+            documents.extend(_exact_get(vectorstore, where, limit=max(k * 3, 12)))
         try:
             documents.extend(vectorstore.similarity_search(query, k=max(k, 8), filter=where))
         except Exception:
@@ -347,6 +348,22 @@ def _combine_filter(
     if metadata_filter and candidate_filter:
         return _where([metadata_filter, candidate_filter])
     return metadata_filter or candidate_filter or {}
+
+
+def _is_selective_filter(where: dict[str, Any]) -> bool:
+    if not where:
+        return False
+    text = str(where)
+    return any(
+        needle in text
+        for needle in [
+            "course_id",
+            "term_code",
+            "program",
+            "source_collection",
+            "sourceId",
+        ]
+    )
 
 
 def _exact_get(vectorstore: Any, where: dict[str, Any], limit: int) -> list[Document]:
