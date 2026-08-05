@@ -192,6 +192,7 @@ class TimetableResult:
     placed: list[tuple[Section, list[Section]]] = field(default_factory=list)   # (lecture, [extras])
     not_offered: list[str] = field(default_factory=list)       # recommended but no section this term
     unplaced: list[str] = field(default_factory=list)          # offered but no conflict-free slot
+    minimum_su_credits: int = 0
 
     @property
     def all_sections(self) -> list[Section]:
@@ -204,6 +205,17 @@ class TimetableResult:
     @property
     def crns(self) -> list[str]:
         return [s.crn for s in self.all_sections if s.crn]
+
+    @property
+    def placed_su_credits(self) -> int:
+        return sum(
+            int((course_planner.resolve(lecture.course_id) or {}).get("su_credits") or 0)
+            for lecture, _ in self.placed
+        )
+
+    @property
+    def credit_shortfall(self) -> int:
+        return max(0, int(self.minimum_su_credits) - self.placed_su_credits)
 
 
 def _primaries(sections: list[Section]) -> list[Section]:
@@ -234,8 +246,8 @@ def _candidate_blocks(sections: list[Section]) -> list[Block]:
         fitting = [s for s in group if not s.conflicts_with(lecture)]
         if fitting:
             blocks.extend((lecture, [s]) for s in fitting)
-        else:
-            blocks.append((lecture, []))   # keep the lecture; its component just cannot be placed
+        # If an official course has a secondary component, silently dropping it creates an
+        # invalid schedule.  No complete block means this lecture choice is unavailable.
     return blocks
 
 
@@ -317,7 +329,9 @@ def build_timetable_for_load(
     """
     codes = list(dict.fromkeys(course_planner.normalize_code(code) for code in candidate_codes if code))
     if not codes:
-        return build_timetable([], term=term)
+        result = build_timetable([], term=term)
+        result.minimum_su_credits = max(0, int(minimum_su_credits))
+        return result
 
     target_courses = min(max(1, int(target_courses)), len(codes))
     minimum_su_credits = max(0, int(minimum_su_credits))
@@ -345,7 +359,9 @@ def build_timetable_for_load(
                 and not result.unplaced
                 and placed_score(result)[0] >= minimum_su_credits
             ):
+                result.minimum_su_credits = minimum_su_credits
                 return result
+    best.minimum_su_credits = minimum_su_credits
     return best
 
 
@@ -452,6 +468,9 @@ def timetable_payload(
         "crns": result.crns,
         "not_offered": [course_planner.display_code(code) for code in result.not_offered],
         "unplaced": [course_planner.display_code(code) for code in result.unplaced],
+        "placed_su_credits": result.placed_su_credits,
+        "minimum_su_credits": result.minimum_su_credits,
+        "credit_shortfall": result.credit_shortfall,
         # A non-empty list is reserved for future manual-edit validation. Auto-generated results
         # are conflict-free by construction; TBA sections do not occupy a time interval.
         "conflicts": [],

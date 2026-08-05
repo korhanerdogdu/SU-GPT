@@ -11,7 +11,14 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import ASCENDING, UpdateOne
 
 from logger import logger
-from modules.config import ADMIN_USERNAME, CATALOG_DATA_DIR, DEGREE_DATA_DIR, MONGO_DB_NAME, MONGO_URI
+from modules.config import (
+    ADMIN_USERNAME,
+    CATALOG_DATA_DIR,
+    CONVERSATION_RETENTION_DAYS,
+    DEGREE_DATA_DIR,
+    MONGO_DB_NAME,
+    MONGO_URI,
+)
 
 
 client = AsyncIOMotorClient(MONGO_URI, serverSelectionTimeoutMS=3000)
@@ -24,6 +31,7 @@ upload_batches = db["uploadBatches"]
 source_documents = db["sourceDocuments"]
 ingestion_jobs = db["ingestionJobs"]
 instructor_reviews = db["instructorReviews"]
+course_reviews = db["courseReviews"]
 exams = db["exams"]
 embedding_cache = db["embeddingCache"]
 conversations = db["conversations"]
@@ -72,6 +80,11 @@ async def ensure_database() -> None:
     await exams.create_index([("courseCode", ASCENDING)])
     await embedding_cache.create_index([("cacheKey", ASCENDING)], unique=True)
     await conversations.create_index([("sessionId", ASCENDING)], unique=True)
+    await conversations.create_index(
+        [("updatedAt", ASCENDING)],
+        expireAfterSeconds=CONVERSATION_RETENTION_DAYS * 24 * 60 * 60,
+        name="conversation_retention_ttl",
+    )
     await ensure_user(ADMIN_USERNAME, role="admin")
 
 
@@ -161,7 +174,9 @@ ELIGIBLE_FOR_CREDIT = {"completed", "transfer", "exempted"}
 
 def _norm_status(value: Any) -> str:
     status = str(value or "completed").strip().lower()
-    return status if status in COURSE_STATUSES else "completed"
+    if status not in COURSE_STATUSES:
+        raise ValueError(f"Unsupported course status: {status}")
+    return status
 
 
 async def get_user_courses(username: str) -> list[dict[str, Any]]:
@@ -316,6 +331,7 @@ DEFAULT_ACADEMIC_PROFILE = {
     "degree_code": None,
     "admission_term": None,
     "curriculum_term": None,
+    "academic_year": None,
     "minor_codes": [],
     "profile_status": "unset",
 }

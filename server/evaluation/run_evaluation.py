@@ -27,6 +27,7 @@ sys.path.insert(0, str(EVALUATION_DIR))
 sys.path.insert(0, str(SERVER_ROOT))
 
 from metrics import retrieval_metrics  # noqa: E402
+from modules import intents  # noqa: E402
 from modules.load_vectorstore import get_vectorstore  # noqa: E402
 from modules.llm import get_llm_chain  # noqa: E402
 from modules.query_handlers import query_chain  # noqa: E402
@@ -178,7 +179,9 @@ def generate_answer(
 
     started = time.perf_counter()
     retriever = StaticRetriever(documents=final_context_documents)
-    chain = get_llm_chain(retriever, intent=str(question.get("intent") or "diger"))
+    # Benchmark rows carry the historical Turkish labels (they are committed measurement
+    # artifacts); the prompt speaks the canonical English vocabulary.
+    chain = get_llm_chain(retriever, intent=intents.to_canonical(question.get("intent")))
     result = query_chain(chain, llm_question)
     generation_ms = (time.perf_counter() - started) * 1000
 

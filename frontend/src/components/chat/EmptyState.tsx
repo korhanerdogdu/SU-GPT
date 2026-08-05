@@ -6,6 +6,8 @@ import {
   ListChecks,
 } from "lucide-react";
 import ChatInput from "./ChatInput";
+import { useLocale } from "@/contexts/LocaleContext";
+import { localizedContent } from "@/localization/resources";
 
 interface Props {
   name?: string;
@@ -15,28 +17,7 @@ interface Props {
 
 /** The visible wording is also a real router-recognised prompt, so clicking a starter keeps the
  * chat transcript natural while preserving the intended deterministic response type. */
-const STARTERS: { label: string; prompt: string; icon: typeof GraduationCap }[] = [
-  {
-    label: "Mezuniyet durumumu hesapla",
-    prompt: "Mezuniyet durumumu hesapla",
-    icon: GraduationCap,
-  },
-  {
-    label: "Bu dönem hangi dersleri alayım?",
-    prompt: "Bu dönem hangi dersleri alayım?",
-    icon: CalendarRange,
-  },
-  {
-    label: "Yandal için hangi dersler gerekli?",
-    prompt: "Yandal için hangi dersler gerekli?",
-    icon: LibraryBig,
-  },
-  {
-    label: "Mezun olana kadar hangi dersleri almalıyım?",
-    prompt: "Mezun olana kadar hangi dersleri almalıyım?",
-    icon: ListChecks,
-  },
-];
+const STARTER_ICONS = [GraduationCap, CalendarRange, LibraryBig, ListChecks];
 
 function displayName(name?: string): string {
   if (!name) return "";
@@ -45,6 +26,10 @@ function displayName(name?: string): string {
 
 export default function EmptyState({ name, onSend, disabled }: Props) {
   const who = displayName(name);
+  const { locale, t } = useLocale();
+  const starters = localizedContent.starters(locale).map(([label, prompt], index) => ({
+    label, prompt, icon: STARTER_ICONS[index],
+  }));
   return (
     <div className="relative flex h-full flex-col items-center justify-center overflow-hidden px-4 py-10">
       {/* Soft radial glow behind the composer — the "shadow/aura" register from the reference
@@ -61,10 +46,10 @@ export default function EmptyState({ name, onSend, disabled }: Props) {
         />
 
         <h1 className="mt-6 text-[2rem] font-semibold leading-tight tracking-tight text-foreground sm:text-[2.5rem]">
-          Merhaba{who ? `, ${who}` : ""}
+          {t("chat.greeting", { suffix: who ? `, ${who}` : "" })}
         </h1>
         <p className="mt-3 max-w-md text-[1.02rem] leading-relaxed text-muted-foreground">
-          Mezuniyet yolculuğunda bugün sana nasıl yardımcı olabilirim?
+          {t("chat.help")}
         </p>
 
         <div className="mt-8 w-full">
@@ -73,7 +58,7 @@ export default function EmptyState({ name, onSend, disabled }: Props) {
 
         {/* Starters as a clean vertical list (ChatGPT-style): icon chip · label · hover arrow. */}
         <div className="mt-5 w-full space-y-2 text-left">
-          {STARTERS.map(({ label, prompt, icon: Icon }) => (
+          {starters.map(({ label, prompt, icon: Icon }) => (
             <button
               key={label}
               type="button"

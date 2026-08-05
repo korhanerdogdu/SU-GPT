@@ -5,6 +5,7 @@ import ChatPage from "./pages/ChatPage";
 import ProfilePage from "./pages/ProfilePage";
 import CoursesPage from "./pages/CoursesPage";
 import SchedulePage from "./pages/SchedulePage";
+import CourseReviewPolicyPage from "./pages/CourseReviewPolicyPage";
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const { isAuthenticated } = useAuth();
@@ -30,6 +31,7 @@ export default function App() {
         }
       />
       <Route path="/signup" element={<Navigate to="/login" replace />} />
+      <Route path="/course-review-policy" element={<CourseReviewPolicyPage />} />
       <Route
         path="/"
         element={

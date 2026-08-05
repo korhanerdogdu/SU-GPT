@@ -1,0 +1,8 @@
+{
+  "deepseek_basic.redacted.jsonl": "3cf96f667236357af556fe5d5d9507b0eaa1df5e4f95762dc10e2ad09c992002",
+  "deepseek_few_shot.redacted.jsonl": "c8baaf76859e7cb008f7984e313121bf10ebde5e83d17d84b2efe9d64b938f92",
+  "deepseek_reasoning.redacted.jsonl": "ec0594bb4e3b481133d031d2e97c24ec15c70f6a46f5b11459c311bc347ad4af",
+  "deepseek_structured.redacted.jsonl": "3ccbf06dae473f3a5e64e72d75a5ff2403ee0455f027e0e4d7e88caeebca8151",
+  "legacy_vs_adapter_groq.redacted.jsonl": "8e44ae3bb0ff35ede7b8990786ecfe7b62c165f87fe797e4f8515e4a5a70fb34",
+  "run_manifest.json": "c884bea6db0f2ebb0bcd5a89bcf840562d2b8e003e31695395452b2600848aa4"
+}

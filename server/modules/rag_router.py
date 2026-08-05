@@ -1,13 +1,22 @@
 from __future__ import annotations
 
+"""Deterministic routing guards on top of the statistical intent classifier.
+
+Identifiers, intent names and comments are English (see `modules.intents`). The regex bodies
+are deliberately bilingual: they match what a student types, and adviSU answers Turkish
+questions in Turkish, so dropping the Turkish alternatives would break the product rather
+than "translate" it.
+"""
+
 import re
 from dataclasses import dataclass
 from typing import Any
 
+from modules import intents
 from modules.intent_detector import get_intent_with_confidence
 
 
-REVIEW_RE = re.compile(
+INSTRUCTOR_REVIEW_RE = re.compile(
     r"\b(hoca|hocanın|hocanin|prof|professor|instructor|öğretmen|ogretmen|"
     r"zor mu|kolay mı|kolay mi|nasıl biri|nasil biri|yorum|review|"
     r"yücel|yucel|saygın|saygin|ercan|solak|cem say)\b",
@@ -27,7 +36,7 @@ GRADUATION_RE = re.compile(
     re.IGNORECASE,
 )
 
-RECOMMENDATION_RE = re.compile(
+COURSE_RECOMMENDATION_RE = re.compile(
     r"\b(ders öner|ders oner|hangi ders|program öner|program oner|schedule|"
     r"next semester|gelecek dönem|gelecek donem|nlp|web|data|ai|security|systems)\b",
     re.IGNORECASE,
@@ -53,12 +62,12 @@ class RagRoute:
 
 def route_query(question: str, resolved_intent: str | None = None) -> RagRoute:
     base_intent, confidence = get_intent_with_confidence(question)
-    intent = resolved_intent or base_intent or "diger"
+    intent = resolved_intent or base_intent or intents.OTHER
     q = question or ""
 
-    if REVIEW_RE.search(q):
+    if INSTRUCTOR_REVIEW_RE.search(q):
         return RagRoute(
-            intent="review",
+            intent=intents.REVIEW,
             base_intent=base_intent,
             confidence=confidence,
             document_types=["review"],
@@ -66,7 +75,7 @@ def route_query(question: str, resolved_intent: str | None = None) -> RagRoute:
 
     if EXAM_RE.search(q):
         return RagRoute(
-            intent="exam",
+            intent=intents.EXAM,
             base_intent=base_intent,
             confidence=confidence,
             document_types=["exam"],
@@ -74,28 +83,21 @@ def route_query(question: str, resolved_intent: str | None = None) -> RagRoute:
 
     if GRADUATION_RE.search(q):
         return RagRoute(
-            intent="mezuniyet_durumu",
+            intent=intents.GRADUATION_STATUS,
             base_intent=base_intent,
             confidence=confidence,
             document_types=["course"],
         )
 
-    if RECOMMENDATION_RE.search(q):
+    if COURSE_RECOMMENDATION_RE.search(q):
         return RagRoute(
-            intent="ders_onerisi",
+            intent=intents.COURSE_RECOMMENDATION,
             base_intent=base_intent,
             confidence=confidence,
             document_types=["course"],
         )
 
-    if intent in {
-        "mezuniyet_durumu",
-        "ders_onerisi",
-        "ders_ayrintisi",
-        "calisma_plani",
-        "major_secimi",
-        "alanda_ozellesme",
-    }:
+    if intent in intents.CURRICULUM_INTENTS:
         return RagRoute(
             intent=intent,
             base_intent=base_intent,
@@ -104,9 +106,10 @@ def route_query(question: str, resolved_intent: str | None = None) -> RagRoute:
         )
 
     return RagRoute(
-        intent=intent or "diger",
+        intent=intent or intents.OTHER,
         base_intent=base_intent,
         confidence=confidence,
-        document_types=["course", "exam", "review"],
+        # Legacy review/private-chat chunks are never part of the general retrieval pool.
+        document_types=["course", "exam"],
         use_multi_search=True,
     )

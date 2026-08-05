@@ -7,18 +7,21 @@ import ChatMessages, { type Message } from "@/components/chat/ChatMessages";
 import ChatInput from "@/components/chat/ChatInput";
 import EmptyState from "@/components/chat/EmptyState";
 import { useAuth } from "@/contexts/AuthContext";
+import { useLocale } from "@/contexts/LocaleContext";
 import {
   askQuestionStream,
   currentSessionId,
   deleteConversation,
   getConversation,
   getProfile,
+  getUsage,
   listConversations,
   saveUserSchedule,
   startNewSession,
   updateConversation,
   useSession,
   type ConversationSummary,
+  type UsageStatus,
 } from "@/lib/api";
 import {
   normaliseScheduleDocument,
@@ -32,12 +35,14 @@ function makeId() {
 
 export default function ChatPage() {
   const { user } = useAuth();
+  const { t } = useLocale();
   const navigate = useNavigate();
   const [messages, setMessages] = useState<Message[]>([]);
   const [busy, setBusy] = useState(false);
   const [sessionId, setSessionId] = useState<string>(() => currentSessionId());
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [profileReady, setProfileReady] = useState(true); // assume ok until told otherwise
+  const [usage, setUsage] = useState<UsageStatus | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => localStorage.getItem("advisu-sidebar-collapsed") === "true",
   );
@@ -72,6 +77,19 @@ export default function ChatPage() {
       cancelled = true;
     };
   }, [user?.username]);
+
+  const refreshUsage = useCallback(async () => {
+    if (!user?.username) return;
+    try {
+      setUsage(await getUsage(user.username));
+    } catch {
+      // The meter is informational; a failed read must not block chat.
+    }
+  }, [user?.username]);
+
+  useEffect(() => {
+    void refreshUsage();
+  }, [refreshUsage]);
 
   async function handleSend(text: string) {
     const pendingId = makeId();
@@ -116,30 +134,31 @@ export default function ChatPage() {
         scheduleFromStructuredContent(res.structured_content);
       if (generatedSchedule) {
         storeLocalSchedule(user?.username, generatedSchedule);
-        toast.success("Yeni ders programın kaydedildi.", {
-          description: "Ders Programı sayfasında inceleyebilir ve düzenleyebilirsin.",
+        toast.success(t("chat.scheduleSaved"), {
+          description: t("chat.scheduleSavedDescription"),
           action: {
-            label: "Programa git",
+            label: t("chat.goSchedule"),
             onClick: () => navigate("/schedule"),
           },
         });
         if (user?.username) {
           void saveUserSchedule(user.username, generatedSchedule).catch(() => {
-            toast.warning("Program bu cihazda güvende; hesabına senkronize edilemedi.");
+            toast.warning(t("chat.scheduleOffline"));
           });
         }
       }
       void refreshConversations();
+      void refreshUsage();
       setMobileSidebarOpen(false);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Request failed";
+      const message = err instanceof Error ? err.message : t("chat.requestFailed");
       toast.error(message);
       setMessages((m) =>
         m.map((msg) =>
           msg.id === pendingId
             ? {
                 ...msg,
-                content: `Sorry — the backend returned an error: ${message}`,
+                content: t("chat.backendError", { message }),
                 pending: false,
               }
             : msg
@@ -169,7 +188,7 @@ export default function ChatPage() {
         }))
       );
     } catch {
-      toast.error("Could not open that conversation.");
+      toast.error(t("chat.openFailed"));
     }
   }
 
@@ -179,7 +198,7 @@ export default function ChatPage() {
       if (id === sessionId) handleNewChat();
       void refreshConversations();
     } catch {
-      toast.error("Could not delete that conversation.");
+      toast.error(t("chat.deleteFailed"));
     }
   }
 
@@ -188,7 +207,7 @@ export default function ChatPage() {
       await updateConversation(id, { title });
       void refreshConversations();
     } catch {
-      toast.error("Sohbet yeniden adlandırılamadı.");
+      toast.error(t("chat.renameFailed"));
     }
   }
 
@@ -197,7 +216,7 @@ export default function ChatPage() {
       await updateConversation(id, { pinned });
       void refreshConversations();
     } catch {
-      toast.error("Sabitleme değiştirilemedi.");
+      toast.error(t("chat.pinFailed"));
     }
   }
 
@@ -225,6 +244,7 @@ export default function ChatPage() {
       <main className="flex min-w-0 flex-1 flex-col">
         <ChatHeader
           profileReady={profileReady}
+          usage={usage}
           onOpenMenu={() => setMobileSidebarOpen(true)}
         />
         {messages.length === 0 ? (

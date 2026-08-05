@@ -5,6 +5,8 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/AuthContext";
 import ThemeToggle from "@/components/ThemeToggle";
+import LanguageToggle from "@/components/LanguageToggle";
+import { useLocale } from "@/contexts/LocaleContext";
 import { exportCoursesXlsx } from "@/lib/export-xlsx";
 import {
   fetchCourses,
@@ -32,6 +34,7 @@ function formatSize(bytes: number) {
  */
 export default function CoursesPage() {
   const { user } = useAuth();
+  const { t } = useLocale();
   const [search, setSearch] = useState("");
   const [pool, setPool] = useState<Course[]>([]);
   const [saved, setSaved] = useState<Course[]>([]);
@@ -50,7 +53,7 @@ export default function CoursesPage() {
         const data = await fetchCourses(search);
         if (!cancelled) setPool(data);
       } catch {
-        if (!cancelled) toast.error("Could not load the course catalog.");
+        if (!cancelled) toast.error(t("courses.catalogFailed"));
       } finally {
         if (!cancelled) setLoadingPool(false);
       }
@@ -71,7 +74,7 @@ export default function CoursesPage() {
         setSaved(courses);
         setSelectedIds(new Set(courses.map((c) => c.id)));
       } catch {
-        if (!cancelled) toast.error("Could not load your saved course history.");
+        if (!cancelled) toast.error(t("courses.historyFailed"));
       }
     })();
     return () => {
@@ -120,9 +123,9 @@ export default function CoursesPage() {
       );
       setSaved(result);
       setSelectedIds(new Set(result.map((c) => c.id)));
-      toast.success(`Saved ${result.length} completed course${result.length === 1 ? "" : "s"}.`);
+      toast.success(t("courses.savedToast", { count: result.length }));
     } catch {
-      toast.error("Could not save your course history.");
+      toast.error(t("courses.saveFailed"));
     } finally {
       setSaving(false);
     }
@@ -144,14 +147,14 @@ export default function CoursesPage() {
     try {
       const result = await uploadDocuments(files);
       toast.success(
-        `Uploaded ${result.accepted_files.length} file(s) — ${result.chunks} chunks indexed`
+        t("courses.uploaded", { files: result.accepted_files.length, chunks: result.chunks })
       );
       if (result.skipped_files.length > 0) {
-        toast.warning(`Skipped: ${result.skipped_files.join(", ")}`);
+        toast.warning(t("courses.skipped", { files: result.skipped_files.join(", ") }));
       }
       setFiles([]);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Upload failed");
+      toast.error(err instanceof Error ? err.message : t("courses.uploadFailed"));
     } finally {
       setUploading(false);
     }
@@ -161,23 +164,24 @@ export default function CoursesPage() {
     <div className="min-h-screen bg-[#F5F8FC] text-[#1a2b45]">
       <header className="flex items-center gap-3 border-b border-[#D8E6F3] bg-[#004B93] px-6 py-4 text-white">
         <Link to="/" className="flex items-center gap-1 text-sm opacity-90 hover:opacity-100">
-          <ArrowLeft size={16} /> Chat
+          <ArrowLeft size={16} /> {t("common.chat")}
         </Link>
         <div className="ml-2 flex items-center gap-2">
           <BookOpen size={18} />
-          <span className="font-semibold">Course History</span>
+          <span className="font-semibold">{t("courses.title")}</span>
         </div>
-        <ThemeToggle className="ml-auto" />
+        <LanguageToggle className="ml-auto" />
+        <ThemeToggle />
       </header>
 
       <main className="mx-auto grid max-w-5xl gap-6 p-6 md:grid-cols-2">
         {/* Completed courses — the answer to "what did I select?" */}
         <section className="rounded-xl border border-[#D8E6F3] bg-white p-5 shadow-sm">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <h2 className="text-lg font-semibold text-[#003B73]">Completed courses</h2>
+            <h2 className="text-lg font-semibold text-[#003B73]">{t("courses.completed")}</h2>
             <div className="flex items-center gap-3">
               <span className="text-sm text-[#4A5568]">
-                <span className="font-semibold text-[#004B93]">{saved.length}</span> saved ·{" "}
+                <span className="font-semibold text-[#004B93]">{t("courses.savedCount", { count: saved.length })}</span> ·{" "}
                 <span className="font-semibold text-[#004B93]">{totalSu}</span> SU
               </span>
               {saved.length > 0 && (
@@ -195,8 +199,7 @@ export default function CoursesPage() {
 
           {saved.length === 0 ? (
             <p className="text-sm leading-relaxed text-[#4A5568]">
-              Nothing saved yet. Search the catalog, tick the courses you have completed, then
-              save — they will be listed here and used in your degree audit.
+              {t("courses.empty")}
             </p>
           ) : (
             <ul className="space-y-2">
@@ -222,21 +225,21 @@ export default function CoursesPage() {
           )}
 
           <p className="mt-4 border-t border-[#D8E6F3] pt-3 text-xs text-[#4A5568]">
-            Only completed courses count toward graduation. The degree audit reads this list.
+            {t("courses.countNote")}
           </p>
         </section>
 
         {/* Picker + upload */}
         <div className="space-y-6">
           <section className="rounded-xl border border-[#D8E6F3] bg-white p-5 shadow-sm">
-            <h2 className="mb-4 text-lg font-semibold text-[#003B73]">Add courses</h2>
+            <h2 className="mb-4 text-lg font-semibold text-[#003B73]">{t("courses.add")}</h2>
 
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#4A5568]" />
               <input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search CS 300, MATH 101…"
+                placeholder={t("courses.search")}
                 className="w-full rounded-md border border-[#D8E6F3] bg-white py-2 pl-9 pr-3 text-sm text-[#1a2b45] placeholder:text-[#94a3b8] focus:border-[#004B93] focus:outline-none focus:ring-1 focus:ring-[#004B93]"
               />
             </div>
@@ -245,11 +248,11 @@ export default function CoursesPage() {
               {loadingPool ? (
                 <div className="flex items-center gap-2 rounded-md border border-[#D8E6F3] bg-[#F5F8FC] px-3 py-2 text-sm text-[#4A5568]">
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  Loading courses
+                  {t("courses.loading")}
                 </div>
               ) : pool.length === 0 ? (
                 <div className="rounded-md border border-[#D8E6F3] bg-[#F5F8FC] px-3 py-2 text-sm text-[#4A5568]">
-                  No courses found
+                  {t("courses.none")}
                 </div>
               ) : (
                 pool.slice(0, 120).map((course) => {
@@ -294,19 +297,17 @@ export default function CoursesPage() {
               ) : (
                 <Save className="mr-2" size={16} />
               )}
-              {dirty
-                ? `Save ${selectedIds.size} course${selectedIds.size === 1 ? "" : "s"}`
-                : "Saved"}
+              {dirty ? t("courses.saveCount", { count: selectedIds.size }) : t("common.saved")}
             </Button>
           </section>
 
           {user?.role === "admin" && (
           <section className="rounded-xl border border-[#D8E6F3] bg-white p-5 shadow-sm">
-            <h2 className="mb-4 text-lg font-semibold text-[#003B73]">Course documents</h2>
+            <h2 className="mb-4 text-lg font-semibold text-[#003B73]">{t("courses.documents")}</h2>
             <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-md border border-dashed border-[#D8E6F3] bg-[#F5F8FC] px-3 py-5 text-center text-sm text-[#4A5568] transition-colors hover:border-[#004B93] hover:bg-[#eef4fa]">
               <Upload className="h-5 w-5 text-[#004B93]" />
               <span>
-                <span className="font-medium text-[#003B73]">Click to browse</span>
+                <span className="font-medium text-[#003B73]">{t("courses.browse")}</span>
                 <br />
                 <span className="text-xs">PDF, PPTX, DOCX, MD, TXT</span>
               </span>
@@ -334,7 +335,7 @@ export default function CoursesPage() {
                       <button
                         type="button"
                         onClick={() => setFiles((prev) => prev.filter((_, idx) => idx !== i))}
-                        aria-label="Remove file"
+                        aria-label={t("courses.removeFile")}
                         className="rounded-full p-1 text-[#4A5568] transition-colors hover:bg-[#D8E6F3] hover:text-[#003B73]"
                       >
                         <X className="h-4 w-4" />
@@ -349,7 +350,7 @@ export default function CoursesPage() {
                   className="mt-3 w-full border-[#004B93] text-[#004B93]"
                 >
                   {uploading ? <Loader2 className="mr-2 animate-spin" size={16} /> : null}
-                  {uploading ? "Indexing…" : "Upload to adviSU"}
+                  {uploading ? t("courses.indexing") : t("courses.upload")}
                 </Button>
               </>
             )}

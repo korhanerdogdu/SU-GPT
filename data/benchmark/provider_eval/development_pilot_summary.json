@@ -1,0 +1,118 @@
+{
+  "schema_version": 1,
+  "status": "exploratory_rejected_not_confirmatory",
+  "run_id": "dev-pilot-20260804T120357Z",
+  "base_commit": "5a6949c1e2e5b0603d8c1c88820f590099000f34",
+  "dataset": {
+    "role": "development_pilot_not_final",
+    "independent_items": 16,
+    "repetitions": 3,
+    "rows_per_configuration": 48,
+    "languages": {"tr_items": 8, "en_items": 8},
+    "veto_strata": {"planner": 0, "safety": 0, "adversarial": 0}
+  },
+  "retrieval": {
+    "mode": "hybrid_meta",
+    "candidate_depth": 10,
+    "context_top_k": 6,
+    "same_frozen_context_per_pair": true
+  },
+  "baseline": {
+    "provider": "groq",
+    "model": "llama-3.3-70b-versatile",
+    "task_success": 0.875,
+    "p50_latency_ms": 1624.7599790003733,
+    "p95_latency_ms": 4793.143962049362,
+    "api_error_rate": 0.0,
+    "usage": {
+      "reported_rows": 48,
+      "prompt_tokens": 32808,
+      "completion_tokens": 1113,
+      "total_tokens": 33921,
+      "cost_usd": null,
+      "cost_note": "The provider did not report cost; zero must not be inferred."
+    }
+  },
+  "candidate_configurations": {
+    "deepseek_basic": {
+      "task_success": 0.8125,
+      "delta": -0.0625,
+      "clustered_bootstrap_95_ci": [-0.125, 0.0],
+      "clustered_sign_flip_p": 0.24777522247775222,
+      "p50_latency_ms": 4171.941999500632,
+      "p95_latency_ms": 12554.34522325085,
+      "api_error_rate": 0.10416666666666667,
+      "successful_usage_rows": 43,
+      "prompt_tokens_successes_only": 28123,
+      "completion_tokens_successes_only": 6207,
+      "total_tokens_successes_only": 34330,
+      "provider_reported_cost_usd_successes_only": 0.035638783220000005
+    },
+    "deepseek_structured": {
+      "task_success": 0.625,
+      "delta": -0.25,
+      "clustered_bootstrap_95_ci": [-0.3125, -0.1666666666666667],
+      "clustered_sign_flip_p": 0.0005999400059994001,
+      "p50_latency_ms": 4690.891999998712,
+      "p95_latency_ms": 47744.599079149644,
+      "api_error_rate": 0.22916666666666666,
+      "successful_usage_rows": 37,
+      "prompt_tokens_successes_only": 24952,
+      "completion_tokens_successes_only": 5757,
+      "total_tokens_successes_only": 30709,
+      "provider_reported_cost_usd_successes_only": 0.035786333919999996
+    },
+    "deepseek_few_shot": {
+      "task_success": 0.6458333333333333,
+      "delta": -0.22916666666666674,
+      "clustered_bootstrap_95_ci": [-0.3333333333333334, -0.12500000000000003],
+      "clustered_sign_flip_p": 0.004299570042995701,
+      "p50_latency_ms": 4082.5278329994035,
+      "p95_latency_ms": 15419.309470499862,
+      "api_error_rate": 0.25,
+      "successful_usage_rows": 36,
+      "prompt_tokens_successes_only": 24899,
+      "completion_tokens_successes_only": 5826,
+      "total_tokens_successes_only": 30725,
+      "provider_reported_cost_usd_successes_only": 0.03789911777999999
+    },
+    "deepseek_reasoning": {
+      "task_success": 0.7083333333333334,
+      "delta": -0.16666666666666663,
+      "clustered_bootstrap_95_ci": [-0.2916666666666667, -0.0625],
+      "clustered_sign_flip_p": 0.0316968303169683,
+      "p50_latency_ms": 4325.780249999298,
+      "p95_latency_ms": 11291.572885751873,
+      "api_error_rate": 0.14583333333333334,
+      "successful_usage_rows": 41,
+      "prompt_tokens_successes_only": 26817,
+      "completion_tokens_successes_only": 6959,
+      "total_tokens_successes_only": 33776,
+      "provider_reported_cost_usd_successes_only": 0.03812137136
+    }
+  },
+  "protocol_deviations": [
+    "The four candidate configurations ran concurrently against one provider account, confounding treatment with provider concurrency and rate limiting.",
+    "The pilot used 16 lookup items only and contains no planner, safety, or adversarial veto stratum.",
+    "The pilot is retrieval-fixed only; it is not an end-to-end application benchmark.",
+    "The compact evaluation prompt is not the full production application prompt.",
+    "No independent blinded answer judge was available.",
+    "Provider cost and token totals are incomplete when calls failed."
+  ],
+  "serial_rerun": {
+    "run_id": "dev-pilot-20260804T215913Z",
+    "status": "infrastructure_aborted_invalid_for_quality",
+    "deepseek_errors": 48,
+    "deepseek_planned_rows": 48,
+    "error_class": "ProviderRequestError",
+    "usage_available": false,
+    "cost_available": false,
+    "deviation": "The old driver did not stop after three consecutive failures and attempted all rows."
+  },
+  "decision": {
+    "production_default": "groq",
+    "deepseek_default_switch": "BLOCKED",
+    "superiority_supported": false,
+    "reason": "No independently authored, sealed 100-TR/100-EN final set, no valid end-to-end or blind final comparison, and owner latency/cost/error gates are unresolved."
+  }
+}

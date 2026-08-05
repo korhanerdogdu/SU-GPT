@@ -1,10 +1,13 @@
 import { createContext, useContext, useState, type ReactNode } from "react";
 import { login } from "@/lib/api";
+import { getStoredLocale, translate } from "@/localization/resources";
 
 interface AuthUser {
   username: string;
   email?: string;
   role: "admin" | "student";
+  accessToken?: string;
+  expiresAt?: number;
 }
 
 interface AuthContextValue {
@@ -26,7 +29,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      return raw ? (JSON.parse(raw) as AuthUser) : null;
+      const stored = raw ? (JSON.parse(raw) as AuthUser) : null;
+      if (!stored?.accessToken || !stored.expiresAt || stored.expiresAt <= Date.now() / 1000) {
+        localStorage.removeItem(STORAGE_KEY);
+        return null;
+      }
+      return stored;
     } catch {
       return null; // ignore corrupt storage
     }
@@ -46,9 +54,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       persist({
         username: result.username,
         role: result.role === "admin" ? "admin" : "student",
+        accessToken: result.access_token,
+        expiresAt: result.expires_at,
       });
     },
-    signUp: (username, email) => persist({ username, email, role: "student" }),
+    // The backend currently provisions only configured accounts. Never create a client-only
+    // identity: it has no server-side credential and previously bypassed the route guard.
+    signUp: () => {
+      throw new Error(translate(getStoredLocale(), "signup.disabled"));
+    },
     signOut: () => persist(null),
   };
 

@@ -6,6 +6,8 @@ import json
 import os
 from pathlib import Path
 
+from modules import intents
+
 
 DEFAULT_MODEL_PATH = Path(
     os.getenv(
@@ -149,9 +151,23 @@ class BenchmarkSelectedIntentDetector:
 # Singleton instance. BERT weights remain lazy until the first routed question.
 detector = BenchmarkSelectedIntentDetector()
 
+
+def get_raw_intent_with_confidence(query: str) -> tuple[str, float]:
+    """The classifier's own label, untranslated.
+
+    Only evaluation code should need this: the committed benchmark rows and the trained
+    classifier both speak the historical Turkish vocabulary, and rewriting either would
+    invalidate recorded measurements. Application code wants `get_intent` instead.
+    """
+    return detector.predict_with_confidence(query)
+
+
 def get_intent(query: str) -> str:
-    return detector.predict(query)
+    """Canonical English intent (see modules.intents)."""
+    return intents.to_canonical(detector.predict(query))
 
 
 def get_intent_with_confidence(query: str) -> tuple[str, float]:
-    return detector.predict_with_confidence(query)
+    """Canonical English intent plus the classifier's confidence."""
+    raw, confidence = detector.predict_with_confidence(query)
+    return intents.to_canonical(raw), confidence

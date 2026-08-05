@@ -6,8 +6,9 @@ Bounded session memory (roadmap section 19).
 The LLM stays mostly stateless, but we keep the last few turns + a small "working context"
 (last course code / term) per session so follow-ups like "can I take it next semester?"
 resolve to the course from the previous turn. This memory only improves usability — it must
-NEVER override official JSON data or the deterministic audit (roadmap section 19.6). All calls
-are best-effort: if Mongo is down they degrade to no-memory rather than breaking /ask.
+NEVER override official JSON data or the deterministic audit (roadmap section 19.6). Authenticated
+memory reads and writes fail closed: a storage outage or ownership mismatch cannot silently turn a
+stateful request into a cross-user read or claim an existing session.
 """
 
 import re
@@ -16,6 +17,7 @@ from typing import Any
 
 from logger import logger
 from modules.mongodb import db
+from modules.config import MAX_TRANSCRIPT_MESSAGES
 
 conversations = db["conversations"]
 
@@ -91,24 +93,33 @@ def _automatic_title(turns: list[dict[str, str]]) -> str:
     return shortened or combined[:TITLE_MAX]
 
 
-async def get_working_context(session_id: str | None) -> dict[str, Any]:
+async def get_working_context(
+    session_id: str | None, *, username: str | None
+) -> dict[str, Any]:
     if not session_id:
         return {}
+    if not username:
+        raise RuntimeError("conversation owner is required")
     try:
-        doc = await conversations.find_one({"sessionId": session_id})
+        doc = await conversations.find_one({"sessionId": session_id, "username": username})
     except Exception:
         logger.exception("conversation memory read failed")
-        return {}
+        raise RuntimeError("conversation memory unavailable") from None
     return (doc or {}).get("working_context", {}) if doc else {}
 
 
-async def recent_turns(session_id: str | None, limit: int = 3) -> list[dict[str, str]]:
+async def recent_turns(
+    session_id: str | None, *, username: str | None, limit: int = 3
+) -> list[dict[str, str]]:
     if not session_id:
         return []
+    if not username:
+        raise RuntimeError("conversation owner is required")
     try:
-        doc = await conversations.find_one({"sessionId": session_id})
+        doc = await conversations.find_one({"sessionId": session_id, "username": username})
     except Exception:
-        return []
+        logger.exception("conversation memory read failed")
+        raise RuntimeError("conversation memory unavailable") from None
     turns = (doc or {}).get("recent_turns", []) if doc else []
     return turns[-limit:]
 
@@ -127,6 +138,8 @@ async def append_turn(
 ) -> None:
     if not session_id:
         return
+    if not username:
+        raise RuntimeError("conversation owner is required")
     turn = {"user": question[:1000], "assistant": (answer or "")[:1500]}
     now = datetime.now(timezone.utc)
     message_pair = [
@@ -149,7 +162,10 @@ async def append_turn(
             if value is not None:
                 context_updates[f"working_context.{key}"] = value
         await conversations.update_one(
-            {"sessionId": session_id},
+            # The unique sessionId index plus the owner-qualified upsert makes creation atomic:
+            # an absent ID is inserted, the same owner can update it, and an existing foreign or
+            # legacy-unowned ID fails with a duplicate-key error instead of being claimed.
+            {"sessionId": session_id, "username": username},
             {
                 "$set": context_updates,
                 "$setOnInsert": {
@@ -160,23 +176,31 @@ async def append_turn(
                 },
                 "$push": {
                     "recent_turns": {"$each": [turn], "$slice": -MAX_TURNS},
-                    "messages": {"$each": message_pair},
+                    "messages": {
+                        "$each": message_pair,
+                        "$slice": -MAX_TRANSCRIPT_MESSAGES,
+                    },
                 },
             },
             upsert=True,
         )
         doc = await conversations.find_one(
-            {"sessionId": session_id},
+            {"sessionId": session_id, "username": username},
             {"recent_turns": 1, "titleEdited": 1},
         )
         turns = (doc or {}).get("recent_turns") or []
         if len(turns) >= 2 and not (doc or {}).get("titleEdited"):
             await conversations.update_one(
-                {"sessionId": session_id, "titleEdited": {"$ne": True}},
+                {
+                    "sessionId": session_id,
+                    "username": username,
+                    "titleEdited": {"$ne": True},
+                },
                 {"$set": {"title": _automatic_title(turns)}},
             )
     except Exception:
         logger.exception("conversation memory write failed")
+        raise RuntimeError("conversation memory write unavailable") from None
 
 
 def _summarise(doc: dict[str, Any]) -> dict[str, Any]:
@@ -206,10 +230,15 @@ async def list_conversations(username: str | None, limit: int = 50) -> list[dict
         return []
 
 
-async def get_conversation(session_id: str) -> dict[str, Any] | None:
+async def get_conversation(
+    session_id: str, *, username: str | None = None
+) -> dict[str, Any] | None:
     """Full transcript for one chat."""
     try:
-        doc = await conversations.find_one({"sessionId": session_id})
+        query = {"sessionId": session_id}
+        if username is not None:
+            query["username"] = username
+        doc = await conversations.find_one(query)
     except Exception:
         logger.exception("conversation read failed")
         return None
@@ -227,42 +256,75 @@ async def get_conversation(session_id: str) -> dict[str, Any] | None:
     return {**_summarise(doc), "messages": messages}
 
 
-async def delete_conversation(session_id: str) -> bool:
+async def conversation_owner(session_id: str | None) -> str | None:
+    """Return owner, ``None`` when absent, or ``""`` for a legacy unowned record.
+
+    The distinction prevents an existing legacy conversation from being mistaken for a new
+    session and claimed by the first authenticated caller.
+    """
+    if not session_id:
+        return None
     try:
-        result = await conversations.delete_one({"sessionId": session_id})
+        doc = await conversations.find_one({"sessionId": session_id}, {"username": 1})
+    except Exception:
+        logger.exception("conversation ownership check failed")
+        # Authorization callers must distinguish "not found" from "ownership could not be
+        # checked". Propagating this sanitized error makes every route fail closed.
+        raise RuntimeError("conversation ownership unavailable") from None
+    if doc is None:
+        return None
+    return str(doc.get("username") or "")
+
+
+async def delete_conversation(session_id: str, *, username: str | None = None) -> bool:
+    try:
+        query = {"sessionId": session_id}
+        if username is not None:
+            query["username"] = username
+        result = await conversations.delete_one(query)
         return result.deleted_count > 0
     except Exception:
         logger.exception("conversation delete failed")
         return False
 
 
-async def rename_conversation(session_id: str, title: str) -> dict[str, Any] | None:
+async def rename_conversation(
+    session_id: str, title: str, *, username: str | None = None
+) -> dict[str, Any] | None:
     clean_title = re.sub(r"\s+", " ", str(title or "")).strip()[:TITLE_MAX]
     if not clean_title:
         return None
     try:
+        query = {"sessionId": session_id}
+        if username is not None:
+            query["username"] = username
         result = await conversations.update_one(
-            {"sessionId": session_id},
+            query,
             {"$set": {"title": clean_title, "titleEdited": True}},
         )
         if result.matched_count == 0:
             return None
-        doc = await conversations.find_one({"sessionId": session_id})
+        doc = await conversations.find_one(query)
         return _summarise(doc or {})
     except Exception:
         logger.exception("conversation rename failed")
         return None
 
 
-async def set_conversation_pinned(session_id: str, pinned: bool) -> dict[str, Any] | None:
+async def set_conversation_pinned(
+    session_id: str, pinned: bool, *, username: str | None = None
+) -> dict[str, Any] | None:
     try:
+        query = {"sessionId": session_id}
+        if username is not None:
+            query["username"] = username
         result = await conversations.update_one(
-            {"sessionId": session_id},
+            query,
             {"$set": {"pinned": bool(pinned)}},
         )
         if result.matched_count == 0:
             return None
-        doc = await conversations.find_one({"sessionId": session_id})
+        doc = await conversations.find_one(query)
         return _summarise(doc or {})
     except Exception:
         logger.exception("conversation pin update failed")
