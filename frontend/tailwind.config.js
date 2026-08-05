@@ -48,6 +48,20 @@ export default {
           gold: "#D6A13A",
           light: "#D8E6F3",
         },
+        // Sign-in surface. A deeper, colder ink than the app chrome so the entry screen reads
+        // as its own place; `teal` is lifted straight off the logo's book mark.
+        ink: {
+          DEFAULT: "#05101F",
+          raised: "#0A1A2E",
+          line: "#1B2E48",
+          slate: "#7086A3",
+          paper: "#EEF3F9",
+          teal: "#4FA3A8",
+        },
+      },
+      fontFamily: {
+        display: ['"Bricolage Grotesque"', "ui-sans-serif", "system-ui", "sans-serif"],
+        ledger: ['"IBM Plex Mono"', "ui-monospace", "SFMono-Regular", "monospace"],
       },
       borderRadius: {
         lg: "var(--radius)",

@@ -1,0 +1,25 @@
+{
+  "base_commit": "e66b45f92a7f1e359173d14a71de560f3bca8621",
+  "benchmark_id": "endpoint-security-bounded-v1",
+  "case_count": 12,
+  "configuration": {
+    "endpoint": "/ask/",
+    "production_middleware_order": true,
+    "raw_prompts_persisted": false,
+    "raw_responses_persisted": false,
+    "reasoning_persisted": false,
+    "synthetic_providers": true
+  },
+  "configuration_sha256": "f201b8dd6c87f07190a1ceecd4f107b6f5a21ae6157bf21730b1688bc29aab2a",
+  "dataset_role": "synthetic_development_endpoint_subset",
+  "run_id": "unified-v1-20260805",
+  "runner": "server/evaluation/endpoint_security_benchmark.py",
+  "runner_sha256": "377106d51fb441b01ccb59ded7a5ca789a240f0ac4e2028deb1259299968afb1",
+  "schema_version": 1,
+  "scope_note": "Bounded real-route regression subset; not the 52-row deterministic corpus, an independent final set, or a comprehensive penetration test.",
+  "source_dataset": "data/benchmark/endpoint_security_v1.jsonl",
+  "source_dataset_sha256": "c3c376271326aa9d78bc67d399b182fc83ec047dba49b0b87051af6b9775ddec",
+  "source_manifest": "data/benchmark/endpoint_security_v1_manifest.json",
+  "source_manifest_sha256": "10b5d37e43a4b1948e425b10305717a133a76aae321d776885ad2ba334003398",
+  "working_tree_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

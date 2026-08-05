@@ -15,7 +15,16 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ.setdefault("MONGO_URI", "mongodb://localhost:27017")  # lazy; never dialed in unit tests
 
-from modules import curriculum_registry, degree_audit, course_planner, major_advisor, schedule_planner
+from modules import (
+    content_safety,
+    curriculum_registry,
+    degree_audit,
+    course_planner,
+    intents,
+    major_advisor,
+    schedule_planner,
+)
+from modules.llm import detect_language
 from modules.retrieval_policy import build_metadata_filter, check_profile
 from modules.bm25_retriever import _tokenize, _is_narrowing
 from modules.conversation_memory import _automatic_title, extract_course_code, resolve_reference
@@ -28,7 +37,7 @@ from modules.response_formatter import audit_answer, audit_summary, ensure_summa
 
 # ---- retrieval policy / profile scoping ---------------------------------------------
 def test_profile_filter_scopes_program_and_term():
-    f = build_metadata_filter("mezuniyet_durumu", {"major": "CS", "curriculum_term": "202401"})
+    f = build_metadata_filter("graduation_status", {"major": "CS", "curriculum_term": "202401"})
     clauses = f["$and"]
     assert {"data_role": "curriculum_requirement"} in clauses
     assert {"program": "CS"} in clauses
@@ -40,17 +49,17 @@ def test_minor_filter_uses_minor_role():
 
 
 def test_missing_profile_fields_blocks_audit():
-    g = check_profile("mezuniyet_durumu", {})
+    g = check_profile("graduation_status", {})
     assert not g.ok and g.missing_fields
 
 
 def test_missing_curriculum_is_unavailable_not_fallback():
-    g = check_profile("mezuniyet_durumu", {"major": "IE", "curriculum_term": "202101"})
+    g = check_profile("graduation_status", {"major": "IE", "curriculum_term": "202101"})
     assert not g.ok and g.data_unavailable  # IE 202101 not in corpus -> safe limitation
 
 
 def test_valid_cs_curriculum_passes_gate():
-    assert check_profile("mezuniyet_durumu", {"major": "CS", "curriculum_term": "202401"}).ok
+    assert check_profile("graduation_status", {"major": "CS", "curriculum_term": "202401"}).ok
 
 
 # ---- registry -----------------------------------------------------------------------
@@ -107,8 +116,8 @@ def test_reference_resolution_injects_last_course():
 
 
 def test_followup_resolution_keeps_previous_intent():
-    q = resolve_reference("yani ne almam lazım?", {"last_intent": "mezuniyet_durumu"})
-    assert "mezuniyet_durumu" in q
+    q = resolve_reference("yani ne almam lazım?", {"last_intent": "graduation_status"})
+    assert "graduation_status" in q
 
 
 def test_automatic_title_uses_multiple_turns():
@@ -189,7 +198,9 @@ def test_student_answer_hides_implementation_narration():
 # ---- course-history status ----------------------------------------------------------
 def test_status_eligibility():
     assert _norm_status("COMPLETED") == "completed"
-    assert _norm_status("garbage") == "completed"  # unknown -> default completed
+    import pytest
+    with pytest.raises(ValueError):
+        _norm_status("garbage")
     assert "failed" not in ELIGIBLE_FOR_CREDIT and "withdrawn" not in ELIGIBLE_FOR_CREDIT
     assert {"completed", "transfer", "exempted"} == ELIGIBLE_FOR_CREDIT
 
@@ -221,6 +232,14 @@ def test_llm_only_retrieves_nothing():
         hybrid_search=lambda: (_ for _ in ()).throw(AssertionError("llm_only must not retrieve")),
     )
     assert out.documents == [] and out.candidate_count == 0 and not out.used_retrieval
+
+
+def test_legacy_evaluation_adapter_tracks_current_retrieval_contract():
+    from modules import retrieval_modes as rm
+    report = rm.run_retrieval_mode("llm_only", "question", None, top_k=6)
+    assert report["mode"] == "llm_only"
+    assert report["results"] == [] and report["context_documents"] == []
+    assert report["timings_ms"] == {"retrieval_ms": 0.0, "rerank_ms": 0.0}
 
 
 def test_hybrid_mode_skips_rerank_but_keeps_scope():
@@ -255,7 +274,7 @@ def integration_tests():
     vs = ing.get_vectorstore()
     assert vs._collection.count() > 20000, "corpus not ingested"
 
-    pf = build_metadata_filter("mezuniyet_durumu", {"major": "CS", "curriculum_term": "202401"})
+    pf = build_metadata_filter("graduation_status", {"major": "CS", "curriculum_term": "202401"})
     docs = retrieve_documents(vs, "area electives list", k=12, metadata_filter=pf)
     assert docs and {d.metadata.get("program") for d in docs} <= {"CS"}, "cross-program leak!"
 
@@ -313,6 +332,86 @@ def test_planner_prioritizes_missing_university_courses():
     codes = " ".join(missing)
     assert "MATH 102" in codes and "AL 102" in codes  # still owed
     assert "MATH 101" not in codes  # already done
+
+
+def test_university_debt_still_obeys_prerequisites():
+    plan = course_planner.build_plan("CS", "202401", [])
+    codes = {item.code for item in plan.recommended}
+    assert "MATH101" in codes and "NS101" in codes
+    assert "MATH102" not in codes and "NS102" not in codes
+    assert {code for code, _ in plan.blocked_required} >= {"MATH102", "NS102"}
+
+
+def test_single_transferred_4xx_does_not_promote_sophomore():
+    completed = _FRESHMAN_DONE + ["CS 201", "CS 412"]
+    plan = course_planner.build_plan("CS", "202401", completed, ["CS 445"])
+    assert plan.stage == "sophomore_foundation"
+    assert all(course_planner.course_level(item.code) < 400 for item in plan.recommended)
+
+
+def test_single_transferred_3xx_does_not_promote_sophomore():
+    completed = _FRESHMAN_DONE + ["CS 201", "ENS 491"]
+    plan = course_planner.build_plan("CS", "202401", completed, ["CS 445"])
+    assert plan.stage == "sophomore_foundation"
+    assert all(course_planner.course_level(item.code) < 400 for item in plan.recommended)
+
+
+def test_authoritative_academic_year_enforces_sophomore_cap():
+    completed = _FRESHMAN_DONE + ["CS 201", "CS 300", "CS 301", "CS 412", "CS 455"]
+    plan = course_planner.build_plan(
+        "CS", "202401", completed, ["CS 445"], academic_year=2
+    )
+    assert plan.stage == "sophomore_foundation"
+    assert all(course_planner.course_level(item.code) < 400 for item in plan.recommended)
+
+
+def test_generated_plan_validator_rejects_critical_violations():
+    errors = course_planner.validate_proposed_plan(
+        [
+            {"code": "CS 201", "title": "Invented Name"},
+            {"code": "CS 445", "title": course_planner.official_name("CS 445")},
+            {"code": "CS 300", "title": course_planner.official_name("CS 300")},
+            {"code": "CS 201", "title": course_planner.official_name("CS 201")},
+        ],
+        completed_codes=_FRESHMAN_DONE + ["CS 201"],
+        stage="sophomore_foundation",
+        maximum_su_credits=6,
+    )
+    assert "CS201:already_completed" in errors
+    assert "CS201:noncanonical_title" in errors
+    assert "CS445:level_exceeds_stage" in errors
+    assert "CS300:unmet_prerequisite" in errors
+    assert "CS201:duplicate" in errors
+    assert "credit_limit_exceeded" in errors
+
+
+def test_unknown_prerequisite_data_is_never_interpreted_as_no_prerequisite():
+    errors = course_planner.validate_proposed_plan(
+        [{"code": "CS 445", "title": course_planner.official_name("CS 445")}],
+        completed_codes=_FRESHMAN_DONE + ["CS 201", "CS 204", "CS 300"],
+        stage="senior_completion",
+    )
+    assert "CS445:prerequisite_data_unavailable" in errors
+
+
+def test_alternative_prerequisite_path_is_supported():
+    assert course_planner._prereqs_met("CS 306", {"DSA201"})
+    assert course_planner._prereqs_met("CS 306", {"CS204"})
+    assert not course_planner._prereqs_met("CS 306", {"IF100"})
+
+
+def test_schedule_never_drops_a_required_secondary_component():
+    lecture = schedule_planner.Section(
+        course_id="CS 204", title="Advanced Programming", crn="1", section="A",
+        component="Primary", instructors="", locations="",
+        slots=[schedule_planner.Slot("M", 600, 660)],
+    )
+    conflicting_lab = schedule_planner.Section(
+        course_id="CS 204", title="Advanced Programming", crn="2", section="A1",
+        component="Laboratory", instructors="", locations="",
+        slots=[schedule_planner.Slot("M", 630, 690)],
+    )
+    assert schedule_planner._candidate_blocks([lecture, conflicting_lab]) == []
 
 
 def test_planner_prereq_blocks_required_3xx_for_sophomore():
@@ -390,7 +489,7 @@ def test_explicit_four_course_limit_may_stay_below_credit_floor():
     assert sum(item.su for item in plan.recommended) < 15
 
 
-def test_heavy_weekly_timetable_keeps_eighteen_su_after_section_placement():
+def test_heavy_weekly_timetable_surfaces_unavoidable_credit_shortfall():
     candidates = course_planner.build_plan(
         "CS", "202401", _FRESHMAN_DONE + ["CS 201"], [],
         target=8, minimum_su_credits=18,
@@ -404,8 +503,12 @@ def test_heavy_weekly_timetable_keeps_eighteen_su_after_section_placement():
     placed_codes = [course_planner.normalize_code(lecture.course_id) for lecture, _ in timetable.placed]
     placed_su = sum(int((course_planner.resolve(code) or {}).get("su_credits") or 0) for code in placed_codes)
     assert len(timetable.placed) >= 6
-    assert placed_su >= 18
-    assert not timetable.unplaced and not timetable.not_offered
+    # The fail-closed prerequisite policy leaves no verified conflict-free 18-SU subset in this
+    # frozen schedule. The service must report that fact instead of adding an unverified elective.
+    assert placed_su == timetable.placed_su_credits
+    assert timetable.credit_shortfall == 18 - placed_su
+    assert timetable.credit_shortfall > 0
+    assert timetable.unplaced or timetable.not_offered
 
 
 # ---- major-selection mini-test --------------------------------------------------------------
@@ -564,6 +667,92 @@ def test_timetable_real_times_are_24h_and_ordered():
     assert lecture.slots, "MATH 203 lecture should have real meeting times"
     for slot in lecture.slots:
         assert 0 <= slot.start < slot.end <= 24 * 60
+
+
+# ---- content safety -----------------------------------------------------------------
+def test_ordinary_academic_questions_are_never_blocked():
+    safe = [
+        "Mezuniyetime kaç kredi kaldı?",
+        "Which courses count as area electives for CS?",
+        "CS 307 dersini kim veriyor?",
+        "Bu dönem hangi dersleri almalıyım?",
+        "Bana NLP alanında ders öner",
+    ]
+    for question in safe:
+        assert not content_safety.classify(question).blocked, question
+
+
+def test_cs_security_vocabulary_is_not_treated_as_violence():
+    # A CS school teaches CS 432 Computer and Network Security; these are ordinary questions.
+    for question in [
+        "How do I kill the process that holds port 8000?",
+        "What is an attack vector in CS 432?",
+        "Explain denial-of-service and buffer overflow exploits",
+        "Bu ödevde process'i öldürmem gerekiyor, nasıl yaparım?",
+    ]:
+        assert not content_safety.classify(question).blocked, question
+
+
+def test_each_unsafe_category_is_detected():
+    cases = {
+        "I want to kill myself": content_safety.SELF_HARM,
+        "kendimi öldürmek istiyorum": content_safety.SELF_HARM,
+        "seni öldüreceğim": content_safety.VIOLENCE,
+        "I will kill you": content_safety.VIOLENCE,
+        "fuck this stupid system": content_safety.PROFANITY,
+        "amk ne biçim sistem": content_safety.PROFANITY,
+    }
+    for text, expected in cases.items():
+        verdict = content_safety.classify(text)
+        assert verdict.category == expected, f"{text!r} -> {verdict.category!r}"
+
+
+def test_self_harm_outranks_violence_and_offers_help():
+    verdict = content_safety.classify("I want to kill myself")
+    assert verdict.category == content_safety.SELF_HARM
+    for language in ("tr", "en"):
+        body = content_safety.response_for(verdict.category, language)
+        assert "112" in body, "self-harm response must point at real help"
+
+
+def test_unsafe_categories_get_different_responses():
+    seen = {
+        content_safety.response_for(category, "tr")
+        for category in (
+            content_safety.SELF_HARM,
+            content_safety.HATE,
+            content_safety.VIOLENCE,
+            content_safety.SEXUAL_HARASSMENT,
+            content_safety.PROFANITY,
+        )
+    }
+    assert len(seen) == 5, "every category must have its own response"
+
+
+# ---- language detection --------------------------------------------------------------
+def test_language_follows_the_question_not_the_alphabet():
+    assert detect_language("Mezuniyetime kaç kredi kaldı?") == "tr"
+    assert detect_language("How many credits do I need to graduate?") == "en"
+    # Regression: a Turkish proper noun inside an English question used to force a Turkish answer.
+    assert detect_language("Who teaches CS 412, is it Yücel Saygın?") == "en"
+    assert detect_language("CS 300 dersini kim veriyor?") == "tr"
+
+
+# ---- canonical intent vocabulary -----------------------------------------------------
+def test_trained_labels_translate_to_english_intents():
+    assert intents.to_canonical("mezuniyet_durumu") == intents.GRADUATION_STATUS
+    assert intents.to_canonical("ders_onerisi") == intents.COURSE_RECOMMENDATION
+    # Already-English input passes through unchanged, so the map is idempotent.
+    assert intents.to_canonical(intents.GRADUATION_STATUS) == intents.GRADUATION_STATUS
+    # The evaluation scripts must be able to get the recorded label back.
+    assert intents.to_legacy(intents.GRADUATION_STATUS) == "mezuniyet_durumu"
+
+
+def test_retrieval_policy_is_keyed_by_english_intents():
+    assert build_metadata_filter(intents.GRADUATION_STATUS, {"major": "CS"}) is not None
+    assert build_metadata_filter("mezuniyet_durumu", {"major": "CS"}) is None, (
+        "legacy labels must not silently keep working, or the rename is only cosmetic"
+    )
 
 
 def _run() -> int:

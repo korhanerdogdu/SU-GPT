@@ -1,4 +1,5 @@
 import type { StructuredContent } from "./api";
+import { getStoredLocale, localizedWeekDays, translate, type Locale } from "@/localization/resources";
 
 export const SCHEDULE_STORAGE_PREFIX = "advisu-weekly-schedule";
 export const SCHEDULE_REPLACE_EVENT = "advisu:schedule-replace";
@@ -14,6 +15,7 @@ export const WEEK_DAYS = [
 
 export type ScheduleDay = (typeof WEEK_DAYS)[number]["code"];
 export type ScheduleSource = "chatbot" | "manual" | "server";
+export type ScheduleComponentKind = "primary" | "secondary";
 
 export interface ScheduleMeeting {
   day: ScheduleDay;
@@ -23,11 +25,14 @@ export interface ScheduleMeeting {
 
 export interface ScheduleItem {
   id: string;
+  bundleId: string;
   courseCode: string;
   title: string;
   crn: string;
   section: string;
   component: string;
+  componentCode: string;
+  componentKind: ScheduleComponentKind;
   instructor: string;
   location: string;
   meetings: ScheduleMeeting[];
@@ -58,6 +63,7 @@ export interface ScheduleCatalogSection {
   crn: string;
   section: string;
   component?: string;
+  component_code?: string;
   component_label?: string;
   instructors?: string;
   locations?: string;
@@ -129,6 +135,27 @@ function makeItemId(courseCode: string, crn: string, section: string): string {
   return stable || `schedule-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+const SECONDARY_COMPONENT_MARKERS = [
+  "laboratory",
+  "lab",
+  "laboratuvar",
+  "recitation",
+  "recit",
+  "problem saati",
+  "discussion",
+  "tartışma",
+  "studio",
+] as const;
+
+export function scheduleComponentKind(component: unknown, componentCode: unknown = ""): ScheduleComponentKind {
+  const value = `${stringValue(component)} ${stringValue(componentCode)}`.toLocaleLowerCase("tr-TR");
+  return SECONDARY_COMPONENT_MARKERS.some((marker) => value.includes(marker)) ? "secondary" : "primary";
+}
+
+export function scheduleBundleId(courseCode: unknown): string {
+  return stringValue(courseCode).toLocaleUpperCase("tr-TR").replace(/\s+/g, " ") || "manual";
+}
+
 function sanitiseMeeting(meeting: Partial<ScheduleMeeting>): ScheduleMeeting | null {
   const day = normaliseDay(meeting.day);
   const start = stringValue(meeting.start);
@@ -143,13 +170,20 @@ export function sanitiseScheduleItem(value: Partial<ScheduleItem>): ScheduleItem
   if (!courseCode && !title) return null;
   const crn = stringValue(value.crn);
   const section = stringValue(value.section);
+  const component = stringValue(value.component) || translate(getStoredLocale(), "schedule.defaultComponent");
+  const componentCode = stringValue(value.componentCode);
   return {
     id: stringValue(value.id) || makeItemId(courseCode, crn, section),
+    bundleId: stringValue(value.bundleId) || scheduleBundleId(courseCode),
     courseCode,
     title,
     crn,
     section,
-    component: stringValue(value.component) || "Ders",
+    component,
+    componentCode,
+    componentKind: value.componentKind === "secondary" || value.componentKind === "primary"
+      ? value.componentKind
+      : scheduleComponentKind(component, componentCode),
     instructor: stringValue(value.instructor),
     location: stringValue(value.location),
     meetings: (value.meetings ?? [])
@@ -165,7 +199,7 @@ export function createScheduleDocument(
   return {
     version: 1,
     term: options.term || DEFAULT_SCHEDULE_TERM,
-    termLabel: options.termLabel || "Fall 2026-2027 (Güz)",
+    termLabel: options.termLabel || translate(getStoredLocale(), "schedule.defaultTerm"),
     updatedAt: options.updatedAt || new Date().toISOString(),
     source: options.source || "manual",
     items: items
@@ -207,6 +241,7 @@ export function normaliseScheduleDocument(value: unknown): ScheduleDocument | nu
           crn: section.crn,
           section: section.section,
           component: section.component_label ?? section.component,
+          componentCode: section.component_code,
           instructor: section.instructors ?? section.instructor,
           location: section.locations ?? section.location,
           meetings,
@@ -215,11 +250,18 @@ export function normaliseScheduleDocument(value: unknown): ScheduleDocument | nu
     });
   }
   const items = rawItems
-    .map((item) => sanitiseScheduleItem(item as Partial<ScheduleItem>))
+    .map((item) => {
+      const recordItem = (item ?? {}) as Record<string, unknown>;
+      return sanitiseScheduleItem({
+        ...(recordItem as Partial<ScheduleItem>),
+        componentCode: stringValue(recordItem.componentCode ?? recordItem.component_code),
+        bundleId: stringValue(recordItem.bundleId ?? recordItem.bundle_id),
+      });
+    })
     .filter((item): item is ScheduleItem => Boolean(item));
   return createScheduleDocument(items, {
     term: stringValue(record.term) || DEFAULT_SCHEDULE_TERM,
-    termLabel: stringValue(record.termLabel ?? record.term_label) || "Fall 2026-2027 (Güz)",
+    termLabel: stringValue(record.termLabel ?? record.term_label) || translate(getStoredLocale(), "schedule.defaultTerm"),
     updatedAt: stringValue(record.updatedAt ?? record.updated_at) || new Date().toISOString(),
     source:
       record.origin === "chatbot" || record.origin === "server" || record.origin === "manual"
@@ -265,7 +307,7 @@ export function scheduleFromStructuredContent(content?: StructuredContent | null
   const titleTerm = table.title.split("—").pop()?.trim();
   return createScheduleDocument(items, {
     term: content.term || DEFAULT_SCHEDULE_TERM,
-    termLabel: titleTerm || content.term || "Fall 2026-2027 (Güz)",
+    termLabel: titleTerm || content.term || translate(getStoredLocale(), "schedule.defaultTerm"),
     source: "chatbot",
   });
 }
@@ -288,7 +330,9 @@ export function scheduleItemFromCatalog(section: ScheduleCatalogSection): Schedu
     title: section.title || section.section_title || "",
     crn: section.crn,
     section: section.section,
-    component: section.component_label || section.component || "Ders",
+    component: section.component_label || section.component || translate(getStoredLocale(), "schedule.defaultComponent"),
+    componentCode: section.component_code || "",
+    componentKind: scheduleComponentKind(section.component, section.component_code),
     instructor: section.instructors || "",
     location: section.locations || "",
     meetings,
@@ -311,6 +355,7 @@ export function scheduleToBackendPayload(schedule: ScheduleDocument): Record<str
       crn: item.crn,
       section: item.section,
       component: item.component,
+      component_code: item.componentCode,
       component_label: item.component,
       instructors: item.instructor,
       locations: item.location,
@@ -414,7 +459,7 @@ export function scheduleCrns(items: ScheduleItem[]): string[] {
   return Array.from(new Set(items.map((item) => item.crn).filter(Boolean)));
 }
 
-export function formatMeeting(meeting: ScheduleMeeting): string {
-  const day = WEEK_DAYS.find((candidate) => candidate.code === meeting.day)?.short ?? meeting.day;
+export function formatMeeting(meeting: ScheduleMeeting, locale: Locale = getStoredLocale()): string {
+  const day = localizedWeekDays(locale).find((candidate) => candidate.code === meeting.day)?.short ?? meeting.day;
   return `${day} ${meeting.start}-${meeting.end}`;
 }

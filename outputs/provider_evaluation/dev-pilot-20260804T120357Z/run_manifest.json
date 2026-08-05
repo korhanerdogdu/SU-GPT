@@ -1,0 +1,36 @@
+{
+  "base_commit": "5a6949c1e2e5b0603d8c1c88820f590099000f34",
+  "created_at": "2026-08-04T21:57:09.992974+00:00",
+  "dataset_role": "development_pilot_not_final",
+  "dirty_diff_sha256": "f86c3021173f3a51275666d203306ed6eeed2812c9e2366e7017028c6aa5b606",
+  "production_default_changed": false,
+  "raw_prompts_persisted": false,
+  "raw_responses_persisted": false,
+  "reasoning_persisted": false,
+  "repetitions": 3,
+  "retrieval": {
+    "candidate_depth": 10,
+    "mode": "hybrid_meta",
+    "top_k": 6
+  },
+  "run_id": "dev-pilot-20260804T120357Z",
+  "schema_version": 1,
+  "selected_item_ids": [
+    "g0052",
+    "g0054",
+    "g0099",
+    "g0285",
+    "g0485",
+    "g0545",
+    "g0568",
+    "g0677",
+    "g0025",
+    "g0047",
+    "g0048",
+    "g0057",
+    "g0097",
+    "g0125",
+    "g0162",
+    "g0166"
+  ]
+}

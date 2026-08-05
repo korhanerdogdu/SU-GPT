@@ -9,22 +9,22 @@ import {
   ChevronRight,
   Clock3,
   Copy,
+  ExternalLink,
   FileSpreadsheet,
   Loader2,
-  MapPin,
-  Pencil,
-  Plus,
   RotateCcw,
   Search,
-  Trash2,
-  UserRound,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
+import LanguageToggle from "@/components/LanguageToggle";
 import ThemeToggle from "@/components/ThemeToggle";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/AuthContext";
+import { useLocale } from "@/contexts/LocaleContext";
+import { localizedWeekDays } from "@/localization/resources";
 import {
+  fetchScheduleCourseSections,
   fetchScheduleSections,
   getUserSchedule,
   saveUserSchedule,
@@ -33,16 +33,18 @@ import { exportScheduleXlsx } from "@/lib/export-xlsx";
 import {
   DEFAULT_SCHEDULE_TERM,
   SCHEDULE_REPLACE_EVENT,
-  WEEK_DAYS,
   createScheduleDocument,
   findScheduleConflicts,
   formatMeeting,
   loadLocalSchedule,
+  scheduleBundleId,
+  scheduleComponentKind,
   scheduleCrns,
   scheduleItemFromCatalog,
   storeLocalSchedule,
   uniqueCourseCount,
   type ScheduleCatalogSection,
+  type ScheduleConflict,
   type ScheduleDay,
   type ScheduleDocument,
   type ScheduleItem,
@@ -51,17 +53,29 @@ import {
 
 const GRID_START = 8 * 60 + 40;
 const GRID_END = 19 * 60 + 40;
-const PIXELS_PER_MINUTE = 1;
+const GRID_DURATION = GRID_END - GRID_START;
+
 const COURSE_COLOURS = [
-  "bg-sky-600 border-sky-700 text-white",
-  "bg-indigo-600 border-indigo-700 text-white",
-  "bg-teal-600 border-teal-700 text-white",
-  "bg-violet-600 border-violet-700 text-white",
-  "bg-rose-600 border-rose-700 text-white",
-  "bg-amber-500 border-amber-600 text-slate-950",
+  "border-sky-700 bg-sky-600 text-white dark:border-sky-500 dark:bg-sky-700",
+  "border-indigo-700 bg-indigo-600 text-white dark:border-indigo-500 dark:bg-indigo-700",
+  "border-teal-700 bg-teal-600 text-white dark:border-teal-500 dark:bg-teal-700",
+  "border-violet-700 bg-violet-600 text-white dark:border-violet-500 dark:bg-violet-700",
+  "border-fuchsia-700 bg-fuchsia-600 text-white dark:border-fuchsia-500 dark:bg-fuchsia-700",
+  "border-amber-600 bg-amber-400 text-slate-950 dark:border-amber-400 dark:bg-amber-500",
 ] as const;
 
 type SyncState = "idle" | "saving" | "saved" | "offline";
+
+interface GridEvent {
+  key: string;
+  item: ScheduleItem;
+  meeting: ScheduleMeeting;
+  start: number;
+  end: number;
+  lane: number;
+  laneCount: number;
+  conflict: boolean;
+}
 
 function minutes(value: string): number {
   const [hour, minute] = value.split(":").map(Number);
@@ -74,31 +88,81 @@ function colourFor(code: string): string {
   return COURSE_COLOURS[hash % COURSE_COLOURS.length];
 }
 
-function courseLabel(item: ScheduleItem): string {
-  return [item.courseCode, item.section ? `· ${item.section}` : ""].filter(Boolean).join(" ");
-}
-
-function catalogSchedule(section: ScheduleCatalogSection): string {
+function catalogSchedule(section: ScheduleCatalogSection, locale: "tr" | "en", noTime: string): string {
   const item = scheduleItemFromCatalog(section);
-  return item.meetings.length ? item.meetings.map(formatMeeting).join(", ") : "TBA · Saat açıklanmadı";
+  return item.meetings.length ? item.meetings.map((meeting) => formatMeeting(meeting, locale)).join(", ") : `TBA · ${noTime}`;
 }
 
-function blankItem(): ScheduleItem {
-  return {
-    id: `manual-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    courseCode: "",
-    title: "",
-    component: "Ders",
-    crn: "",
-    section: "",
-    instructor: "",
-    location: "",
-    meetings: [],
-  };
+function sectionGroup(section: string): string {
+  return section.trim().match(/^[A-Za-z]+/)?.[0]?.toUpperCase() ?? "";
+}
+
+function groupsAreCompatible(primarySection: string, secondarySection: string): boolean {
+  const primaryGroup = sectionGroup(primarySection);
+  const secondaryGroup = sectionGroup(secondarySection);
+  return !primaryGroup || !secondaryGroup || primaryGroup === secondaryGroup;
+}
+
+function meetingHasConflict(item: ScheduleItem, meeting: ScheduleMeeting, conflicts: ScheduleConflict[]): boolean {
+  const start = minutes(meeting.start);
+  const end = minutes(meeting.end);
+  return conflicts.some((conflict) => (
+    conflict.day === meeting.day
+    && (conflict.firstId === item.id || conflict.secondId === item.id)
+    && start < minutes(conflict.end)
+    && end > minutes(conflict.start)
+  ));
+}
+
+function layoutDay(items: ScheduleItem[], day: ScheduleDay, conflicts: ScheduleConflict[]): GridEvent[] {
+  const events = items
+    .flatMap((item) => item.meetings
+      .filter((meeting) => meeting.day === day)
+      .map((meeting, meetingIndex) => ({
+        key: `${item.id}-${day}-${meetingIndex}-${meeting.start}`,
+        item,
+        meeting,
+        start: Math.max(minutes(meeting.start), GRID_START),
+        end: Math.min(minutes(meeting.end), GRID_END),
+        lane: 0,
+        laneCount: 1,
+        conflict: meetingHasConflict(item, meeting, conflicts),
+      })))
+    .filter((event) => event.end > event.start)
+    .sort((first, second) => first.start - second.start || first.end - second.end);
+
+  let cluster: GridEvent[] = [];
+  let clusterEnd = -1;
+
+  function placeCluster() {
+    if (cluster.length === 0) return;
+    const laneEnds: number[] = [];
+    for (const event of cluster) {
+      let lane = laneEnds.findIndex((end) => end <= event.start);
+      if (lane === -1) lane = laneEnds.length;
+      laneEnds[lane] = event.end;
+      event.lane = lane;
+    }
+    for (const event of cluster) event.laneCount = laneEnds.length;
+  }
+
+  for (const event of events) {
+    if (cluster.length > 0 && event.start >= clusterEnd) {
+      placeCluster();
+      cluster = [];
+      clusterEnd = -1;
+    }
+    cluster.push(event);
+    clusterEnd = Math.max(clusterEnd, event.end);
+  }
+  placeCluster();
+  return events;
 }
 
 export default function SchedulePage() {
   const { user } = useAuth();
+  const { locale, t } = useLocale();
+  const weekDays = useMemo(() => localizedWeekDays(locale), [locale]);
   const initial = useMemo(
     () => loadLocalSchedule(user?.username) ?? createScheduleDocument(),
     [user?.username],
@@ -112,16 +176,14 @@ export default function SchedulePage() {
   const [searchError, setSearchError] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [expandedCourse, setExpandedCourse] = useState<string | null>(null);
+  const [focusedCourse, setFocusedCourse] = useState<string | null>(null);
   const [dayFilters, setDayFilters] = useState<ScheduleDay[]>([]);
-  const [editor, setEditor] = useState<ScheduleItem | null>(null);
   const [copied, setCopied] = useState(false);
   const hydrated = useRef(false);
+  const focusRequest = useRef(0);
+  const courseRefs = useRef(new Map<string, HTMLLIElement>());
 
   const conflicts = useMemo(() => findScheduleConflicts(schedule.items), [schedule.items]);
-  const conflictedIds = useMemo(
-    () => new Set(conflicts.flatMap((conflict) => [conflict.firstId, conflict.secondId])),
-    [conflicts],
-  );
   const crns = useMemo(() => scheduleCrns(schedule.items), [schedule.items]);
   const tbaItems = useMemo(
     () => schedule.items.filter((item) => item.meetings.length === 0),
@@ -140,10 +202,10 @@ export default function SchedulePage() {
       const key = section.course_id;
       const existing = groups.get(key);
       if (existing) existing.sections.push(section);
-      else groups.set(key, { courseId: key, title: section.title || section.section_title || "Ders adÄ±", sections: [section] });
+      else groups.set(key, { courseId: key, title: section.title || section.section_title || t("common.unknownCourseTitle"), sections: [section] });
     }
     return [...groups.values()];
-  }, [visibleResults]);
+  }, [t, visibleResults]);
 
   const persist = useCallback(
     async (next: ScheduleDocument, expectedRevision?: number) => {
@@ -211,6 +273,7 @@ export default function SchedulePage() {
   }, []);
 
   useEffect(() => {
+    if (focusedCourse && query.trim().toLocaleUpperCase("tr-TR") === focusedCourse.toLocaleUpperCase("tr-TR")) return;
     let cancelled = false;
     const timer = window.setTimeout(() => {
       setSearching(true);
@@ -233,33 +296,96 @@ export default function SchedulePage() {
         .finally(() => {
           if (!cancelled) setSearching(false);
         });
-    }, 260);
+    }, 240);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [query, schedule.items.length, schedule.term]);
+  }, [focusedCourse, query, schedule.items.length, schedule.term]);
 
-  function addSection(section: ScheduleCatalogSection) {
+  useEffect(() => {
+    if (!focusedCourse) return;
+    window.requestAnimationFrame(() => {
+      courseRefs.current.get(focusedCourse)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    });
+  }, [focusedCourse, groupedResults]);
+
+  async function focusCourse(item: ScheduleItem) {
+    const courseCode = item.courseCode;
+    const requestId = focusRequest.current + 1;
+    focusRequest.current = requestId;
+    setFocusedCourse(courseCode);
+    setExpandedCourse(courseCode);
+    setQuery(courseCode);
+    setSearching(true);
+    setSearchError(false);
+    try {
+      const response = await fetchScheduleCourseSections(courseCode, schedule.term || DEFAULT_SCHEDULE_TERM);
+      if (requestId !== focusRequest.current) return;
+      setResults(response.sections ?? []);
+      setHasMore(false);
+    } catch {
+      if (requestId !== focusRequest.current) return;
+      setSearchError(true);
+      toast.error(t("schedule.sectionLoadFailed", { course: courseCode }));
+    } finally {
+      if (requestId === focusRequest.current) setSearching(false);
+    }
+  }
+
+  function addOrReplaceSection(section: ScheduleCatalogSection) {
     const item = scheduleItemFromCatalog(section);
     if (schedule.items.some((candidate) => candidate.crn && candidate.crn === item.crn)) {
-      toast.info("Bu CRN zaten programında.");
+      toast.info(t("schedule.alreadySelected"));
       return;
     }
-    replaceItems([...schedule.items, item], `${item.courseCode} programa eklendi.`);
+
+    const bundleId = scheduleBundleId(item.courseCode);
+    const otherCourses = schedule.items.filter((candidate) => candidate.bundleId !== bundleId);
+    const currentBundle = schedule.items.filter((candidate) => candidate.bundleId === bundleId);
+
+    if (item.componentKind === "primary") {
+      const secondary = currentBundle.find((candidate) => candidate.componentKind === "secondary");
+      const keepSecondary = secondary && groupsAreCompatible(item.section, secondary.section);
+      replaceItems(
+        [...otherCourses, item, ...(keepSecondary ? [secondary] : [])],
+        keepSecondary
+          ? t("schedule.primaryUpdated", { course: item.courseCode })
+          : secondary
+            ? t("schedule.incompatibleRemoved", { course: item.courseCode })
+            : t("schedule.added", { course: item.courseCode }),
+      );
+      return;
+    }
+
+    const currentPrimary = currentBundle.find((candidate) => candidate.componentKind === "primary");
+    const catalogPrimary = results
+      .filter((candidate) => candidate.course_id === section.course_id)
+      .find((candidate) => (
+        scheduleComponentKind(candidate.component, candidate.component_code) === "primary"
+        && groupsAreCompatible(candidate.section, section.section)
+      ));
+    const primary = currentPrimary && groupsAreCompatible(currentPrimary.section, item.section)
+      ? currentPrimary
+      : catalogPrimary
+        ? scheduleItemFromCatalog(catalogPrimary)
+        : currentPrimary;
+    replaceItems(
+      [...otherCourses, ...(primary ? [primary] : []), item],
+      primary && !currentPrimary
+        ? t("schedule.bundleAdded", { course: item.courseCode, component: item.component.toLocaleLowerCase(locale === "tr" ? "tr-TR" : "en-US") })
+        : t("schedule.secondaryUpdated", { course: item.courseCode, component: item.component.toLocaleLowerCase(locale === "tr" ? "tr-TR" : "en-US") }),
+    );
   }
 
-  function saveEdited(item: ScheduleItem) {
-    const exists = schedule.items.some((candidate) => candidate.id === item.id);
-    const items = exists
-      ? schedule.items.map((candidate) => (candidate.id === item.id ? item : candidate))
-      : [...schedule.items, item];
-    replaceItems(items, exists ? "Ders güncellendi." : "Ders programa eklendi.");
-    setEditor(null);
-  }
-
-  function removeItem(id: string) {
-    replaceItems(schedule.items.filter((item) => item.id !== id), "Ders programdan kaldırıldı.");
+  function removeBundle(item: ScheduleItem) {
+    const bundle = schedule.items.filter((candidate) => candidate.bundleId === item.bundleId);
+    replaceItems(
+      schedule.items.filter((candidate) => candidate.bundleId !== item.bundleId),
+      bundle.length > 1
+        ? t("schedule.bundleRemoved", { course: item.courseCode })
+        : t("schedule.removed", { course: item.courseCode }),
+    );
   }
 
   async function copyCrns() {
@@ -269,163 +395,168 @@ export default function SchedulePage() {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1800);
     } catch {
-      toast.error("CRN'ler panoya kopyalanamadı.");
+      toast.error(t("schedule.copyFailed"));
     }
   }
 
   function clearSchedule() {
-    if (!window.confirm("Programındaki tüm dersleri kaldırmak istediğine emin misin?")) return;
-    replaceItems([], "Ders programı temizlendi.");
+    if (!window.confirm(t("schedule.clearConfirm"))) return;
+    replaceItems([], t("schedule.cleared"));
+  }
+
+  function updateQuery(value: string) {
+    focusRequest.current += 1;
+    setFocusedCourse(null);
+    setExpandedCourse(null);
+    setQuery(value);
   }
 
   return (
-    <div className="flex min-h-screen flex-col bg-muted/30 text-foreground xl:h-screen xl:overflow-hidden">
-      <header className="z-30 shrink-0 border-b border-white/10 bg-primary text-primary-foreground shadow-lg shadow-primary/10">
-        <div className="mx-auto flex h-16 max-w-[1920px] items-center gap-3 px-3 sm:px-5">
-          <Link
-            to="/"
-            aria-label="Sohbete dön"
-            className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-white/80 transition hover:bg-white/10 hover:text-white"
-          >
+    <div className="flex min-h-dvh flex-col overflow-x-hidden bg-muted/30 text-foreground lg:h-dvh lg:overflow-hidden">
+      <header className="z-30 shrink-0 border-b border-white/10 bg-primary text-primary-foreground shadow-md shadow-primary/10">
+        <div className="mx-auto flex h-14 max-w-[1920px] items-center gap-2.5 px-3 sm:px-4">
+          <Link to="/" aria-label={t("common.backToChat")} className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-white/80 transition hover:bg-white/10 hover:text-white">
             <ArrowLeft className="h-4 w-4" />
           </Link>
-          <img src="/assets/small_witihoutbg.png" alt="AdviSU" className="h-10 w-10 object-contain" />
-          <div className="flex min-w-0 flex-1 items-center gap-2.5">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <h1 className="truncate text-base font-bold tracking-tight sm:text-lg">Ders Programı</h1>
-                <span className="hidden rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-semibold text-white/80 sm:inline">SUchedule, yeniden tasarlandı</span>
-              </div>
-              <p className="truncate text-[11px] text-white/70">{schedule.termLabel}</p>
+          <img src="/assets/small_witihoutbg.png" alt="AdviSU" className="h-9 w-9 object-contain" />
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <h1 className="shrink-0 text-base font-bold tracking-tight sm:text-lg">{t("schedule.title")}</h1>
+              <a
+                href="https://github.com/aburakayaz/suchedule"
+                target="_blank"
+                rel="noreferrer"
+                className="hidden min-w-0 items-center gap-1 truncate rounded-full bg-white/10 px-2 py-1 text-[10px] font-semibold text-white/80 transition hover:bg-white/20 hover:text-white md:inline-flex"
+              >
+                {t("schedule.reference")} <ExternalLink className="h-3 w-3 shrink-0" />
+              </a>
             </div>
+            <p className="truncate text-[10px] text-white/70">{schedule.termLabel} · {t("schedule.term", { term: schedule.term })}</p>
           </div>
-          <SyncIndicator state={syncState} inverse />
-          <div className="hidden items-center gap-1.5 lg:flex">
-            <Button type="button" size="sm" onClick={copyCrns} disabled={crns.length === 0} className="border border-white/15 bg-white/10 text-white hover:bg-white/20">
+          <SyncIndicator state={syncState} />
+          <div className="hidden items-center gap-1.5 md:flex">
+            <Button type="button" size="sm" onClick={copyCrns} disabled={crns.length === 0} className="h-8 border border-white/15 bg-white/10 px-2.5 text-white hover:bg-white/20">
               {copied ? <Check className="mr-1.5 h-3.5 w-3.5" /> : <Copy className="mr-1.5 h-3.5 w-3.5" />}
-              {copied ? "Kopyalandı" : "CRN'leri kopyala"}
+              {copied ? t("chat.copied") : t("chat.copyCrns")}
             </Button>
-            <Button type="button" size="sm" onClick={() => exportScheduleXlsx(schedule, user?.username ?? "student")} disabled={schedule.items.length === 0} className="border border-white/15 bg-white/10 text-white hover:bg-white/20">
+            <Button type="button" size="sm" onClick={() => exportScheduleXlsx(schedule, user?.username ?? "student", locale)} disabled={schedule.items.length === 0} className="h-8 border border-white/15 bg-white/10 px-2.5 text-white hover:bg-white/20">
               <FileSpreadsheet className="mr-1.5 h-3.5 w-3.5" /> Excel
             </Button>
-            <Button type="button" size="sm" onClick={clearSchedule} disabled={schedule.items.length === 0} className="bg-transparent text-white/80 hover:bg-white/10 hover:text-white">
-              <RotateCcw className="mr-1.5 h-3.5 w-3.5" /> Temizle
+            <Button type="button" size="sm" onClick={clearSchedule} disabled={schedule.items.length === 0} className="h-8 bg-transparent px-2.5 text-white/80 hover:bg-white/10 hover:text-white">
+              <RotateCcw className="mr-1.5 h-3.5 w-3.5" /> {t("common.clear")}
             </Button>
           </div>
+          <LanguageToggle />
           <ThemeToggle />
         </div>
       </header>
 
-      <main className="mx-auto min-h-0 w-full max-w-[1920px] flex-1 p-2.5 sm:p-3 xl:overflow-hidden">
-        <section className="mb-3 flex flex-wrap items-center gap-2 xl:hidden">
-          <SummaryCard label="Ders" value={uniqueCourseCount(schedule.items)} detail={`${schedule.items.length} section`} />
-          <SummaryCard label="CRN" value={crns.length} detail="kayıt için hazır" />
-          <SummaryCard label="Saat bekleyen" value={tbaItems.length} detail="TBA section" />
-          <SummaryCard
-            label="Çakışma"
-            value={conflicts.length}
-            detail={conflicts.length ? "düzenleme gerekiyor" : "program dengeli"}
-            warning={conflicts.length > 0}
-          />
-        </section>
-
-        {conflicts.length > 0 && (
-          <div className="mb-3 flex items-start gap-3 rounded-xl border border-amber-500/35 bg-amber-500/10 px-4 py-2.5 text-sm xl:hidden">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
-            <div>
-              <p className="font-semibold">Programda {conflicts.length} saat çakışması var.</p>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                Turuncu çerçeveli derslerden birini düzenleyebilir veya farklı bir section seçebilirsin.
-              </p>
-            </div>
-          </div>
-        )}
-
-        <div className="grid min-h-0 gap-3 xl:h-full xl:grid-cols-[370px_minmax(0,1fr)]">
-          <aside className="flex min-h-[620px] flex-col overflow-hidden rounded-2xl border border-slate-800 bg-slate-950 text-slate-100 shadow-xl xl:min-h-0">
-            <div className="shrink-0 border-b border-white/10 p-3.5">
-              <div className="flex items-center justify-between gap-3">
+      <main className="mx-auto min-h-0 w-full max-w-[1920px] flex-1 overflow-y-auto p-2 lg:overflow-hidden">
+        <div className="grid min-h-0 gap-2 lg:h-full lg:grid-cols-[clamp(300px,24vw,350px)_minmax(0,1fr)]">
+          <aside className="flex min-h-[560px] flex-col overflow-hidden rounded-2xl border border-border bg-card text-card-foreground shadow-sm lg:min-h-0">
+            <div className="shrink-0 border-b border-border bg-primary/[0.045] p-3">
+              <div className="flex items-start justify-between gap-3">
                 <div>
-                  <h2 className="text-sm font-bold">Ders ve section seç</h2>
-                  <p className="mt-0.5 text-[11px] text-slate-400">202601 · resmî SUIS verisi</p>
+                  <h2 className="text-sm font-bold text-foreground">{t("schedule.pick")}</h2>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">{t("schedule.official")}</p>
                 </div>
-                <button type="button" onClick={() => setEditor(blankItem())} className="inline-flex items-center rounded-lg border border-white/15 bg-white/5 px-2.5 py-1.5 text-xs font-semibold text-white transition hover:bg-white/10"><Plus className="mr-1.5 h-3.5 w-3.5" /> Özel ders</button>
+                <span className="rounded-full border border-primary/15 bg-primary/10 px-2 py-1 text-[10px] font-bold text-primary">
+                  {t("schedule.courseCount", { count: uniqueCourseCount(schedule.items) })}
+                </span>
               </div>
-              <label className="relative mt-3 block">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <label className="relative mt-2.5 block">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <input
                   value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  placeholder="Ders kodu, adı veya CRN ara"
-                  aria-label="Ders veya section ara"
-                  className="w-full rounded-xl border border-white/10 bg-white py-2.5 pl-9 pr-9 text-sm text-slate-950 outline-none placeholder:text-slate-400 focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400/20"
+                  onChange={(event) => updateQuery(event.target.value)}
+                  placeholder={t("schedule.search")}
+                  aria-label={t("schedule.search")}
+                  className="w-full rounded-xl border border-input bg-background py-2.5 pl-9 pr-9 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15"
                 />
                 {query && (
-                  <button
-                    type="button"
-                    onClick={() => setQuery("")}
-                    aria-label="Aramayı temizle"
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-md p-1 text-slate-500 hover:bg-slate-100"
-                  >
+                  <button type="button" onClick={() => updateQuery("")} aria-label={t("schedule.clearSearch")} className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-md p-1 text-muted-foreground transition hover:bg-muted hover:text-foreground">
                     <X className="h-3.5 w-3.5" />
                   </button>
                 )}
               </label>
-              <div className="mt-3 flex items-center gap-1.5" aria-label="Güne göre filtrele">
-                <span className="mr-auto text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">Güne göre</span>
-                {WEEK_DAYS.map((day) => {
+              <div className="mt-2.5 flex items-center gap-1" aria-label={t("schedule.filterDay")}>
+                <span className="mr-auto text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">{t("schedule.byDay")}</span>
+                {weekDays.map((day) => {
                   const active = dayFilters.includes(day.code);
                   return (
-                    <button key={day.code} type="button" aria-pressed={active} onClick={() => setDayFilters((current) => active ? current.filter((code) => code !== day.code) : [...current, day.code])} className={`rounded-md px-2 py-1 text-[10px] font-bold transition ${active ? "bg-cyan-400 text-slate-950" : "bg-white/10 text-slate-300 hover:bg-white/15"}`}>
-                      {day.short.slice(0, 3).toLocaleUpperCase("tr-TR")}
+                    <button
+                      key={day.code}
+                      type="button"
+                      aria-pressed={active}
+                      onClick={() => setDayFilters((current) => active ? current.filter((code) => code !== day.code) : [...current, day.code])}
+                      className={`rounded-lg px-2 py-1 text-[10px] font-bold transition ${active ? "bg-primary text-primary-foreground shadow-sm" : "border border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground"}`}
+                    >
+                      {day.short.toLocaleUpperCase(locale === "tr" ? "tr-TR" : "en-US")}
                     </button>
                   );
                 })}
               </div>
             </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto p-2.5 scrollbar-thin">
+            <div className="min-h-0 flex-1 overflow-y-auto p-2 scrollbar-thin">
               {searching ? (
-                <div className="flex items-center justify-center gap-2 py-10 text-sm text-slate-400">
-                  <Loader2 className="h-4 w-4 animate-spin" /> Dersler yükleniyor
+                <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" /> {t("schedule.loading")}
                 </div>
               ) : searchError ? (
-                <div className="rounded-xl border border-dashed border-white/15 p-5 text-center">
-                  <p className="text-sm font-medium">Ders listesine ulaşılamadı.</p>
-                  <p className="mt-1 text-xs text-slate-400">Mevcut programın cihazında güvende.</p>
+                <div className="rounded-xl border border-dashed border-border bg-muted/30 p-5 text-center">
+                  <p className="text-sm font-medium">{t("schedule.loadFailed")}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">{t("schedule.localSafe")}</p>
                 </div>
               ) : groupedResults.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-white/15 p-5 text-center text-sm text-slate-400">
-                  Arama veya gün filtresine uygun ders bulunamadı.
+                <div className="rounded-xl border border-dashed border-border bg-muted/30 p-5 text-center text-sm text-muted-foreground">
+                  {t("schedule.noResults")}
                 </div>
               ) : (
-                <ul className="space-y-2">
+                <ul className="space-y-1.5">
                   {groupedResults.map((group) => {
                     const open = expandedCourse === group.courseId;
                     const selectedCount = group.sections.filter((section) => schedule.items.some((item) => item.crn === String(section.crn))).length;
                     return (
-                      <li key={group.courseId} className="overflow-hidden rounded-xl border border-white/10 bg-white/[0.04]">
-                        <button type="button" onClick={() => setExpandedCourse(open ? null : group.courseId)} className="flex w-full items-center gap-3 bg-white/[0.06] px-3 py-2.5 text-left transition hover:bg-white/10">
+                      <li
+                        key={group.courseId}
+                        ref={(node) => {
+                          if (node) courseRefs.current.set(group.courseId, node);
+                          else courseRefs.current.delete(group.courseId);
+                        }}
+                        className={`overflow-hidden rounded-xl border transition ${focusedCourse === group.courseId ? "border-primary/45 bg-primary/[0.04] shadow-[0_0_0_3px_hsl(var(--primary)/0.08)]" : "border-border bg-background"}`}
+                      >
+                        <button type="button" onClick={() => setExpandedCourse(open ? null : group.courseId)} className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left transition hover:bg-muted/70">
                           <span className="min-w-0 flex-1">
-                            <span className="block text-sm font-bold text-white">{group.courseId}</span>
-                            <span className="mt-0.5 block truncate text-[11px] text-slate-400">{group.title}</span>
+                            <span className="block text-sm font-extrabold text-foreground">{group.courseId}</span>
+                            <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">{group.title}</span>
                           </span>
-                          {selectedCount > 0 && <span className="rounded-full bg-emerald-400/15 px-2 py-0.5 text-[10px] font-bold text-emerald-300">{selectedCount} seçili</span>}
-                          {open ? <ChevronDown className="h-4 w-4 text-slate-400" /> : <ChevronRight className="h-4 w-4 text-slate-400" />}
+                          {selectedCount > 0 && <span className="rounded-full bg-emerald-500/12 px-2 py-0.5 text-[10px] font-bold text-emerald-700 dark:text-emerald-300">{t("schedule.selected", { count: selectedCount })}</span>}
+                          {open ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
                         </button>
                         {open && (
-                          <div className="space-y-2 border-t border-white/10 p-2">
+                          <div className="space-y-1.5 border-t border-border bg-muted/25 p-2">
                             {group.sections.map((section) => {
                               const selected = schedule.items.some((item) => item.crn === String(section.crn));
                               return (
-                                <button key={`${section.course_id}-${section.crn}-${section.section}`} type="button" onClick={() => addSection(section)} disabled={selected} className={`group w-full rounded-lg border p-2.5 text-left transition ${selected ? "border-emerald-400/30 bg-emerald-400/10" : "border-white/10 bg-slate-900 hover:border-cyan-400/40 hover:bg-slate-800"}`}>
+                                <button
+                                  key={`${section.course_id}-${section.crn}-${section.section}`}
+                                  type="button"
+                                  aria-pressed={selected}
+                                  onClick={() => selected ? toast.info(t("schedule.alreadySelected")) : addOrReplaceSection(section)}
+                                  className={`group w-full rounded-xl border p-2.5 text-left transition ${selected ? "border-primary/35 bg-primary/10 text-foreground" : "border-border bg-card hover:border-primary/30 hover:bg-primary/[0.04]"}`}
+                                >
                                   <span className="flex items-start gap-2">
                                     <span className="min-w-0 flex-1">
-                                      <span className="flex flex-wrap items-center gap-1.5 text-[10px]"><span className="rounded bg-white/10 px-1.5 py-0.5 font-mono">CRN {section.crn}</span><span className="rounded bg-white/10 px-1.5 py-0.5">Section {section.section}</span><span className="rounded bg-white/10 px-1.5 py-0.5">{section.component_label || section.component || "Ders"}</span></span>
-                                      <span className="mt-2 block text-[11px] font-medium leading-relaxed text-slate-200">{catalogSchedule(section)}</span>
-                                      {section.instructors && <span className="mt-1 block truncate text-[10px] text-slate-400">{section.instructors}</span>}
+                                      <span className="flex flex-wrap items-center gap-1 text-[10px]">
+                                        <span className="rounded-md bg-muted px-1.5 py-0.5 font-mono font-semibold">CRN {section.crn}</span>
+                                        <span className="rounded-md bg-muted px-1.5 py-0.5 font-semibold">{t("common.section")} {section.section}</span>
+                                        <span className="rounded-md bg-muted px-1.5 py-0.5 font-semibold">{section.component_label || section.component || t("schedule.defaultComponent")}</span>
+                                      </span>
+                                      <span className="mt-1.5 block text-[11px] font-semibold leading-relaxed text-foreground">{catalogSchedule(section, locale, t("schedule.noTime"))}</span>
+                                      {section.instructors && <span className="mt-1 block truncate text-[10px] text-muted-foreground">{section.instructors}</span>}
                                     </span>
-                                    {selected ? <Check className="h-4 w-4 shrink-0 text-emerald-300" /> : <Plus className="h-4 w-4 shrink-0 text-slate-400 group-hover:text-cyan-300" />}
+                                    {selected ? <Check className="h-4 w-4 shrink-0 text-primary" /> : <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-primary/10 text-sm font-bold text-primary transition group-hover:bg-primary group-hover:text-primary-foreground">+</span>}
                                   </span>
                                 </button>
                               );
@@ -437,313 +568,226 @@ export default function SchedulePage() {
                   })}
                 </ul>
               )}
-              {hasMore && !searching && (
-                <p className="px-2 py-3 text-center text-[11px] text-slate-500">
-                  Daha net sonuçlar için ders kodu veya CRN yaz.
-                </p>
-              )}
+              {hasMore && !searching && <p className="px-2 py-3 text-center text-[11px] text-muted-foreground">{t("schedule.moreHint")}</p>}
             </div>
           </aside>
 
-          <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
-            <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-2.5 sm:px-4">
-              <div className="mr-auto min-w-[180px]">
-                <h2 className="text-sm font-bold">Haftalık görünüm</h2>
-                <p className="text-[11px] text-muted-foreground">Derse tıkla; saatini veya section'ını düzenle.</p>
+          <section className="flex min-h-[620px] min-w-0 flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-sm lg:min-h-0">
+            <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2 sm:px-4">
+              <div className="mr-auto min-w-0">
+                <h2 className="truncate text-sm font-bold">{t("schedule.week")}</h2>
+                <p className="truncate text-[11px] text-muted-foreground">{t("schedule.weekHint")}</p>
               </div>
-              <div className="flex items-center gap-1.5">
-                <QuickStat label="Ders" value={uniqueCourseCount(schedule.items)} />
+              <div className="hidden items-center gap-1 xl:flex">
+                <QuickStat label={t("common.course")} value={uniqueCourseCount(schedule.items)} />
                 <QuickStat label="CRN" value={crns.length} />
-                <QuickStat label="TBA" value={tbaItems.length} />
-                <QuickStat label="Çakışma" value={conflicts.length} warning={conflicts.length > 0} />
+                {conflicts.length > 0 && <ConflictStat conflicts={conflicts} />}
               </div>
-              <div className="flex flex-wrap items-center gap-2 lg:hidden">
-                <Button type="button" variant="outline" size="sm" onClick={copyCrns} disabled={crns.length === 0}>
-                  {copied ? <Check className="mr-1.5 h-3.5 w-3.5" /> : <Copy className="mr-1.5 h-3.5 w-3.5" />}
-                  {copied ? "Kopyalandı" : "CRN'leri kopyala"}
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => exportScheduleXlsx(schedule, user?.username ?? "student")}
-                  disabled={schedule.items.length === 0}
-                >
-                  <FileSpreadsheet className="mr-1.5 h-3.5 w-3.5" /> Excel
-                </Button>
-                <Button type="button" variant="ghost" size="sm" onClick={clearSchedule} disabled={schedule.items.length === 0}>
-                  <RotateCcw className="mr-1.5 h-3.5 w-3.5" /> Temizle
-                </Button>
+              <div className="flex items-center gap-1 md:hidden">
+                <button type="button" onClick={copyCrns} disabled={crns.length === 0} aria-label={t("chat.copyCrns")} className="rounded-lg border border-border p-2 text-muted-foreground hover:bg-muted"><Copy className="h-4 w-4" /></button>
+                <button type="button" onClick={() => exportScheduleXlsx(schedule, user?.username ?? "student", locale)} disabled={schedule.items.length === 0} aria-label={t("schedule.downloadExcel")} className="rounded-lg border border-border p-2 text-muted-foreground hover:bg-muted"><FileSpreadsheet className="h-4 w-4" /></button>
               </div>
             </div>
 
-            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-2.5 scrollbar-thin sm:p-3">
-            {schedule.items.length === 0 ? (
-              <EmptySchedule onCreate={() => setEditor(blankItem())} />
-            ) : (
-              <>
-                <DesktopWeekGrid items={schedule.items} conflictedIds={conflictedIds} onEdit={setEditor} />
-                <MobileWeekList items={schedule.items} conflictedIds={conflictedIds} onEdit={setEditor} />
-              </>
-            )}
-
             {tbaItems.length > 0 && (
-              <div className="rounded-2xl border border-border bg-card p-4 shadow-sm">
-                <div className="mb-3 flex items-center gap-2">
-                  <Clock3 className="h-4 w-4 text-primary" />
-                  <h3 className="text-sm font-semibold">Saati açıklanmayan dersler</h3>
-                  <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold text-muted-foreground">TBA</span>
-                </div>
-                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              <div className="flex shrink-0 items-center gap-2 border-b border-border bg-muted/35 px-3 py-1.5">
+                <Clock3 className="h-3.5 w-3.5 shrink-0 text-primary" />
+                <span className="shrink-0 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">TBA</span>
+                <div className="flex min-w-0 flex-1 gap-1.5 overflow-x-auto scrollbar-thin">
                   {tbaItems.map((item) => (
-                    <ScheduleListCard key={item.id} item={item} conflict={conflictedIds.has(item.id)} onEdit={setEditor} />
+                    <span key={item.id} className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-border bg-card py-1 pl-2 pr-1 text-[11px] font-semibold">
+                      <button type="button" onClick={() => void focusCourse(item)} className="hover:text-primary">{item.courseCode} · {item.section || item.component}</button>
+                      <button type="button" onClick={() => removeBundle(item)} aria-label={t("schedule.removeBundle", { course: item.courseCode })} className="grid h-5 w-5 place-items-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"><X className="h-3 w-3" /></button>
+                    </span>
                   ))}
                 </div>
               </div>
             )}
 
-            <div className="rounded-2xl border border-border bg-card shadow-sm">
-              <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
-                <div>
-                  <h3 className="text-sm font-semibold">Seçili section'lar</h3>
-                  <p className="text-[11px] text-muted-foreground">Kayıt öncesi CRN ve section kontrolü</p>
-                </div>
-                <span className="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary">{schedule.items.length}</span>
-              </div>
-              <ul className="divide-y divide-border">
-                {schedule.items.map((item) => (
-                  <li key={item.id} className="flex items-center gap-3 px-4 py-3">
-                    <span className={`h-9 w-1 shrink-0 rounded-full ${colourFor(item.courseCode).split(" ")[0]}`} />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-semibold">{courseLabel(item)} <span className="font-normal text-muted-foreground">{item.component}</span></p>
-                      <p className="mt-0.5 truncate text-xs text-muted-foreground">{item.meetings.length ? item.meetings.map(formatMeeting).join(", ") : "TBA"}</p>
-                    </div>
-                    {item.crn && <span className="hidden font-mono text-xs text-muted-foreground sm:inline">CRN {item.crn}</span>}
-                    <button type="button" onClick={() => setEditor(item)} aria-label={`${item.courseCode} dersini düzenle`} className="rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground">
-                      <Pencil className="h-4 w-4" />
-                    </button>
-                    <button type="button" onClick={() => removeItem(item.id)} aria-label={`${item.courseCode} dersini kaldır`} className="rounded-lg p-2 text-muted-foreground hover:bg-destructive/10 hover:text-destructive">
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-2 md:overflow-hidden">
+              <DesktopWeekGrid items={schedule.items} conflicts={conflicts} onFocus={focusCourse} onRemove={removeBundle} />
+              <MobileWeekList items={schedule.items} conflicts={conflicts} onFocus={focusCourse} onRemove={removeBundle} />
             </div>
           </section>
         </div>
       </main>
-
-      {editor && <ScheduleEditor item={editor} onClose={() => setEditor(null)} onSave={saveEdited} />}
     </div>
   );
 }
 
-function SyncIndicator({ state, inverse = false }: { state: SyncState; inverse?: boolean }) {
+function SyncIndicator({ state }: { state: SyncState }) {
+  const { t } = useLocale();
   if (state === "idle") return null;
-  const label = state === "saving" ? "Kaydediliyor" : state === "saved" ? "Kaydedildi" : "Bu cihazda kayıtlı";
+  const label = state === "saving" ? t("schedule.saving") : state === "saved" ? t("common.saved") : t("schedule.offline");
   return (
-    <span className={`hidden items-center gap-1.5 text-[11px] sm:flex ${inverse ? "text-white/70" : "text-muted-foreground"}`}>
+    <span className="hidden items-center gap-1.5 text-[11px] text-white/70 sm:flex">
       {state === "saving" ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
       {label}
     </span>
   );
 }
 
-function SummaryCard({ label, value, detail, warning = false }: { label: string; value: number; detail: string; warning?: boolean }) {
+function QuickStat({ label, value }: { label: string; value: number }) {
   return (
-    <div className={`min-w-[150px] flex-1 rounded-xl border bg-card px-3 py-2 shadow-sm ${warning ? "border-amber-500/50" : "border-border"}`}>
-      <div className="flex items-end justify-between gap-3">
-        <div>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">{label}</p>
-          <p className={`text-lg font-bold tabular-nums ${warning ? "text-amber-600" : "text-foreground"}`}>{value}</p>
-        </div>
-        <p className="pb-1 text-right text-[11px] text-muted-foreground">{detail}</p>
-      </div>
-    </div>
-  );
-}
-
-function QuickStat({ label, value, warning = false }: { label: string; value: number; warning?: boolean }) {
-  return (
-    <span className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[10px] font-semibold ${warning ? "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300" : "border-border bg-muted/50 text-muted-foreground"}`}>
+    <span className="inline-flex items-center gap-1 rounded-lg border border-border bg-muted/50 px-2 py-1 text-[10px] font-semibold text-muted-foreground">
       {label}<strong className="text-xs tabular-nums text-foreground">{value}</strong>
     </span>
   );
 }
 
-function EmptySchedule({ onCreate }: { onCreate: () => void }) {
+function ConflictStat({ conflicts }: { conflicts: ScheduleConflict[] }) {
+  const { locale, t } = useLocale();
+  const weekDays = localizedWeekDays(locale);
+  const first = conflicts[0];
+  const day = weekDays.find((candidate) => candidate.code === first.day)?.label ?? first.day;
   return (
-    <div className="grid min-h-[420px] place-items-center rounded-2xl border border-dashed border-border bg-card/60 p-8 text-center">
-      <div className="max-w-sm">
-        <span className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-primary/10 text-primary">
-          <CalendarDays className="h-7 w-7" />
-        </span>
-        <h2 className="mt-4 text-lg font-bold">Programını oluşturmaya başla</h2>
-        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-          Soldan bir ders ve section seç veya chatbot'ta “Bu dönem hangi dersleri alayım?” seçeneğini kullan. Hazırlanan program buraya otomatik gelir.
-        </p>
-        <Button type="button" className="mt-5" onClick={onCreate}><Plus className="mr-2 h-4 w-4" /> Manuel ders ekle</Button>
-      </div>
-    </div>
+    <span title={`${day} ${first.start}-${first.end}`} className="inline-flex items-center gap-1 rounded-lg border border-rose-400/60 bg-rose-500/10 px-2 py-1 text-[10px] font-bold text-rose-700 dark:text-rose-300">
+      <AlertTriangle className="h-3 w-3" /> {t("schedule.conflicts", { count: conflicts.length })}
+    </span>
   );
 }
 
-function DesktopWeekGrid({ items, conflictedIds, onEdit }: { items: ScheduleItem[]; conflictedIds: Set<string>; onEdit: (item: ScheduleItem) => void }) {
+function DesktopWeekGrid({
+  items,
+  conflicts,
+  onFocus,
+  onRemove,
+}: {
+  items: ScheduleItem[];
+  conflicts: ScheduleConflict[];
+  onFocus: (item: ScheduleItem) => void;
+  onRemove: (item: ScheduleItem) => void;
+}) {
+  const { locale, t } = useLocale();
+  const weekDays = localizedWeekDays(locale);
   const times = Array.from({ length: 12 }, (_, index) => GRID_START + index * 60);
-  const slots = times.slice(0, -1);
+  const scheduledCount = items.reduce((count, item) => count + item.meetings.length, 0);
   return (
-    <div className="hidden overflow-x-auto rounded-xl border border-border bg-card shadow-sm scrollbar-thin md:block">
-      <div className="min-w-[880px]">
-        <div className="grid grid-cols-[76px_repeat(5,minmax(150px,1fr))] border-b border-white/15 bg-primary text-primary-foreground">
-          <div className="border-r border-white/15 p-3 text-center text-[10px] font-semibold uppercase tracking-widest text-white/70">Saat</div>
-          {WEEK_DAYS.map((day) => <div key={day.code} className="border-r border-white/15 p-3 text-center text-xs font-bold last:border-r-0">{day.label}</div>)}
-        </div>
-        <div className="grid grid-cols-[76px_repeat(5,minmax(150px,1fr))]">
-          <div className="relative border-r border-border bg-card" style={{ height: GRID_END - GRID_START }}>
-            {slots.map((time, index) => <div key={`slot-${time}`} className={`absolute inset-x-0 border-t border-border/70 ${index % 2 === 0 ? "bg-muted/45" : "bg-card"}`} style={{ top: time - GRID_START, height: 60 }} />)}
-            {times.map((time) => (
-              <span key={time} className="absolute right-3 z-10 -translate-y-1/2 font-mono text-[10px] font-semibold text-foreground/75" style={{ top: time - GRID_START }}>
+    <div className="hidden h-full min-h-0 overflow-hidden rounded-xl border border-border bg-card md:flex md:flex-col">
+      <div className="grid h-10 shrink-0 grid-cols-[72px_repeat(5,minmax(0,1fr))] border-b border-primary/20 bg-primary text-primary-foreground">
+        <div className="grid place-items-center border-r border-white/15 text-[10px] font-bold uppercase tracking-[0.14em] text-white/75">{t("schedule.time")}</div>
+        {weekDays.map((day) => <div key={day.code} className="grid place-items-center border-r border-white/15 px-2 text-center text-xs font-extrabold last:border-r-0">{day.label}</div>)}
+      </div>
+      <div className="grid min-h-0 flex-1 grid-cols-[72px_repeat(5,minmax(0,1fr))]">
+        <div className="relative border-r border-border bg-muted/35">
+          {times.map((time, index) => {
+            const top = ((time - GRID_START) / GRID_DURATION) * 100;
+            const transform = index === 0 ? "translateY(6px)" : index === times.length - 1 ? "translateY(calc(-100% - 6px))" : "translateY(-50%)";
+            return (
+              <span key={time} className="absolute inset-x-0 z-10 px-2 text-right font-mono text-[13px] font-extrabold tabular-nums text-foreground/80" style={{ top: `${top}%`, transform }}>
                 {String(Math.floor(time / 60)).padStart(2, "0")}:{String(time % 60).padStart(2, "0")}
               </span>
-            ))}
-          </div>
-          {WEEK_DAYS.map((day) => (
-            <div key={day.code} className="relative border-r border-border bg-card last:border-r-0" style={{ height: GRID_END - GRID_START }}>
-              {slots.map((time, index) => <div key={time} className={`absolute inset-x-0 border-t border-border/70 ${index % 2 === 0 ? "bg-muted/45" : "bg-card"}`} style={{ top: time - GRID_START, height: 60 }} />)}
-              {items.flatMap((item) => item.meetings.filter((meeting) => meeting.day === day.code).map((meeting, index) => {
-                const start = Math.max(minutes(meeting.start), GRID_START);
-                const end = Math.min(minutes(meeting.end), GRID_END);
-                if (end <= start) return null;
-                return (
-                  <button
-                    type="button"
-                    key={`${item.id}-${day.code}-${index}`}
-                    onClick={() => onEdit(item)}
-                    className={`absolute inset-x-1 z-10 overflow-hidden rounded-lg border px-2 py-1.5 text-left shadow-sm transition-transform hover:z-20 hover:scale-[1.015] ${colourFor(item.courseCode)} ${conflictedIds.has(item.id) ? "ring-2 ring-amber-400 ring-offset-1 ring-offset-card" : ""}`}
-                    style={{ top: (start - GRID_START) * PIXELS_PER_MINUTE, height: Math.max((end - start) * PIXELS_PER_MINUTE, 34) }}
-                    title={`${item.courseCode} · ${formatMeeting(meeting)}`}
-                  >
-                    <span className="block truncate text-[11px] font-bold leading-tight">{item.courseCode}</span>
-                    <span className="mt-0.5 block truncate text-[9px] font-medium opacity-90">{meeting.start}-{meeting.end} · {item.section || item.component}</span>
-                    {(end - start) >= 55 && item.location && <span className="mt-1 block truncate text-[9px] opacity-80">{item.location}</span>}
-                  </button>
-                );
-              }))}
-            </div>
-          ))}
+            );
+          })}
         </div>
+        {weekDays.map((day) => {
+          const dayEvents = layoutDay(items, day.code, conflicts);
+          return (
+            <div key={day.code} className="relative min-w-0 border-r border-border bg-card last:border-r-0">
+              {times.map((time) => <span key={time} className="pointer-events-none absolute inset-x-0 border-t border-border/70" style={{ top: `${((time - GRID_START) / GRID_DURATION) * 100}%` }} />)}
+              {dayEvents.map((event) => {
+                const top = ((event.start - GRID_START) / GRID_DURATION) * 100;
+                const height = ((event.end - event.start) / GRID_DURATION) * 100;
+                const left = (event.lane / event.laneCount) * 100;
+                const width = 100 / event.laneCount;
+                const duration = event.end - event.start;
+                return (
+                  <div
+                    key={event.key}
+                    role="group"
+                    aria-label={`${event.item.courseCode} ${event.meeting.start}-${event.meeting.end}`}
+                    className={`absolute z-10 overflow-hidden rounded-lg border shadow-sm transition hover:z-20 hover:shadow-lg ${event.conflict ? "border-rose-700 bg-rose-600 text-white ring-2 ring-rose-400/80" : colourFor(event.item.courseCode)}`}
+                    style={{
+                      top: `calc(${top}% + 2px)`,
+                      height: `max(calc(${height}% - 4px), 38px)`,
+                      left: `calc(${left}% + 3px)`,
+                      width: `calc(${width}% - 6px)`,
+                      backgroundImage: event.conflict ? "linear-gradient(135deg, rgba(255,255,255,.10) 25%, transparent 25%, transparent 50%, rgba(255,255,255,.10) 50%, rgba(255,255,255,.10) 75%, transparent 75%)" : undefined,
+                      backgroundSize: event.conflict ? "12px 12px" : undefined,
+                    }}
+                  >
+                    <button type="button" onClick={() => void onFocus(event.item)} className="h-full w-full min-w-0 px-2 py-1.5 pr-7 text-left">
+                      <span className="block truncate text-[13px] font-extrabold leading-tight tracking-tight">
+                        {event.item.courseCode} <span className="font-semibold opacity-90">· {event.item.title}</span>
+                      </span>
+                      <span className="mt-0.5 block truncate font-mono text-[11px] font-bold leading-tight tabular-nums">
+                        {event.meeting.start}–{event.meeting.end} · {event.item.section || event.item.component}
+                      </span>
+                      {duration >= 75 && event.item.location && <span className="mt-1 block truncate text-[10px] font-medium opacity-85">{event.item.location}</span>}
+                      {event.conflict && duration >= 70 && <span className="mt-1 inline-flex items-center gap-1 rounded bg-white/20 px-1.5 py-0.5 text-[9px] font-extrabold uppercase tracking-wide"><AlertTriangle className="h-2.5 w-2.5" /> {t("schedule.conflicting")}</span>}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(eventClick) => {
+                        eventClick.stopPropagation();
+                        onRemove(event.item);
+                      }}
+                      aria-label={t("schedule.removeBundle", { course: event.item.courseCode })}
+                      className="absolute right-1 top-1 grid h-6 w-6 place-items-center rounded-md bg-black/15 text-white/90 backdrop-blur-sm transition hover:bg-white hover:text-slate-950 focus-visible:bg-white focus-visible:text-slate-950"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                );
+              })}
+              {scheduledCount === 0 && day.code === "W" && (
+                <div className="pointer-events-none absolute left-1/2 top-1/2 z-20 w-[min(300px,85vw)] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-primary/15 bg-card/95 p-5 text-center shadow-xl backdrop-blur">
+                  <span className="mx-auto grid h-11 w-11 place-items-center rounded-xl bg-primary/10 text-primary"><CalendarDays className="h-5 w-5" /></span>
+                  <p className="mt-3 text-sm font-bold">{t("schedule.emptyTitle")}</p>
+                  <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">{t("schedule.emptyBody")}</p>
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
 }
 
-function MobileWeekList({ items, conflictedIds, onEdit }: { items: ScheduleItem[]; conflictedIds: Set<string>; onEdit: (item: ScheduleItem) => void }) {
+function MobileWeekList({
+  items,
+  conflicts,
+  onFocus,
+  onRemove,
+}: {
+  items: ScheduleItem[];
+  conflicts: ScheduleConflict[];
+  onFocus: (item: ScheduleItem) => void;
+  onRemove: (item: ScheduleItem) => void;
+}) {
+  const { locale, t } = useLocale();
+  const weekDays = localizedWeekDays(locale);
   return (
     <div className="space-y-3 md:hidden">
-      {WEEK_DAYS.map((day) => {
-        const dayItems = items.flatMap((item) => item.meetings.filter((meeting) => meeting.day === day.code).map((meeting) => ({ item, meeting }))).sort((a, b) => a.meeting.start.localeCompare(b.meeting.start));
+      {weekDays.map((day) => {
+        const dayItems = items
+          .flatMap((item) => item.meetings.filter((meeting) => meeting.day === day.code).map((meeting) => ({ item, meeting })))
+          .sort((first, second) => first.meeting.start.localeCompare(second.meeting.start));
         return (
           <section key={day.code} className="rounded-2xl border border-border bg-card p-3 shadow-sm">
             <h3 className="mb-2 px-1 text-xs font-bold uppercase tracking-wider text-muted-foreground">{day.label}</h3>
-            {dayItems.length === 0 ? <p className="rounded-xl bg-muted/50 px-3 py-4 text-center text-xs text-muted-foreground">Ders yok</p> : (
-              <div className="space-y-2">{dayItems.map(({ item, meeting }) => (
-                <button key={`${item.id}-${meeting.start}`} type="button" onClick={() => onEdit(item)} className={`flex w-full items-center gap-3 rounded-xl border p-3 text-left ${conflictedIds.has(item.id) ? "border-amber-500/50 bg-amber-500/5" : "border-border bg-background"}`}>
-                  <span className={`h-10 w-1 shrink-0 rounded-full ${colourFor(item.courseCode).split(" ")[0]}`} />
-                  <span className="w-24 shrink-0 font-mono text-xs font-semibold">{meeting.start}-{meeting.end}</span>
-                  <span className="min-w-0 flex-1"><span className="block truncate text-sm font-bold">{item.courseCode}</span><span className="block truncate text-[11px] text-muted-foreground">{item.location || item.component}</span></span>
-                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                </button>
-              ))}</div>
+            {dayItems.length === 0 ? <p className="rounded-xl bg-muted/50 px-3 py-4 text-center text-xs text-muted-foreground">{t("schedule.noClass")}</p> : (
+              <div className="space-y-2">
+                {dayItems.map(({ item, meeting }) => {
+                  const conflict = meetingHasConflict(item, meeting, conflicts);
+                  return (
+                    <div key={`${item.id}-${meeting.start}`} className={`relative flex items-center rounded-xl border ${conflict ? "border-rose-500 bg-rose-500/10" : "border-border bg-background"}`}>
+                      <button type="button" onClick={() => void onFocus(item)} className="flex min-w-0 flex-1 items-center gap-3 p-3 pr-10 text-left">
+                        <span className={`h-10 w-1 shrink-0 rounded-full ${conflict ? "bg-rose-500" : colourFor(item.courseCode).split(" ")[1]}`} />
+                        <span className="w-24 shrink-0 font-mono text-xs font-bold tabular-nums">{meeting.start}–{meeting.end}</span>
+                        <span className="min-w-0 flex-1"><span className="block truncate text-sm font-extrabold">{item.courseCode} · {item.title}</span><span className="block truncate text-[11px] text-muted-foreground">{item.section || item.component} · {item.location}</span></span>
+                        {conflict && <AlertTriangle className="h-4 w-4 shrink-0 text-rose-600" />}
+                      </button>
+                      <button type="button" onClick={() => onRemove(item)} aria-label={t("schedule.removeBundle", { course: item.courseCode })} className="absolute right-2 top-1/2 grid h-7 w-7 -translate-y-1/2 place-items-center rounded-lg text-muted-foreground hover:bg-destructive/10 hover:text-destructive"><X className="h-4 w-4" /></button>
+                    </div>
+                  );
+                })}
+              </div>
             )}
           </section>
         );
       })}
     </div>
   );
-}
-
-function ScheduleListCard({ item, conflict, onEdit }: { item: ScheduleItem; conflict: boolean; onEdit: (item: ScheduleItem) => void }) {
-  return (
-    <button type="button" onClick={() => onEdit(item)} className={`flex items-center gap-3 rounded-xl border bg-background p-3 text-left ${conflict ? "border-amber-500/50" : "border-border"}`}>
-      <span className={`h-10 w-1 shrink-0 rounded-full ${colourFor(item.courseCode).split(" ")[0]}`} />
-      <span className="min-w-0 flex-1"><span className="block truncate text-sm font-bold">{item.courseCode}</span><span className="block truncate text-[11px] text-muted-foreground">{item.title || item.component}</span></span>
-      <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
-    </button>
-  );
-}
-
-function ScheduleEditor({ item, onClose, onSave }: { item: ScheduleItem; onClose: () => void; onSave: (item: ScheduleItem) => void }) {
-  const [draft, setDraft] = useState<ScheduleItem>(() => ({ ...item, meetings: item.meetings.map((meeting) => ({ ...meeting })) }));
-
-  function field(key: keyof Omit<ScheduleItem, "meetings">, value: string) {
-    setDraft((current) => ({ ...current, [key]: key === "courseCode" ? value.toUpperCase() : value }));
-  }
-
-  function updateMeeting(index: number, key: keyof ScheduleMeeting, value: string) {
-    setDraft((current) => ({
-      ...current,
-      meetings: current.meetings.map((meeting, meetingIndex) => meetingIndex === index ? { ...meeting, [key]: value } : meeting),
-    }));
-  }
-
-  function submit(event: React.FormEvent) {
-    event.preventDefault();
-    if (!draft.courseCode.trim()) {
-      toast.error("Ders kodunu yazmalısın.");
-      return;
-    }
-    if (draft.meetings.some((meeting) => !meeting.start || !meeting.end || meeting.start >= meeting.end)) {
-      toast.error("Bitiş saati başlangıç saatinden sonra olmalı.");
-      return;
-    }
-    onSave({ ...draft, courseCode: draft.courseCode.trim().toUpperCase(), title: draft.title.trim() });
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-slate-950/50 backdrop-blur-sm" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <div role="dialog" aria-modal="true" aria-labelledby="schedule-editor-title" className="h-full w-full max-w-xl overflow-y-auto border-l border-border bg-card shadow-2xl scrollbar-thin">
-        <form onSubmit={submit}>
-          <div className="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-card/95 px-5 py-4 backdrop-blur-xl">
-            <div><h2 id="schedule-editor-title" className="font-bold">Section düzenle</h2><p className="text-xs text-muted-foreground">Ders, saat ve konum bilgilerini güncelle</p></div>
-            <button type="button" onClick={onClose} aria-label="Düzenleyiciyi kapat" className="rounded-lg p-2 text-muted-foreground hover:bg-muted"><X className="h-5 w-5" /></button>
-          </div>
-          <div className="space-y-6 p-5">
-            <div className="grid gap-4 sm:grid-cols-2">
-              <EditorField label="Ders kodu" value={draft.courseCode} onChange={(value) => field("courseCode", value)} placeholder="CS 204" required />
-              <EditorField label="Ders adı" value={draft.title} onChange={(value) => field("title", value)} placeholder="Advanced Programming" />
-              <EditorField label="CRN" value={draft.crn} onChange={(value) => field("crn", value)} placeholder="10218" inputMode="numeric" />
-              <EditorField label="Section" value={draft.section} onChange={(value) => field("section", value)} placeholder="A1" />
-              <EditorField label="Tür" value={draft.component} onChange={(value) => field("component", value)} placeholder="Ders / Laboratuvar" />
-              <EditorField label="Öğretim üyesi" value={draft.instructor} onChange={(value) => field("instructor", value)} placeholder="Ad Soyad" icon={<UserRound className="h-3.5 w-3.5" />} />
-              <div className="sm:col-span-2"><EditorField label="Yer" value={draft.location} onChange={(value) => field("location", value)} placeholder="FENS G077" icon={<MapPin className="h-3.5 w-3.5" />} /></div>
-            </div>
-
-            <section>
-              <div className="flex items-center justify-between gap-3"><div><h3 className="text-sm font-semibold">Gün ve saatler</h3><p className="text-[11px] text-muted-foreground">Boş bırakırsan ders TBA olarak görünür.</p></div><Button type="button" variant="outline" size="sm" onClick={() => setDraft((current) => ({ ...current, meetings: [...current.meetings, { day: "M", start: "08:40", end: "09:30" }] }))}><Plus className="mr-1.5 h-3.5 w-3.5" /> Zaman ekle</Button></div>
-              <div className="mt-3 space-y-2">
-                {draft.meetings.length === 0 ? <div className="rounded-xl border border-dashed border-border bg-muted/30 p-5 text-center text-xs text-muted-foreground">Saat açıklanmadı (TBA)</div> : draft.meetings.map((meeting, index) => (
-                  <div key={`${index}-${meeting.day}`} className="grid grid-cols-[1fr_1fr_1fr_auto] items-end gap-2 rounded-xl border border-border bg-background p-3">
-                    <label className="text-[11px] font-medium text-muted-foreground">Gün<select value={meeting.day} onChange={(event) => updateMeeting(index, "day", event.target.value as ScheduleDay)} className="mt-1 block w-full rounded-lg border border-input bg-card px-2 py-2 text-sm text-foreground">{WEEK_DAYS.map((day) => <option key={day.code} value={day.code}>{day.short}</option>)}</select></label>
-                    <EditorTime label="Başlangıç" value={meeting.start} onChange={(value) => updateMeeting(index, "start", value)} />
-                    <EditorTime label="Bitiş" value={meeting.end} onChange={(value) => updateMeeting(index, "end", value)} />
-                    <button type="button" onClick={() => setDraft((current) => ({ ...current, meetings: current.meetings.filter((_, meetingIndex) => meetingIndex !== index) }))} aria-label="Zamanı kaldır" className="rounded-lg p-2.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"><Trash2 className="h-4 w-4" /></button>
-                  </div>
-                ))}
-              </div>
-            </section>
-          </div>
-          <div className="sticky bottom-0 flex justify-end gap-2 border-t border-border bg-card/95 px-5 py-4 backdrop-blur-xl"><Button type="button" variant="outline" onClick={onClose}>Vazgeç</Button><Button type="submit"><Check className="mr-2 h-4 w-4" /> Programı güncelle</Button></div>
-        </form>
-      </div>
-    </div>
-  );
-}
-
-function EditorField({ label, value, onChange, placeholder, required = false, inputMode, icon }: { label: string; value: string; onChange: (value: string) => void; placeholder?: string; required?: boolean; inputMode?: React.HTMLAttributes<HTMLInputElement>["inputMode"]; icon?: React.ReactNode }) {
-  return <label className="text-xs font-medium text-muted-foreground">{label}{required && <span className="text-destructive"> *</span>}<span className="relative mt-1.5 block">{icon && <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2">{icon}</span>}<input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} required={required} inputMode={inputMode} className={`w-full rounded-xl border border-input bg-background px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground ${icon ? "pl-9" : ""}`} /></span></label>;
-}
-
-function EditorTime({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
-  return <label className="text-[11px] font-medium text-muted-foreground">{label}<input type="time" value={value} onChange={(event) => onChange(event.target.value)} className="mt-1 block w-full rounded-lg border border-input bg-card px-2 py-2 text-sm text-foreground" /></label>;
 }

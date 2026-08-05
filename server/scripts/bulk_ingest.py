@@ -14,11 +14,15 @@ from modules.config import (
     CATALOG_DATA_DIR,
     CATALOG_TERM_CODES,
     EXAMS_DIR,
-    REVIEWS_DIR,
     SOURCES_DIR,
 )
 from modules.document_loaders import SUPPORTED_EXTENSIONS
-from modules.load_vectorstore import get_vectorstore, ingest_file_paths, upsert_documents
+from modules.load_vectorstore import (
+    get_vectorstore,
+    ingest_file_paths,
+    upsert_documents,
+    validate_public_ingest_path,
+)
 from modules.source_of_truth import (
     content_hash_text,
     ensure_source_of_truth_indexes,
@@ -29,10 +33,9 @@ from modules.source_of_truth import (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Idempotent adviSU bulk ingestion.")
-    parser.add_argument("--target", choices=["all", "courses", "reviews", "exams"], default="all")
+    parser.add_argument("--target", choices=["all", "courses", "exams"], default="all")
     parser.add_argument("--catalog-dir", default=CATALOG_DATA_DIR)
     parser.add_argument("--sources-dir", default=SOURCES_DIR)
-    parser.add_argument("--reviews-dir", default=REVIEWS_DIR)
     parser.add_argument("--exams-dir", default=EXAMS_DIR)
     parser.add_argument("--batch-size", type=int, default=256)
     return parser.parse_args()
@@ -46,8 +49,6 @@ def main() -> None:
     if args.target in {"all", "courses"}:
         totals["course_catalog_chunks"] += ingest_catalog_courses(args.catalog_dir, batch_size=args.batch_size)
         totals["course_source_chunks"] += ingest_files(args.sources_dir, "course", exclude_dirs={"reviews", "exams"})
-    if args.target in {"all", "reviews"}:
-        totals["review_chunks"] += ingest_files(args.reviews_dir, "review")
     if args.target in {"all", "exams"}:
         totals["exam_chunks"] += ingest_files(args.exams_dir, "exam")
 
@@ -148,7 +149,10 @@ def iter_supported_files(root_dir: str, *, exclude_dirs: set[str]) -> list[str]:
             continue
         if any(part.lower() in excluded for part in path.relative_to(root).parts[:-1]):
             continue
-        paths.append(str(path))
+        # The shared policy also rejects known private-export directory/name variants and
+        # symlinks resolving outside ``root``.  A policy violation aborts the bulk job rather
+        # than being silently relabeled as course material.
+        paths.append(str(validate_public_ingest_path(path, allowed_root=root)))
     return paths
 
 

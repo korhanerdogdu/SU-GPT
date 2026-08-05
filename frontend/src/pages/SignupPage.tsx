@@ -7,10 +7,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useAuth } from "@/contexts/AuthContext";
+import { useLocale } from "@/contexts/LocaleContext";
+import LanguageToggle from "@/components/LanguageToggle";
 
 export default function SignupPage() {
   const navigate = useNavigate();
   const { signUp } = useAuth();
+  const { t } = useLocale();
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -20,16 +23,19 @@ export default function SignupPage() {
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (!fullName.trim() || !email.trim() || !password) {
-      toast.error("Please fill in all fields.");
+      toast.error(t("signup.missing"));
       return;
     }
     if (!agree) {
-      toast.error("You must accept the Terms & Privacy to continue.");
+      toast.error(t("signup.mustAgree"));
       return;
     }
-    signUp(fullName.trim(), email.trim());
-    toast.success("Account created");
-    navigate("/", { replace: true });
+    try {
+      signUp(fullName.trim(), email.trim());
+      navigate("/", { replace: true });
+    } catch {
+      toast.error(t("signup.disabled"));
+    }
   }
 
   return (
@@ -47,30 +53,29 @@ export default function SignupPage() {
           <div className="rounded-2xl bg-white/95 px-6 py-5 shadow-2xl backdrop-blur-sm">
             <img
               src="/assets/adviSU-logo.png"
-              alt="adviSU — Sabancı University Academic Advisor"
+              alt={t("login.logoAlt")}
               className="w-[min(100%,30rem)]"
             />
           </div>
           <p className="mt-4 hidden max-w-md text-sm leading-relaxed text-white/80 lg:block">
-            Retrieval-Augmented Academic Advising System. Ask about your degree requirements,
-            remaining credits, electives and minors — answered from official Sabancı University
-            curriculum data.
+            {t("signup.description")}
           </p>
         </div>
 
         <div className="w-full max-w-sm shrink-0 rounded-2xl border border-white/10 bg-card/70 p-6 shadow-2xl backdrop-blur-md">
+          <LanguageToggle className="mb-4 ml-auto flex" />
           <div className="mb-5">
             <h1 className="text-2xl font-bold tracking-tight">
-              Create an account
+              {t("signup.title")}
             </h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              Join adviSU in a few seconds
+              {t("signup.subtitle")}
             </p>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-3.5">
             <div className="space-y-1.5">
-              <Label htmlFor="fullname">Full Name</Label>
+              <Label htmlFor="fullname">{t("signup.fullName")}</Label>
               <div className="relative">
                 <User className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
@@ -85,7 +90,7 @@ export default function SignupPage() {
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="email">Email</Label>
+              <Label htmlFor="email">{t("signup.email")}</Label>
               <div className="relative">
                 <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
@@ -101,7 +106,7 @@ export default function SignupPage() {
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="password">Password</Label>
+              <Label htmlFor="password">{t("signup.password")}</Label>
               <div className="relative">
                 <Lock className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
@@ -116,7 +121,7 @@ export default function SignupPage() {
                 <button
                   type="button"
                   onClick={() => setShowPassword((s) => !s)}
-                  aria-label={showPassword ? "Hide password" : "Show password"}
+                  aria-label={showPassword ? t("login.hidePassword") : t("login.showPassword")}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                 >
                   {showPassword ? (
@@ -133,21 +138,21 @@ export default function SignupPage() {
                 checked={agree}
                 onCheckedChange={(v) => setAgree(v === true)}
               />
-              <span>I agree to the Terms &amp; Privacy</span>
+              <span>{t("signup.agree")}</span>
             </label>
 
             <Button type="submit" size="xl" className="w-full mt-1">
-              Sign Up
+              {t("signup.submit")}
             </Button>
           </form>
 
           <p className="mt-5 text-center text-sm text-muted-foreground">
-            Already have an account?{" "}
+            {t("signup.haveAccount")}{" "}
             <Link
               to="/login"
               className="font-semibold text-foreground hover:underline"
             >
-              Log in
+              {t("signup.login")}
             </Link>
           </p>
         </div>

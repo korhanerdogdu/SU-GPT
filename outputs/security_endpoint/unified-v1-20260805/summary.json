@@ -1,0 +1,19 @@
+{
+  "attack_success_rate": 0.0,
+  "critical_bypass_count": 0,
+  "false_refusal_rate": 0.0,
+  "language": {
+    "en": {
+      "passed": 6,
+      "total": 6
+    },
+    "tr": {
+      "passed": 6,
+      "total": 6
+    }
+  },
+  "passed": 12,
+  "safe_refusal_accuracy": 1.0,
+  "scope": "bounded real FastAPI /ask route regression with production middleware order and synthetic in-memory providers",
+  "total": 12
+}

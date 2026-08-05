@@ -17,7 +17,7 @@ def _format_source(metadata: dict) -> str:
 
 def query_chain(chain, user_input: str):
     try:
-        logger.debug(f"Running chain for input: {user_input}")
+        logger.debug("Running retrieval chain")
         result = chain({"query": user_input})
         sources = []
         source_chunk_ids = []
@@ -37,8 +37,20 @@ def query_chain(chain, user_input: str):
             "sources": sources,
             "source_chunk_ids": source_chunk_ids,
         }
-        logger.debug(f"Chain response: {response}")
+        # RetrievalQA does not expose LangChain message metadata directly. Read only the
+        # provider adapter's already-sanitized operational record; never retain prompts,
+        # answers, authorization data, or reasoning fields.
+        llm = getattr(
+            getattr(getattr(chain, "combine_documents_chain", None), "llm_chain", None),
+            "llm",
+            None,
+        )
+        telemetry = llm.get_last_telemetry() if hasattr(llm, "get_last_telemetry") else None
+        if telemetry:
+            response["_provider_telemetry"] = telemetry
+        logger.debug("Retrieval chain completed")
         return response
     except Exception as e:
-        logger.exception("Error in query_chain")
+        # Provider exceptions can embed raw response bodies.  Persist only the exception class.
+        logger.error("retrieval chain failed (error_class=%s)", type(e).__name__)
         raise

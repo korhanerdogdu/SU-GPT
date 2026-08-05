@@ -8,6 +8,7 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import "katex/dist/katex.min.css";
 import { type StructuredContent, type StructuredTable } from "@/lib/api";
+import { useLocale } from "@/contexts/LocaleContext";
 
 export interface Message {
   id: string;
@@ -52,6 +53,7 @@ function MessageBubble({
   showSources: boolean;
 }) {
   const isUser = message.role === "user";
+  const { t } = useLocale();
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
       <article
@@ -64,7 +66,7 @@ function MessageBubble({
         {message.pending && !message.content ? (
           <div className="flex items-center gap-2 text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
-            <span>adviSU düşünüyor…</span>
+            <span>{t("chat.thinking")}</span>
           </div>
         ) : isUser ? (
           <div className="whitespace-pre-wrap">{message.content}</div>
@@ -74,7 +76,7 @@ function MessageBubble({
             {message.pending && (
               <span
                 className="ml-1 inline-block h-4 w-0.5 animate-pulse rounded bg-primary align-middle"
-                aria-label="Yanıt yazılıyor"
+                aria-label={t("chat.writing")}
               />
             )}
             {message.structuredContent && (
@@ -96,7 +98,7 @@ function MessageBubble({
           message.sources.length > 0 && (
             <details className="mt-4 border-t border-border pt-3">
               <summary className="cursor-pointer font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-                Teknik kaynaklar ({message.sources.length})
+                {t("chat.sources", { count: message.sources.length })}
               </summary>
               <ul className="mt-2 flex flex-wrap gap-1.5">
                 {message.sources.map((source, index) => (
@@ -122,6 +124,7 @@ function withoutEmbeddedSummary(content: string, summary?: string) {
 }
 
 function StructuredSections({ content }: { content: StructuredContent }) {
+  const { t } = useLocale();
   const tables = content.tables ?? [];
   if (tables.length === 0) return null;
   const crns = content.crns ?? [];
@@ -136,7 +139,7 @@ function StructuredSections({ content }: { content: StructuredContent }) {
           to="/schedule"
           className="inline-flex items-center rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
         >
-          Ders Programına Git
+          {t("chat.scheduleOpen")}
         </Link>
       )}
     </div>
@@ -145,6 +148,7 @@ function StructuredSections({ content }: { content: StructuredContent }) {
 
 /** "Copy CRNs" — one click puts the schedule's registration CRNs on the clipboard. */
 function CopyCrns({ crns }: { crns: string[] }) {
+  const { t } = useLocale();
   const [copied, setCopied] = useState(false);
   async function copy() {
     try {
@@ -163,7 +167,7 @@ function CopyCrns({ crns }: { crns: string[] }) {
         className="flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs font-medium text-primary hover:bg-muted"
       >
         {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-        {copied ? "Kopyalandı" : "CRN'leri kopyala"}
+        {copied ? t("chat.copied") : t("chat.copyCrns")}
       </button>
       <span className="font-mono text-[11px] text-muted-foreground">{crns.join(" ")}</span>
     </div>
@@ -171,6 +175,7 @@ function CopyCrns({ crns }: { crns: string[] }) {
 }
 
 function StructuredTableView({ table }: { table: StructuredTable }) {
+  const { t } = useLocale();
   function downloadCsv() {
     const escape = (value: unknown) => `"${String(value ?? "").split('"').join('""')}"`;
     const lines = [
@@ -198,7 +203,7 @@ function StructuredTableView({ table }: { table: StructuredTable }) {
       wch: Math.max(12, Math.min(48, column.label.length + 6)),
     }));
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Veri");
+    XLSX.utils.book_append_sheet(wb, ws, t("common.dataSheet"));
     XLSX.writeFile(wb, `${table.id}.xlsx`);
   }
 

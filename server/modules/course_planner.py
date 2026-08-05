@@ -114,17 +114,17 @@ UNIVERSITY_FRESHMAN = UNIVERSITY_SEM1 + UNIVERSITY_SEM2
 UNIVERSITY_LATER = ["PROJ201", "SPS303"]
 HUM_MAJOR_WORKS = ["HUM201", "HUM202", "HUM207", "HUM311", "HUM312", "HUM317", "HUM321", "HUM322", "HUM371"]
 
-# Prerequisites for the courses this planner reasons about. Only what is needed to gate the
-# candidate pool correctly; the deterministic audit remains the authority for graduation arithmetic.
-# A course with no entry here is treated as having no prerequisites.
+# Prerequisites for the courses this planner reasons about.  This map is intentionally
+# fail-closed: absence from both this map and ``KNOWN_NO_PREREQUISITES`` means that the
+# prerequisite data is unavailable, never that the course has no prerequisites.
 PREREQS: dict[str, list[str]] = {
     "MATH102": ["MATH101"], "NS102": ["NS101"], "HIST192": ["HIST191"], "SPS102": ["SPS101"],
     "TLL102": ["TLL101"],
     "MATH201": ["MATH101"], "MATH203": ["MATH102"], "MATH204": ["MATH101"],
     "MATH212": ["MATH102"], "MATH306": ["MATH203"],
     "CS201": ["IF100"], "CS204": ["CS201"], "CS300": ["CS204"], "CS301": ["CS300", "MATH204"],
-    "CS302": ["CS300"], "CS303": ["CS204"], "CS306": ["CS204"], "CS307": ["CS306"],
-    "CS308": ["CS204"], "CS310": ["CS300"],
+    "CS302": ["CS300"], "CS303": ["CS204"], "CS307": ["CS204"],
+    "CS308": ["CS204"], "CS310": ["CS204"], "CS412": ["MATH201", "MATH203"],
     "DSA210": ["MATH203", "IF100"], "DSA201": ["IF100"],
     "ENS208": ["IF100", "MATH102"], "IE311": ["ENS208", "MATH201"],
     "ENS203": ["MATH102"], "ENS204": ["MATH102", "NS101"], "ENS206": ["MATH102"],
@@ -135,6 +135,20 @@ PREREQS: dict[str, list[str]] = {
     # Senior graduation projects and the internship: gated out for lower years by level anyway.
     "CS395": ["CS204"], "ENS491": ["CS300"], "ENS492": ["ENS491"],
 }
+
+# Some catalog rules contain alternative paths rather than an all-of list.  Keep those
+# explicit so a valid alternative does not get rejected or, worse, interpreted as no rule.
+ALTERNATIVE_PREREQUISITE_PATHS: dict[str, list[list[str]]] = {
+    "CS306": [["CS204"], ["DSA201"]],
+}
+
+# Only courses whose eligibility is part of the planner's curated University-course model
+# belong here.  Arbitrary electives are deliberately excluded until their official
+# registration rules are ingested. PROJ 201 and SPS 303 are mandatory later-University
+# requirements and are stage-gated by when this filler stream becomes relevant.
+KNOWN_NO_PREREQUISITES = frozenset(
+    UNIVERSITY_SEM1 + ["AL102", "PROJ201", "SPS303"]
+)
 
 # Highest academic level (in hundreds) a student at each stage should see in the CURRENT plan.
 # The hard product rule "no 4XX for a sophomore or below" lives here.
@@ -216,20 +230,62 @@ class StageAnalysis:
         return not (self.missing_university_sem1 or self.missing_university_sem2)
 
 
+def _prerequisite_data_known(code: str) -> bool:
+    code = normalize_code(code)
+    return (
+        code in KNOWN_NO_PREREQUISITES
+        or code in PREREQS
+        or code in ALTERNATIVE_PREREQUISITE_PATHS
+    )
+
+
 def _prereqs_met(code: str, completed: set[str]) -> bool:
-    return all(p in completed for p in PREREQS.get(code, []))
+    code = normalize_code(code)
+    if code in KNOWN_NO_PREREQUISITES:
+        return True
+    alternatives = ALTERNATIVE_PREREQUISITE_PATHS.get(code)
+    if alternatives is not None:
+        return any(all(prereq in completed for prereq in path) for path in alternatives)
+    prerequisites = PREREQS.get(code)
+    return prerequisites is not None and all(p in completed for p in prerequisites)
 
 
 def _missing_prereqs(code: str, completed: set[str]) -> list[str]:
+    code = normalize_code(code)
+    if not _prerequisite_data_known(code):
+        return ["official prerequisite data unavailable"]
+    alternatives = ALTERNATIVE_PREREQUISITE_PATHS.get(code)
+    if alternatives is not None and not _prereqs_met(code, completed):
+        return [" or ".join(display_code(p) for p in path) for path in alternatives]
     return [display_code(p) for p in PREREQS.get(code, []) if p not in completed]
 
 
-def _detect_stage(completed: set[str], freshman_done: int) -> str:
+def _detect_stage(
+    completed: set[str], freshman_done: int, academic_year: int | None = None
+) -> str:
+    """Return a conservative academic stage.
+
+    A transferred/exceptional upper-level course is not evidence that a student is a
+    senior.  When the caller has an authoritative year it wins; otherwise promotion
+    requires a normal lower-level progression.  Conservative under-recommendation is
+    preferable to putting an unsafe 4XX course in a sophomore's current-term plan.
+    """
+    if academic_year is not None:
+        year = max(1, int(academic_year))
+        if year <= 1:
+            return "freshman_foundation"
+        if year == 2:
+            return "sophomore_foundation"
+        if year == 3:
+            return "junior_progression"
+        return "senior_completion"
     if freshman_done < 10:
         return "freshman_foundation"
-    if any(course_level(c) >= 400 for c in completed):
+    completed_3xx = sum(1 for c in completed if course_level(c) == 300)
+    completed_4xx = sum(1 for c in completed if course_level(c) >= 400)
+    if completed_3xx >= 5 and completed_4xx >= 2:
         return "senior_completion"
-    if any(course_level(c) >= 300 for c in completed):
+    if completed_3xx >= 3:
         return "junior_progression"
     return "sophomore_foundation"
 
@@ -275,7 +331,12 @@ def _offered_course_codes(data_dir: str) -> frozenset[str]:
         return frozenset()
 
 
-def analyze(program: str, completed_codes: list[str], term: str | None = None) -> StageAnalysis:
+def analyze(
+    program: str,
+    completed_codes: list[str],
+    term: str | None = None,
+    academic_year: int | None = None,
+) -> StageAnalysis:
     """Student stage + eligible/blocked REQUIRED foundations, derived from official data."""
     program = (program or "").strip().upper()
     completed = {normalize_code(c) for c in completed_codes if c}
@@ -287,7 +348,7 @@ def analyze(program: str, completed_codes: list[str], term: str | None = None) -
     if not any(h in completed for h in HUM_MAJOR_WORKS):
         missing_later.append("HUM2XX")
 
-    stage = _detect_stage(completed, freshman_done)
+    stage = _detect_stage(completed, freshman_done, academic_year)
     cap = _STAGE_LEVEL_CAP.get(stage, 300)
 
     model = _requirement_model(program, term) if term else None
@@ -332,7 +393,7 @@ def analyze(program: str, completed_codes: list[str], term: str | None = None) -
 def build_plan(program: str, term: str | None, completed_codes: list[str],
                interest_codes: list[str] | None = None, target: int = 5,
                minimum_su_credits: int = 15, exact_course_count: bool = False,
-               max_courses: int = 8) -> PlanResult:
+               max_courses: int = 8, academic_year: int | None = None) -> PlanResult:
     """The balanced, prerequisite-checked next-semester plan (deterministic).
 
     ``target`` is a soft course-count target unless the student explicitly supplied a hard
@@ -340,7 +401,7 @@ def build_plan(program: str, term: str | None, completed_codes: list[str],
     plan passes 18 here. This makes the credit rule executable rather than prompt-only guidance.
     """
     program = (program or "").strip().upper()
-    a = analyze(program, completed_codes, term)
+    a = analyze(program, completed_codes, term, academic_year)
     completed = a.completed
     cap = _STAGE_LEVEL_CAP.get(a.stage, 300)
     model = _requirement_model(program, term) if term else None
@@ -356,7 +417,14 @@ def build_plan(program: str, term: str | None, completed_codes: list[str],
 
     # ---- priority-ordered candidate stream ------------------------------------------------
     # 1) first-year University-course debt (mandatory, must come first)
-    debt_items = [PlanItem(c, "university", *_REASON["university"]) for c in result.university_debt]
+    debt_items: list[PlanItem] = []
+    for code in result.university_debt:
+        if _prereqs_met(code, completed):
+            debt_items.append(PlanItem(code, "university", *_REASON["university"]))
+        else:
+            missing = ", ".join(_missing_prereqs(code, completed))
+            if (code, missing) not in result.blocked_required:
+                result.blocked_required.append((code, missing))
 
     # 2) still-missing required foundations that are takeable now (already choice-deduped)
     required_items = list(a.eligible_foundations)
@@ -379,10 +447,10 @@ def build_plan(program: str, term: str | None, completed_codes: list[str],
     for code in a.missing_university_later:
         if code == "HUM2XX":
             hum = next((h for h in HUM_MAJOR_WORKS if h not in completed and resolve(h)), None)
-            if hum:
+            if hum and _prereqs_met(hum, completed):
                 filler_items.append(PlanItem(hum, "university", *_REASON["university"]))
             continue
-        if resolve(code):
+        if resolve(code) and _prereqs_met(code, completed):
             filler_items.append(PlanItem(code, "university", *_REASON["university"]))
 
     # 5) Official, currently offered electives. These are a credit-floor fallback, not a way to
@@ -465,6 +533,58 @@ def build_plan(program: str, term: str | None, completed_codes: list[str],
     result.recommended = selected
     result.credit_shortfall = max(0, minimum_su_credits - sum(item.su for item in selected))
     return result
+
+
+def validate_proposed_plan(
+    proposed: list[dict],
+    *,
+    completed_codes: list[str],
+    stage: str,
+    maximum_su_credits: int = 18,
+) -> list[str]:
+    """Deterministically reject malformed or unsafe generated plan items.
+
+    The production planner does not rely on an LLM, but this validator is the final
+    enforcement boundary for any future generated/imported proposal.
+    """
+    completed = {normalize_code(code) for code in completed_codes if code}
+    cap = _STAGE_LEVEL_CAP.get(stage)
+    if cap is None:
+        return ["unknown_stage"]
+
+    errors: list[str] = []
+    seen: set[str] = set()
+    total_su = 0
+    for index, item in enumerate(proposed):
+        if not isinstance(item, dict):
+            errors.append(f"item_{index}:malformed")
+            continue
+        code = normalize_code(str(item.get("code") or ""))
+        canonical = resolve(code)
+        if not code or canonical is None:
+            errors.append(f"item_{index}:unknown_course")
+            continue
+        if code in seen:
+            errors.append(f"{code}:duplicate")
+        seen.add(code)
+        if code in completed:
+            errors.append(f"{code}:already_completed")
+        if course_level(code) > cap:
+            errors.append(f"{code}:level_exceeds_stage")
+        if not _prerequisite_data_known(code):
+            errors.append(f"{code}:prerequisite_data_unavailable")
+        elif not _prereqs_met(code, completed):
+            errors.append(f"{code}:unmet_prerequisite")
+        if "title" in item and str(item["title"]).strip() != canonical["official_name"]:
+            errors.append(f"{code}:noncanonical_title")
+        declared_code = re.sub(r"\s+", "", str(item.get("code") or "")).upper()
+        if declared_code != canonical["course_id"]:
+            errors.append(f"{code}:noncanonical_code")
+        total_su += int(canonical.get("su_credits") or 0)
+
+    if total_su > max(0, int(maximum_su_credits)):
+        errors.append("credit_limit_exceeded")
+    return errors
 
 
 # ---------------------------------------------------------------------------------------------
@@ -613,14 +733,26 @@ def render_plan(plan: PlanResult, *, language: str = "tr", interest_label: str |
 # Back-compat: LLM planning context (used only when curriculum term is unknown)
 # ---------------------------------------------------------------------------------------------
 
-def build_context(program: str, completed_codes: list[str], interest_codes: list[str] | None = None,
-                  term: str | None = None, data_dir: str | None = None) -> str:
+def build_context(
+    program: str,
+    completed_codes: list[str],
+    interest_codes: list[str] | None = None,
+    term: str | None = None,
+    data_dir: str | None = None,
+    academic_year: int | None = None,
+) -> str:
     """Authoritative planning context for the LLM when a deterministic render is not used.
 
     With a curriculum term this mirrors the deterministic plan; without one it degrades to
     University-course debt + interest gating only.
     """
-    plan = build_plan(program, term, completed_codes, interest_codes)
+    plan = build_plan(
+        program,
+        term,
+        completed_codes,
+        interest_codes,
+        academic_year=academic_year,
+    )
     sophomore_or_below = plan.stage in {"freshman_foundation", "sophomore_foundation"}
 
     lines: list[str] = [

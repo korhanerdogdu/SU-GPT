@@ -1,5 +1,6 @@
 import { useState, type KeyboardEvent } from "react";
 import { ArrowUp } from "lucide-react";
+import { useLocale } from "@/contexts/LocaleContext";
 
 interface Props {
   onSend: (text: string) => void;
@@ -12,6 +13,7 @@ interface Props {
 
 export default function ChatInput({ onSend, disabled, variant = "docked", autoFocus }: Props) {
   const [value, setValue] = useState("");
+  const { t } = useLocale();
 
   function submit() {
     const text = value.trim();
@@ -44,7 +46,7 @@ export default function ChatInput({ onSend, disabled, variant = "docked", autoFo
         onKeyDown={handleKey}
         rows={1}
         autoFocus={autoFocus}
-        placeholder="Mezuniyetini sor veya “CS 201’i aldım” yaz…"
+        placeholder={t("chat.placeholder")}
         disabled={disabled}
         className={`flex-1 resize-none bg-transparent text-foreground placeholder:text-muted-foreground focus:outline-none focus-visible:ring-0 focus-visible:ring-offset-0 disabled:opacity-50 ${
           hero ? "py-1.5 text-[0.95rem]" : "py-1.5 text-sm"
@@ -55,7 +57,7 @@ export default function ChatInput({ onSend, disabled, variant = "docked", autoFo
         type="button"
         onClick={submit}
         disabled={!value.trim() || disabled}
-        aria-label="Gönder"
+        aria-label={t("chat.send")}
         className={`flex shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground transition-colors hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40 ${
           hero ? "h-10 w-10" : "h-9 w-9"
         }`}

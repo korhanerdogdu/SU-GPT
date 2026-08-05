@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "benchmark_id": "endpoint-security-bounded-v1",
+  "dataset_role": "synthetic_development_endpoint_subset",
+  "dataset_path": "endpoint_security_v1.jsonl",
+  "content_sha256": "c3c376271326aa9d78bc67d399b182fc83ec047dba49b0b87051af6b9775ddec",
+  "case_count": 12,
+  "languages": ["tr", "en"],
+  "endpoint": "/ask/",
+  "production_middleware_order": true,
+  "synthetic_providers": true,
+  "prompts_persisted_in_run_artifacts": false,
+  "responses_persisted_in_run_artifacts": false,
+  "scope_note": "Bounded real-route regression subset; not the 52-row deterministic corpus, an independent final set, or a comprehensive penetration test."
+}

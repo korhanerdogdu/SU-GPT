@@ -1,13 +1,16 @@
 import asyncio
 import json
+import os
 import re
+import time
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 
 from fastapi import FastAPI,UploadFile,File,Form,Request,HTTPException
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-from typing import List
+from typing import List, Literal
 from langchain_core.retrievers import BaseRetriever
 from pydantic import BaseModel, Field
 from langchain_core.documents import Document
@@ -18,28 +21,67 @@ from modules.load_vectorstore import (
 )
 from modules.file_lifecycle import (
     cascade_delete_source,
-    confirm_whatsapp_batch,
-    create_pending_whatsapp_batch,
     ingest_exam_upload,
 )
 from modules.intent_detector import get_intent
-from modules.llm import answer_without_context, detect_language, get_llm_chain
+from modules.llm import answer_without_context_with_telemetry, detect_language, get_llm_chain
+from modules.auth import AuthenticationError, Principal, bearer_token, issue_token, verify_token
+from modules.confidence import ConfidenceSignals, assess as assess_confidence
+from modules.guardrails import (
+    assess_input,
+    refusal_message,
+    retrieval_boundary,
+    retrieved_content_is_safe,
+    validate_output,
+)
+from modules import content_safety, intents
+from modules.language import analyze_language
+from modules.resource_controls import (
+    CONVERSATION_CREATIONS_PER_MINUTE,
+    COURSE_REVIEW_REQUESTS_PER_MINUTE,
+    MAX_INPUT_CHARS,
+    MAX_OUTPUT_TOKENS,
+    PROVIDER_REQUEST_COST_RESERVATION_MICROUSD,
+    REQUEST_TIMEOUT_SECONDS,
+    ResourceLimitError,
+    STREAM_REQUESTS_PER_MINUTE,
+    UPLOAD_REQUESTS_PER_MINUTE,
+    DAILY_PROVIDER_REQUEST_QUOTA,
+    controller as resource_controller,
+)
+from modules.rate_limit_backends import UsageReservation
+from modules.localization import message as localized_message
 from modules.query_handlers import query_chain
 from modules.config import (
     ADMIN_PASSWORD,
     ADMIN_USERNAME,
+    APP_ENV,
     AUTO_INGEST_SOURCES,
     AUTO_SEED_COURSES,
     CATALOG_DATA_DIR,
+    COURSE_REVIEWS_ENABLED,
+    COURSE_REVIEW_CONSENT_VERSION,
+    COURSE_REVIEW_DIGEST_NAMESPACE,
+    COURSE_REVIEW_HMAC_SECRET,
     DEFAULT_EXPERT_MODE,
     DEFAULT_PROMPT_STRATEGY,
     DEFAULT_RETRIEVAL_MODE,
+    LLM_MAX_RETRIES,
     RERANK_TOP_K,
     RETRIEVAL_CANDIDATE_K,
     SOURCES_DIR,
     STUDENT_PASSWORD,
     STUDENT_USERNAME,
+    validate_provider_activation,
+    validate_production_security,
 )
+from modules.course_review_store import (
+    CourseReviewPersistencePolicy,
+    CourseReviewStorageError,
+    CourseReviewStore,
+    ModerationConflictError,
+)
+from modules.course_reviews import DuplicateReviewError, ReviewValidationError
 from modules import retrieval_modes
 from modules.catalog_retriever import retrieve_documents
 from modules.mongodb import (
@@ -57,6 +99,7 @@ from modules.mongodb import (
     set_user_courses,
     set_user_schedule,
     ScheduleRevisionConflict,
+    course_reviews as course_review_collection,
 )
 from modules.course_commands import parse_course_history_command
 from modules.profile_commands import parse_academic_profile_command, resolve_profile_update
@@ -84,6 +127,21 @@ from logger import logger
 app = FastAPI(title="adviSU — Retrieval-Augmented Academic Advising System")
 
 
+@lru_cache(maxsize=1)
+def _course_review_store() -> CourseReviewStore:
+    """Construct the dedicated course-only store without touching legacy review collections."""
+
+    return CourseReviewStore(
+        collection=course_review_collection,
+        hmac_secret=COURSE_REVIEW_HMAC_SECRET.encode("utf-8"),
+        policy=CourseReviewPersistencePolicy(
+            consent_policy_version=COURSE_REVIEW_CONSENT_VERSION,
+            digest_namespace=COURSE_REVIEW_DIGEST_NAMESPACE,
+            minimum_reviews=10,
+        ),
+    )
+
+
 class StaticRetriever(BaseRetriever):
     documents: List[Document] = Field(default_factory=list)
 
@@ -99,7 +157,10 @@ class LoginPayload(BaseModel):
 class CourseSelectionPayload(BaseModel):
     course_ids: list[str] = Field(default_factory=list)
     # optional per-course status: completed | enrolled | failed | withdrawn | transfer | exempted
-    statuses: dict[str, str] = Field(default_factory=dict)
+    statuses: dict[
+        str,
+        Literal["completed", "enrolled", "failed", "withdrawn", "transfer", "exempted"],
+    ] = Field(default_factory=dict)
 
 
 class AcademicProfilePayload(BaseModel):
@@ -107,12 +168,18 @@ class AcademicProfilePayload(BaseModel):
     degree_code: str | None = None
     admission_term: str | None = None
     curriculum_term: str | None = None
+    academic_year: int | None = Field(default=None, ge=1, le=6)
     minor_codes: list[str] | None = None
 
 
 class ConversationUpdatePayload(BaseModel):
     title: str | None = None
     pinned: bool | None = None
+
+
+class CourseReviewModerationPayload(BaseModel):
+    state: Literal["approved", "rejected"]
+    reason_codes: list[str] = Field(min_length=1, max_length=8)
 
 
 class ScheduleSourcePayload(BaseModel):
@@ -494,37 +561,37 @@ def _resolve_intent(
         "what do i need",
         "what should i take then",
     )
-    if previous_intent in {"mezuniyet_durumu", "graduation_plan"} and any(
+    if previous_intent in {intents.GRADUATION_STATUS, intents.GRADUATION_PLAN, "mezuniyet_durumu"} and any(
         phrase in normalized for phrase in graduation_followups
     ):
-        return "graduation_plan"
-    if previous_intent in {"mezuniyet_durumu", "graduation_plan"} and re.search(
+        return intents.GRADUATION_PLAN
+    if previous_intent in {intents.GRADUATION_STATUS, intents.GRADUATION_PLAN, "mezuniyet_durumu"} and re.search(
         r"\b(?:sonraki|gelecek)\s+dönem\b|\bnext semester\b", normalized
     ):
-        return "graduation_plan"
+        return intents.GRADUATION_PLAN
     if MINOR_INTENT_RE.search(question or ""):
-        return "minor"
+        return intents.MINOR
     if CURRENT_TERM_SCHEDULE_RE.search(question or ""):
-        return "ders_programi"
+        return intents.WEEKLY_SCHEDULE
     if UNTIL_GRAD_RECOMMENDATION_RE.search(question or ""):
-        return "ders_onerisi"
+        return intents.COURSE_RECOMMENDATION
     if _is_graduation_intent(question) and not _is_course_detail_like(question):
-        return "mezuniyet_durumu"
+        return intents.GRADUATION_STATUS
     if _is_course_detail_like(question):
-        return "ders_ayrintisi"
+        return intents.COURSE_DETAIL
     if STUDY_PLAN_INTENT_RE.search(question or ""):
-        return "calisma_plani"
+        return intents.STUDY_PLAN
     if MAJOR_SELECTION_INTENT_RE.search(question or ""):
-        return "major_secimi"
+        return intents.MAJOR_SELECTION
     if SPECIALIZATION_INTENT_RE.search(question or ""):
-        return "alanda_ozellesme"
+        return intents.SPECIALIZATION
     # A timetabled "program/schedule" request (option 5) is checked before the times-less course
     # list (option 2) so the word "program" routes to the weekly-schedule builder.
     if SCHEDULE_INTENT_RE.search(question or ""):
-        return "ders_programi"
+        return intents.WEEKLY_SCHEDULE
     if _is_recommendation_intent(question):
-        return "ders_onerisi"
-    return detected_intent or "diger"
+        return intents.COURSE_RECOMMENDATION
+    return intents.to_canonical(detected_intent)
 
 
 def _recommendation_question_for_llm(question: str, taken_codes: list[str]) -> str:
@@ -583,80 +650,80 @@ def _recommendation_retrieval_query(question: str) -> str:
 
 
 def _retrieval_query_for_intent(question: str, intent: str, program: str | None = None) -> str:
-    if intent == "review":
-        return f"{question} instructor professor review workload grading difficulty course experience"
-    if intent == "exam":
+    if intent == intents.REVIEW:
+        return question
+    if intent == intents.EXAM:
         return f"{question} exam final midterm quiz past questions solutions assessment"
-    if intent == "minor":
+    if intent == intents.MINOR:
         return f"{question} minor program required courses core electives area electives"
-    if intent == "ders_onerisi":
+    if intent == intents.COURSE_RECOMMENDATION:
         return _recommendation_retrieval_query(question)
-    if intent == "mezuniyet_durumu":
+    if intent == intents.GRADUATION_STATUS:
         prog = (program or "").strip()
         return (
             f"{question} {prog} degree requirements graduation "
             "university courses required courses core electives area electives free electives"
         )
-    if intent == "calisma_plani":
+    if intent == intents.STUDY_PLAN:
         return f"{question} course syllabus assignments exams study plan workload"
-    if intent == "ders_ayrintisi":
+    if intent == intents.COURSE_DETAIL:
         return f"{question} course detail instructor syllabus schedule prerequisite workload"
-    if intent in {"major_secimi", "alanda_ozellesme"}:
+    if intent in {intents.MAJOR_SELECTION, intents.SPECIALIZATION}:
         return f"{question} Sabanci program requirements course catalog specialization career"
     return question
 
 
 def _intent_context_document(intent: str, taken_codes: list[str] | None = None) -> Document:
-    if intent == "ders_onerisi":
+    if intent == intents.COURSE_RECOMMENDATION:
         taken = ", ".join(taken_codes or []) if taken_codes else "none"
         text = (
             "[Source: Request intent]\n"
-            "Detected intent: ders_onerisi / course recommendation / schedule planning. "
+            "Detected intent: course_recommendation / schedule planning. "
             "Do not produce graduation audit. Do not summarize completed credits. "
             "Never start with any sentence about checking graduation status. "
             f"Already taken course codes, strictly forbidden to recommend: {taken}. "
             "Use MongoDB profile only as a taken-course exclusion list and for personalization."
         )
-    elif intent == "mezuniyet_durumu":
+    elif intent == intents.GRADUATION_STATUS:
         text = (
             "[Source: Request intent]\n"
-            "Detected intent: mezuniyet_durumu / graduation audit. Use official degree evaluation "
+            "Detected intent: graduation_status / graduation audit. Use official degree evaluation "
             "and degree requirement RAG sources with MongoDB student profile."
         )
-    elif intent == "calisma_plani":
+    elif intent == intents.STUDY_PLAN:
         text = (
             "[Source: Request intent]\n"
-            "Detected intent: calisma_plani / study plan. Give course-specific study guidance. "
+            "Detected intent: study_plan. Give course-specific study guidance. "
             "Do not produce graduation audit unless explicitly requested."
         )
-    elif intent == "ders_ayrintisi":
+    elif intent == intents.COURSE_DETAIL:
         text = (
             "[Source: Request intent]\n"
-            "Detected intent: ders_ayrintisi / course detail. Answer the requested course detail "
+            "Detected intent: course_detail. Answer the requested course detail "
             "such as instructor, schedule, syllabus, prerequisite or workload. Do not produce graduation audit."
         )
-    elif intent == "review":
+    elif intent == intents.REVIEW:
         text = (
             "[Source: Request intent]\n"
-            "Detected intent: review / instructor or course review. Use only instructor review chunks "
-            "and clearly separate retrieved student sentiment from official course facts."
+            "Detected intent: course review. The consent-based course-only feature is disabled; "
+            "never use instructor ratings or private-chat material."
         )
-    elif intent == "exam":
+    elif intent == intents.EXAM:
         text = (
             "[Source: Request intent]\n"
             "Detected intent: exam / past exam or assessment question. Use exam chunks and course context; "
             "do not invent unavailable questions or answers."
         )
-    elif intent == "major_secimi":
+    elif intent == intents.MAJOR_SELECTION:
         text = (
             "[Source: Request intent]\n"
-            "Detected intent: major_secimi / major selection. Compare programs and fit using catalog context. "
+            "Detected intent: major_selection. Compare programs and fit using catalog context. "
             "Do not produce graduation audit."
         )
-    elif intent == "alanda_ozellesme":
+    elif intent == intents.SPECIALIZATION:
         text = (
             "[Source: Request intent]\n"
-            "Detected intent: alanda_ozellesme / specialization guidance. Use catalog and course context "
+            "Detected intent: specialization guidance. Use catalog and course context "
             "to guide subfield choice. Do not produce graduation audit."
         )
     else:
@@ -694,12 +761,13 @@ def _conversation_context_document(turns: list[dict[str, str]]) -> Document:
                 "assistant": str(turn.get("assistant") or "")[:900],
             }
         )
+    serialized = json.dumps(compact, ensure_ascii=False)
     return Document(
         page_content=(
             "[Source: Recent conversation context]\n"
             "Use these turns only to resolve follow-up meaning. Official curriculum data and "
             "the deterministic audit remain authoritative.\n"
-            + json.dumps(compact, ensure_ascii=False)
+            + retrieval_boundary(serialized, "recent-conversation")
         ),
         metadata={
             "source": "Recent conversation",
@@ -950,11 +1018,64 @@ def _clean_recommendation_response(result: dict) -> dict:
     return result
 
 
+def _output_language_matches(text: str, expected: str) -> bool:
+    """Treat signal-poor codes/tables as neutral; otherwise require the requested language."""
+
+    analysis = analyze_language(text)
+    return analysis.signal_token_count < 3 or analysis.response_language == expected
+
+
+def _document_source_label(document: Document) -> str:
+    metadata = document.metadata or {}
+    source = str(metadata.get("source") or metadata.get("file_name") or "").strip()
+    parts = [source] if source else []
+    if metadata.get("page") is not None:
+        parts.append(f"page {metadata['page']}")
+    if metadata.get("slide") is not None:
+        parts.append(f"slide {metadata['slide']}")
+    if metadata.get("section"):
+        parts.append(f"section '{metadata['section']}'")
+    return ", ".join(parts)
+
+
+def _source_list_is_authorized(returned: list[object], authorized: list[str]) -> bool:
+    allowed = {" ".join(value.split()).casefold() for value in authorized if value}
+    return all(
+        " ".join(str(value).split()).casefold() in allowed
+        for value in returned
+        if str(value).strip()
+    )
+
+
+def _confidence_public(status: str) -> dict[str, str]:
+    """Expose only a stable user-facing state, never scores, thresholds, or internal reasons."""
+
+    return {"status": status}
+
+
+def _confidence_abstention_message(status: str, language: str) -> str:
+    key = status if status in {
+        "profile_required",
+        "curriculum_unavailable",
+        "provider_unavailable",
+        "cannot_verify",
+        "safe_abstention",
+    } else "cannot_verify"
+    return localized_message(f"confidence.{key}", language)
+
+
 def _format_for_context(docs: List[Document]) -> List[Document]:
     """Prepend a [Source: ...] header to each chunk so the LLM can ground & cite."""
     formatted: List[Document] = []
     for doc in docs:
         meta = doc.metadata or {}
+        document_type = str(meta.get("document_type") or meta.get("documentType") or "").lower()
+        if document_type in {"review", "whatsapp", "instructor_review"}:
+            logger.warning("legacy private-review chunk quarantined")
+            continue
+        if not retrieved_content_is_safe(doc.page_content):
+            logger.warning("retrieved chunk quarantined by instruction-boundary policy")
+            continue
         source = meta.get("source") or meta.get("file_name") or "unknown"
         location_parts = []
         if meta.get("page") is not None:
@@ -967,7 +1088,7 @@ def _format_for_context(docs: List[Document]) -> List[Document]:
         header = f"[Source: {source}" + (f", {location}" if location else "") + "]"
         formatted.append(
             Document(
-                page_content=f"{header}\n{doc.page_content}",
+                page_content=f"{header}\n{retrieval_boundary(doc.page_content, str(meta.get('chunk_id') or source))}",
                 metadata=meta,
             )
         )
@@ -1009,10 +1130,17 @@ def _retrieve_for_route(vectorstore, route, retrieval_query: str) -> List[Docume
 
 # allow frontend
 
+_cors_origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ALLOWED_ORIGINS", "http://127.0.0.1:5173,http://localhost:5173"
+    ).split(",")
+    if origin.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=["*"],
+    allow_origins=_cors_origins,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"]
 )
@@ -1020,12 +1148,30 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup_event():
+    validate_provider_activation()
+    validate_production_security()
     try:
         await ensure_database()
         if AUTO_SEED_COURSES:
             await seed_courses_from_catalog()
     except Exception:
         logger.exception("MongoDB startup initialization failed")
+        if APP_ENV in {"production", "prod"}:
+            # Authentication and conversation ownership rely on the unique database indexes.
+            # Production must never accept traffic when those controls could not be established.
+            raise
+
+    if COURSE_REVIEWS_ENABLED:
+        try:
+            await _course_review_store().ensure_indexes()
+        except Exception as exc:
+            # An enabled privacy feature without its unique/suppression indexes is unsafe in
+            # every environment.  Never silently downgrade to the in-memory prototype.
+            logger.error(
+                "course-review startup validation failed (error_class=%s)",
+                type(exc).__name__,
+            )
+            raise
 
     if AUTO_INGEST_SOURCES:
         try:
@@ -1038,30 +1184,122 @@ async def startup_event():
 @app.middleware("http")
 async def catch_exception_middleware(request:Request,call_next):
     try:
-        return await call_next(request)
+        return await asyncio.wait_for(call_next(request), timeout=REQUEST_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
+        return JSONResponse(status_code=504, content={"error": "Request timed out"})
+    except ResourceLimitError as exc:
+        status = 503 if exc.reason.startswith("resource_backend_") else 429
+        headers = (
+            {"Retry-After": str(exc.retry_after_seconds)}
+            if status == 429 and exc.retry_after_seconds is not None
+            else None
+        )
+        return JSONResponse(
+            status_code=status,
+            content={"error": "Request temporarily unavailable"},
+            headers=headers,
+        )
     except Exception as exc:
-        logger.exception("UNHANDLED EXCEPTION")
-        return JSONResponse(status_code=500,content={"error":str(exc)})
+        logger.error("unhandled request failure (error_class=%s)", type(exc).__name__)
+        return JSONResponse(status_code=500,content={"error":"Internal server error"})
+
+
+def _principal(request: Request) -> Principal:
+    try:
+        return verify_token(bearer_token(request.headers.get("authorization")))
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=401, detail="Authentication required") from exc
+
+
+def _authorize_user(request: Request, username: str) -> Principal:
+    principal = _principal(request)
+    if principal.role != "admin" and principal.username != username:
+        raise HTTPException(status_code=403, detail="Access denied")
+    return principal
+
+
+def _authorize_admin(request: Request) -> Principal:
+    principal = _principal(request)
+    if principal.role != "admin":
+        raise HTTPException(status_code=403, detail="Administrator access required")
+    return principal
+
+
+def _resource_limit_http_exception(
+    exc: ResourceLimitError,
+    *,
+    language: str = "en",
+) -> HTTPException:
+    backend_failure = exc.reason.startswith("resource_backend_")
+    headers = None
+    if not backend_failure and exc.retry_after_seconds is not None:
+        headers = {"Retry-After": str(max(1, int(exc.retry_after_seconds)))}
+    return HTTPException(
+        status_code=503 if backend_failure else 429,
+        detail=(
+            localized_message("errors.internal", language)
+            if backend_failure
+            else localized_message("limits.request", language)
+        ),
+        headers=headers,
+    )
+
+
+def _check_operation_limit(
+    request: Request,
+    *,
+    kind: str,
+    identity: str | None,
+    limit: int,
+    language: str = "en",
+) -> None:
+    try:
+        resource_controller.check_operation(
+            kind,
+            identity=identity,
+            client_address=request.client.host if request.client else None,
+            limit=limit,
+        )
+    except ResourceLimitError as exc:
+        raise _resource_limit_http_exception(exc, language=language) from exc
+
+
+async def _authorize_conversation(request: Request, session_id: str) -> Principal:
+    principal = _principal(request)
+    owner = await conversation_memory.conversation_owner(session_id)
+    # Missing ownership metadata is not proof of access. Legacy/unowned conversations remain
+    # available to administrators for repair, but fail closed for student identities.
+    if principal.role != "admin" and owner != principal.username:
+        raise HTTPException(status_code=403, detail="Access denied")
+    return principal
     
 @app.post("/upload_pdfs/")
-async def upload_pdfs(files:List[UploadFile]=File(...)):
+async def upload_pdfs(request: Request, files:List[UploadFile]=File(...)):
+    principal = _authorize_admin(request)
+    _check_operation_limit(
+        request, kind="upload", identity=principal.username, limit=UPLOAD_REQUESTS_PER_MINUTE
+    )
     try:
         logger.info(f"recieved {len(files)} files")
         chunk_count = load_vectorstore(files)
         logger.info("documents added to chroma")
         return {"message":"Files processed and vectorstore updated","chunks":chunk_count}
-    except Exception as e:
+    except Exception:
         logger.exception("Error during pdf upload")
-        return JSONResponse(status_code=500,content={"error":str(e)})
+        return JSONResponse(status_code=400, content={"error": "Upload rejected"})
 
 
 @app.post("/upload_documents/")
-async def upload_documents(files: List[UploadFile] = File(...)):
+async def upload_documents(request: Request, files: List[UploadFile] = File(...)):
     """Multi-format upload endpoint (Section 2).
 
     Accepts PDF, PPTX, DOCX, MD, and TXT files. Unsupported types are
     skipped and reported in the response.
     """
+    principal = _authorize_admin(request)
+    _check_operation_limit(
+        request, kind="upload", identity=principal.username, limit=UPLOAD_REQUESTS_PER_MINUTE
+    )
     try:
         logger.info(f"received {len(files)} document(s) for multi-format ingest")
         result = load_vectorstore_multi(files)
@@ -1075,40 +1313,52 @@ async def upload_documents(files: List[UploadFile] = File(...)):
             "message": "Files processed and vectorstore updated",
             **result,
         }
-    except Exception as e:
+    except Exception:
         logger.exception("Error during multi-format document upload")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        return JSONResponse(status_code=400, content={"error": "Upload rejected"})
 
 
 @app.post("/admin/whatsapp/upload")
 async def upload_whatsapp_chat(
+    request: Request,
     file: UploadFile = File(...),
     username: str = Form("admin"),
+    language: str = Form("en"),
 ):
-    try:
-        return create_pending_whatsapp_batch(file, uploaded_by=username)
-    except Exception as e:
-        logger.exception("Error during WhatsApp pending upload")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+    del file, username
+    principal = _authorize_admin(request)
+    _check_operation_limit(
+        request,
+        kind="upload",
+        identity=principal.username,
+        limit=UPLOAD_REQUESTS_PER_MINUTE,
+        language=language,
+    )
+    raise HTTPException(
+        status_code=410,
+        detail=localized_message("course_reviews.private_chat_disabled", language),
+    )
 
 
 @app.post("/admin/whatsapp/{batch_id}/confirm")
 async def confirm_whatsapp_upload(
     batch_id: str,
+    request: Request,
     approved: bool = Form(True),
     username: str = Form("admin"),
+    language: str = Form("en"),
 ):
-    try:
-        return confirm_whatsapp_batch(batch_id, approved=approved, approved_by=username)
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        logger.exception("Error during WhatsApp confirmation")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+    del batch_id, approved, username
+    _authorize_admin(request)
+    raise HTTPException(
+        status_code=410,
+        detail=localized_message("course_reviews.private_chat_disabled", language),
+    )
 
 
 @app.post("/admin/exams/upload")
 async def upload_exam_pdf(
+    request: Request,
     file: UploadFile = File(...),
     course_code: str = Form(""),
     year: str = Form(""),
@@ -1116,6 +1366,11 @@ async def upload_exam_pdf(
     exam_type: str = Form(""),
     username: str = Form("admin"),
 ):
+    principal = _authorize_admin(request)
+    username = principal.username
+    _check_operation_limit(
+        request, kind="upload", identity=username, limit=UPLOAD_REQUESTS_PER_MINUTE
+    )
     try:
         return ingest_exam_upload(
             file,
@@ -1125,24 +1380,32 @@ async def upload_exam_pdf(
             exam_type=exam_type,
             uploaded_by=username,
         )
-    except Exception as e:
+    except Exception:
         logger.exception("Error during exam upload")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        return JSONResponse(status_code=400, content={"error": "Upload rejected"})
 
 
 @app.delete("/sources/{source_id}")
-async def delete_source_document(source_id: str, hard: bool = False):
+async def delete_source_document(source_id: str, request: Request, hard: bool = False):
+    _authorize_admin(request)
     try:
         return cascade_delete_source(source_id, hard=hard)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
+    except Exception:
         logger.exception("Error during source cascade delete")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        return JSONResponse(status_code=500, content={"error": "Source operation failed"})
 
 
 @app.post("/auth/login")
-async def login(payload: LoginPayload):
+async def login(payload: LoginPayload, request: Request):
+    try:
+        resource_controller.check_login_attempt(
+            username=payload.username,
+            client_address=request.client.host if request.client else None,
+        )
+    except ResourceLimitError as exc:
+        raise _resource_limit_http_exception(exc, language="en") from exc
     if payload.username == ADMIN_USERNAME and payload.password == ADMIN_PASSWORD:
         role = "admin"
     elif payload.username == STUDENT_USERNAME and payload.password == STUDENT_PASSWORD:
@@ -1153,7 +1416,198 @@ async def login(payload: LoginPayload):
         await ensure_user(payload.username, role=role)
     except Exception:
         logger.exception("Could not sync user to MongoDB")
-    return {"username": payload.username, "role": role}
+    token, expires_at = issue_token(payload.username, role)
+    return {
+        "username": payload.username,
+        "role": role,
+        "access_token": token,
+        "token_type": "bearer",
+        "expires_at": expires_at,
+    }
+
+
+@app.get("/course-reviews/policy")
+async def course_review_policy(language: str = "en"):
+    """Public, identity-free policy metadata; the feature remains off by default."""
+    selected = "tr" if language == "tr" else "en"
+    return {
+        "enabled": COURSE_REVIEWS_ENABLED,
+        "course_only": True,
+        "instructor_ratings_allowed": False,
+        "private_chat_ingestion_allowed": False,
+        "explicit_consent_required": True,
+        "minimum_aggregate_reviews": 10,
+        "rating_dimensions": [
+            "difficulty",
+            "workload",
+            "learning_value",
+            "organization",
+            "overall_satisfaction",
+        ],
+        "message": localized_message(
+            "course_reviews.enabled" if COURSE_REVIEWS_ENABLED else "course_reviews.disabled",
+            selected,
+        ),
+    }
+
+
+def _require_course_review_feature(language: str) -> CourseReviewStore:
+    if not COURSE_REVIEWS_ENABLED:
+        raise HTTPException(
+            status_code=503,
+            detail=localized_message("course_reviews.disabled", language),
+        )
+    try:
+        return _course_review_store()
+    except Exception:
+        raise HTTPException(
+            status_code=503,
+            detail=localized_message("course_reviews.storage_unavailable", language),
+        ) from None
+
+
+@app.post("/course-reviews")
+async def submit_course_review(payload: dict, request: Request, language: str = "en"):
+    principal = _principal(request)
+    _check_operation_limit(
+        request,
+        kind="course-review",
+        identity=principal.username,
+        limit=COURSE_REVIEW_REQUESTS_PER_MINUTE,
+        language=language,
+    )
+    store = _require_course_review_feature(language)
+    try:
+        review = await store.submit(payload, author_token=principal.username)
+    except DuplicateReviewError:
+        raise HTTPException(
+            status_code=409,
+            detail=localized_message("course_reviews.duplicate", language),
+        ) from None
+    except ReviewValidationError:
+        raise HTTPException(
+            status_code=400,
+            detail=localized_message("course_reviews.invalid", language),
+        ) from None
+    except CourseReviewStorageError:
+        raise HTTPException(
+            status_code=503,
+            detail=localized_message("course_reviews.storage_unavailable", language),
+        ) from None
+    state = review.moderation_state
+    return {
+        "review": review.to_public_mapping(),
+        "message": localized_message(f"course_reviews.{state}", language),
+    }
+
+
+@app.delete("/course-reviews/{course_code}")
+async def delete_my_course_review(course_code: str, request: Request, language: str = "en"):
+    principal = _principal(request)
+    _check_operation_limit(
+        request,
+        kind="course-review-delete",
+        identity=principal.username,
+        limit=COURSE_REVIEW_REQUESTS_PER_MINUTE,
+        language=language,
+    )
+    store = _require_course_review_feature(language)
+    try:
+        deleted = await store.hard_delete_mine(course_code, author_token=principal.username)
+    except ReviewValidationError:
+        raise HTTPException(
+            status_code=400,
+            detail=localized_message("course_reviews.invalid", language),
+        ) from None
+    except CourseReviewStorageError:
+        raise HTTPException(
+            status_code=503,
+            detail=localized_message("course_reviews.storage_unavailable", language),
+        ) from None
+    if not deleted:
+        raise HTTPException(
+            status_code=404,
+            detail=localized_message("course_reviews.not_found", language),
+        )
+    return {"deleted": True, "message": localized_message("course_reviews.deleted", language)}
+
+
+@app.get("/course-reviews/{course_code}/aggregate")
+async def get_course_review_aggregate(course_code: str, request: Request, language: str = "en"):
+    principal = _principal(request)
+    _check_operation_limit(
+        request,
+        kind="course-review-aggregate",
+        identity=principal.username,
+        limit=COURSE_REVIEW_REQUESTS_PER_MINUTE,
+        language=language,
+    )
+    store = _require_course_review_feature(language)
+    try:
+        aggregate = await store.aggregate(course_code)
+    except ReviewValidationError:
+        raise HTTPException(
+            status_code=400,
+            detail=localized_message("course_reviews.invalid", language),
+        ) from None
+    except CourseReviewStorageError:
+        raise HTTPException(
+            status_code=503,
+            detail=localized_message("course_reviews.storage_unavailable", language),
+        ) from None
+    if not aggregate.available:
+        return {
+            "available": False,
+            "message": localized_message(
+                "course_reviews.aggregate_suppressed",
+                language,
+                minimum=aggregate.minimum_required,
+            ),
+        }
+    return {
+        "available": True,
+        "courseCode": aggregate.course_code,
+        "reviewCount": aggregate.review_count,
+        "averages": dict(aggregate.averages),
+        "distributions": {
+            name: dict(values) for name, values in aggregate.distributions.items()
+        },
+    }
+
+
+@app.post("/course-reviews/{review_id}/moderation")
+async def moderate_course_review(
+    review_id: str,
+    payload: CourseReviewModerationPayload,
+    request: Request,
+    language: str = "en",
+):
+    principal = _authorize_admin(request)
+    _check_operation_limit(
+        request,
+        kind="course-review-moderate",
+        identity=principal.username,
+        limit=COURSE_REVIEW_REQUESTS_PER_MINUTE,
+        language=language,
+    )
+    store = _require_course_review_feature(language)
+    try:
+        review = await store.moderate(
+            review_id,
+            state=payload.state,
+            reason_codes=payload.reason_codes,
+        )
+    except (ReviewValidationError, ModerationConflictError):
+        raise HTTPException(
+            status_code=409,
+            detail=localized_message("course_reviews.invalid", language),
+        ) from None
+    except CourseReviewStorageError:
+        raise HTTPException(
+            status_code=503,
+            detail=localized_message("course_reviews.storage_unavailable", language),
+        ) from None
+    return {"review": review.to_public_mapping()}
 
 
 @app.get("/courses/")
@@ -1210,22 +1664,26 @@ async def get_schedule_course_sections(
 
 
 @app.get("/users/{username}/courses")
-async def get_selected_courses(username: str):
+async def get_selected_courses(username: str, request: Request):
+    _authorize_user(request, username)
     return {"courses": await get_user_courses(username)}
 
 
 @app.put("/users/{username}/courses")
-async def save_selected_courses(username: str, payload: CourseSelectionPayload):
+async def save_selected_courses(username: str, payload: CourseSelectionPayload, request: Request):
+    _authorize_user(request, username)
     return {"courses": await set_user_courses(username, payload.course_ids, payload.statuses)}
 
 
 @app.get("/users/{username}/schedule")
-async def get_saved_schedule(username: str):
+async def get_saved_schedule(username: str, request: Request):
+    _authorize_user(request, username)
     return await get_user_schedule(username)
 
 
 @app.put("/users/{username}/schedule")
-async def save_user_schedule(username: str, payload: ScheduleSavePayload):
+async def save_user_schedule(username: str, payload: ScheduleSavePayload, request: Request):
+    _authorize_user(request, username)
     try:
         schedule = schedule_planner.validate_schedule_payload(payload.schedule.model_dump())
         return await set_user_schedule(
@@ -1243,12 +1701,42 @@ async def save_user_schedule(username: str, payload: ScheduleSavePayload):
 
 
 @app.get("/users/{username}/profile")
-async def get_profile(username: str):
+async def get_profile(username: str, request: Request):
+    _authorize_user(request, username)
     return {"profile": await get_academic_profile(username)}
 
 
+@app.get("/users/{username}/usage")
+async def get_usage(username: str, request: Request):
+    """Expose the privacy-preserving provider quota used by the chat header.
+
+    The underlying controller stores only versioned HMAC identifiers. Deterministic answers and
+    refused requests reconcile their reservation back to zero, so the displayed number measures
+    actual provider-backed questions instead of penalising free or blocked paths.
+    """
+    _authorize_user(request, username)
+    try:
+        state = resource_controller.usage(username=username)
+    except ResourceLimitError as exc:
+        raise _resource_limit_http_exception(exc) from exc
+    now = datetime.now(timezone.utc)
+    next_midnight = datetime.combine(
+        now.date() + timedelta(days=1), datetime.min.time(), tzinfo=timezone.utc
+    )
+    used = int(state.provider_requests)
+    return {
+        "limit": DAILY_PROVIDER_REQUEST_QUOTA,
+        "used": used,
+        "remaining": max(0, DAILY_PROVIDER_REQUEST_QUOTA - used),
+        "resets_at": next_midnight.isoformat().replace("+00:00", "Z"),
+        "exempt": False,
+        "allowed": used < DAILY_PROVIDER_REQUEST_QUOTA,
+    }
+
+
 @app.put("/users/{username}/profile")
-async def put_profile(username: str, payload: AcademicProfilePayload):
+async def put_profile(username: str, payload: AcademicProfilePayload, request: Request):
+    _authorize_user(request, username)
     updated = await set_academic_profile(username, payload.model_dump(exclude_none=True))
     return {"profile": updated}
 
@@ -1269,8 +1757,13 @@ async def get_program_curricula(program: str):
 
 
 @app.get("/users/{username}/degree-audit")
-async def degree_audit_endpoint(username: str):
+async def degree_audit_endpoint(username: str, request: Request):
     """Deterministic degree audit for the student's confirmed profile (roadmap section 14)."""
+    _authorize_user(request, username)
+    return await _degree_audit(username)
+
+
+async def _degree_audit(username: str):
     profile = await get_academic_profile(username)
     program = (profile.get("major") or "").strip().upper()
     term = (profile.get("curriculum_term") or "").strip()
@@ -1306,7 +1799,8 @@ def _tabular_download(
 
 
 @app.get("/users/{username}/courses/export")
-async def export_selected_courses(username: str, format: str = "csv"):
+async def export_selected_courses(username: str, request: Request, format: str = "csv"):
+    _authorize_user(request, username)
     selected = await get_user_courses(username)
     return _tabular_download(
         course_rows(selected),
@@ -1317,8 +1811,9 @@ async def export_selected_courses(username: str, format: str = "csv"):
 
 
 @app.get("/users/{username}/degree-audit/export")
-async def export_degree_audit(username: str, format: str = "xlsx"):
-    audit_result = await degree_audit_endpoint(username)
+async def export_degree_audit(username: str, request: Request, format: str = "xlsx"):
+    _authorize_user(request, username)
+    audit_result = await _degree_audit(username)
     if audit_result.get("reliability") == "unavailable":
         raise HTTPException(status_code=404, detail=audit_result.get("message"))
     return _tabular_download(
@@ -1331,6 +1826,7 @@ async def export_degree_audit(username: str, format: str = "xlsx"):
 
 @app.post("/ask/")
 async def ask_question(
+    request: Request,
     question: str = Form(...),
     username: str | None = Form(None),
     session_id: str | None = Form(None),
@@ -1343,13 +1839,17 @@ async def ask_question(
     expert_mode: str | None = Form(None),
 ):
     retrieval_mode = retrieval_modes.normalize_mode(mode or DEFAULT_RETRIEVAL_MODE)
-    context_top_k = max(int(top_k), 1) if top_k else RERANK_TOP_K
+    context_top_k = min(max(int(top_k), 1), RETRIEVAL_CANDIDATE_K) if top_k else RERANK_TOP_K
     prompt_strategy = (prompt_strategy or DEFAULT_PROMPT_STRATEGY).strip().lower()
     expert_mode = (expert_mode or DEFAULT_EXPERT_MODE).strip().lower()
     original_question = question
     language = detect_language(original_question)
     course_mutation: dict | None = None
     course_update_content: dict | None = None
+    usage_total_tokens = 0
+    usage_cost_usd: float | None = None
+    provider_attempted = False
+    admission = None
 
     def _stamp(payload: dict) -> dict:
         """Every /ask response reports the configuration that produced it (needed by Section 5)."""
@@ -1359,8 +1859,67 @@ async def ask_question(
         payload.setdefault("expert_mode", expert_mode)
         return payload
 
+    if username:
+        _authorize_user(request, username)
+        owner = await conversation_memory.conversation_owner(session_id)
+        if owner is not None and owner != username:
+            raise HTTPException(status_code=403, detail="Access denied")
+        if session_id and owner is None:
+            _check_operation_limit(
+                request,
+                kind="conversation-create",
+                identity=username,
+                limit=CONVERSATION_CREATIONS_PER_MINUTE,
+                language=language,
+            )
+    else:
+        # Generic unauthenticated questions remain available, but they must be stateless;
+        # otherwise a bearer-less caller could append to or later claim a guessed session ID.
+        session_id = None
+
     try:
-        logger.info(f"user query: {question} (mode={retrieval_mode}, top_k={context_top_k})")
+        admission = resource_controller.begin(
+            username=username,
+            client_address=request.client.host if request.client else None,
+            reservation=UsageReservation(
+                provider_requests=1,
+                # Character counts intentionally overestimate tokens.  The bounded retrieval
+                # context and retry ceiling prevent in-flight requests from crossing the daily
+                # token budget before provider telemetry can be reconciled.
+                tokens=(
+                    min(len(original_question), MAX_INPUT_CHARS)
+                    + context_top_k * 1_600
+                    + MAX_OUTPUT_TOKENS
+                ) * (LLM_MAX_RETRIES + 1),
+                cost_microusd=PROVIDER_REQUEST_COST_RESERVATION_MICROUSD,
+            ),
+        )
+    except ResourceLimitError as exc:
+        raise _resource_limit_http_exception(exc, language=language) from exc
+
+    try:
+        logger.info("user query received (mode=%s, top_k=%s)", retrieval_mode, context_top_k)
+        content_verdict = content_safety.classify(original_question)
+        if content_verdict.blocked:
+            return _stamp({
+                "response": content_safety.response_for(content_verdict.category, language),
+                "sources": [],
+                "source_chunk_ids": [],
+                "intent": intents.SAFETY_BLOCKED,
+                "safety_category": content_verdict.category,
+                "confidence": _confidence_public("safe_abstention"),
+            })
+        assessment = assess_input(original_question)
+        if not assessment.allowed:
+            message = refusal_message(assessment.category or "prompt_injection", language)
+            return _stamp({
+                "response": message,
+                "sources": [],
+                "source_chunk_ids": [],
+                "intent": "safety_refusal",
+                "refusal_reason": assessment.category,
+                "confidence": _confidence_public("safe_abstention"),
+            })
 
         # Major and curriculum term can be changed conversationally and are persisted
         # immediately, just like the profile screen.
@@ -1465,7 +2024,41 @@ async def ask_question(
         # LLM-only baseline: no retrieval, no student data, no sources, no profile gate.
         # It answers from model knowledge alone so the evaluation can measure what RAG adds.
         if retrieval_mode == "llm_only":
-            answer = answer_without_context(question)
+            # Provider I/O is synchronous internally. Keep it off the event loop; the provider
+            # adapter enforces its own non-extendable wall-clock deadline inside this worker.
+            usage_total_tokens = (len(question) + MAX_OUTPUT_TOKENS) * (LLM_MAX_RETRIES + 1)
+            provider_attempted = True
+            answer, provider_telemetry = await asyncio.to_thread(
+                answer_without_context_with_telemetry, question
+            )
+            if provider_telemetry:
+                if provider_telemetry.get("total_tokens") is not None:
+                    usage_total_tokens = provider_telemetry.get("total_tokens")
+                usage_cost_usd = provider_telemetry.get("cost_usd")
+            raw_answer = str(answer or "")
+            validation = validate_output(raw_answer, [])
+            language_match = _output_language_matches(raw_answer, language)
+            confidence = assess_confidence(
+                ConfidenceSignals(
+                    intent="llm_only",
+                    evidence_required=False,
+                    metadata_compatible=True,
+                    output_schema_valid=bool(raw_answer.strip()),
+                    output_language_match=language_match,
+                    guardrail_passed=validation.safe,
+                    citations_authorized=validation.safe,
+                    provider_response_available=bool(raw_answer.strip()),
+                    fallback_used=bool((provider_telemetry or {}).get("fallback_used")),
+                )
+            )
+            if confidence.answer_allowed:
+                answer = sanitize_student_answer(raw_answer)
+            else:
+                answer = (
+                    refusal_message("unsafe_output", language)
+                    if confidence.status == "safe_abstention"
+                    else _confidence_abstention_message(confidence.status, language)
+                )
             answer, summary = ensure_summary_section(answer, language=language)
             await conversation_memory.append_turn(
                 session_id,
@@ -1481,17 +2074,23 @@ async def ask_question(
                 "source_chunk_ids": [],
                 "intent": "llm_only",
                 "warning": retrieval_modes.LLM_ONLY_WARNING,
+                "security_filtered": not validation.safe,
+                "confidence": _confidence_public(confidence.status),
             })
 
         # Bounded session memory: resolve "this course" style follow-ups (roadmap section 19).
-        working_context = await conversation_memory.get_working_context(session_id)
+        working_context = await conversation_memory.get_working_context(
+            session_id, username=username
+        )
         question = conversation_memory.resolve_reference(question, working_context)
-        prior_turns = await conversation_memory.recent_turns(session_id, limit=3)
+        prior_turns = await conversation_memory.recent_turns(
+            session_id, username=username, limit=3
+        )
 
         detected_intent = get_intent(question)
         resolved_intent = _resolve_intent(question, detected_intent, working_context)
         route = route_query(question, resolved_intent)
-        intent = resolved_intent if resolved_intent == "minor" else route.intent
+        intent = resolved_intent if resolved_intent == intents.MINOR else route.intent
         logger.info(
             "detected intent=%s resolved intent=%s route intent=%s document_types=%s confidence=%.3f",
             detected_intent,
@@ -1513,66 +2112,92 @@ async def ask_question(
             rec = major_advisor.evaluate(question, current_major=program, language=language)
             await conversation_memory.append_turn(
                 session_id, username=username, question=original_question, answer=rec.body,
-                intent="major_secimi",
+                intent=intents.MAJOR_SELECTION,
                 working_context_updates={"major_quiz_pending": False, "recommended_major": rec.best},
             )
             return _stamp({
                 "response": rec.body, "summary": rec.summary,
-                "sources": [], "source_chunk_ids": [], "intent": "major_secimi",
+                "sources": [], "source_chunk_ids": [], "intent": intents.MAJOR_SELECTION,
             })
         if (
-            resolved_intent == "major_secimi"
+            resolved_intent == intents.MAJOR_SELECTION
             and major_advisor.is_major_question(original_question)
             and not wc.get("major_quiz_pending")
         ):
             quiz = major_advisor.build_quiz(language)
             await conversation_memory.append_turn(
                 session_id, username=username, question=original_question, answer=quiz,
-                intent="major_secimi",
+                intent=intents.MAJOR_SELECTION,
                 working_context_updates={"major_quiz_pending": True},
             )
             return _stamp({
-                "response": quiz, "sources": [], "source_chunk_ids": [], "intent": "major_secimi",
+                "response": quiz, "sources": [], "source_chunk_ids": [], "intent": intents.MAJOR_SELECTION,
             })
 
-        graduation_plan_intent = resolved_intent == "graduation_plan"
+        graduation_plan_intent = resolved_intent == intents.GRADUATION_PLAN
         if graduation_plan_intent:
             intent = "graduation_plan"
-        schedule_intent = resolved_intent == "ders_programi"
+        schedule_intent = resolved_intent == intents.WEEKLY_SCHEDULE
         if schedule_intent:
-            intent = "ders_programi"
-        graduation_intent = intent == "mezuniyet_durumu"
-        recommendation_intent = intent == "ders_onerisi"
+            intent = intents.WEEKLY_SCHEDULE
+        graduation_intent = intent == intents.GRADUATION_STATUS
+        recommendation_intent = intent == intents.COURSE_RECOMMENDATION
         if (
             recommendation_intent
             and not _has_interest_area(question)
             and not UNTIL_GRAD_RECOMMENDATION_RE.search(question or "")
         ):
             return _stamp({
-                "response": "Hangi alana ilgilisin? Örn: NLP, Web, Data, Systems, AI, Security.",
+                "response": localized_message("recommendation.ask_interest", language),
                 "sources": [],
                 "source_chunk_ids": [],
                 "intent": intent,
             })
+        if recommendation_intent and not (
+            username and program and profile.get("curriculum_term")
+        ):
+            # A prose-only planner context is not an enforcement layer. Without an authenticated,
+            # complete profile there is no safe completed-course/prerequisite/year basis, so no
+            # model-authored course list may be returned.
+            return _stamp({
+                "response": localized_message("confidence.profile_required", language),
+                "sources": [],
+                "source_chunk_ids": [],
+                "intent": intent,
+                "profile_required": True,
+                "confidence": _confidence_public("profile_required"),
+            })
+        if intent == "review":
+            # Legacy instructor-review/chat-group data is outside the consent and product boundary.
+            # Until the course-only review feature is explicitly released, do not retrieve or
+            # summarize that corpus.
+            return _stamp({
+                "response": localized_message("course_reviews.disabled", language),
+                "sources": [],
+                "source_chunk_ids": [],
+                "intent": "review_disabled",
+            })
 
         # Missing-data / missing-profile safety for authoritative intents (roadmap section 15).
-        gate = check_profile("mezuniyet_durumu" if graduation_plan_intent else intent, profile)
+        gate = check_profile(intents.GRADUATION_STATUS if graduation_plan_intent else intent, profile)
         if not gate.ok:
+            gate_status = "curriculum_unavailable" if gate.data_unavailable else "profile_required"
             return _stamp({
-                "response": gate.message,
+                "response": _confidence_abstention_message(gate_status, language),
                 "sources": [],
                 "source_chunk_ids": [],
                 "intent": intent,
                 "profile_required": bool(gate.missing_fields),
                 "curriculum_unavailable": gate.data_unavailable,
+                "confidence": _confidence_public(gate_status),
             })
 
         # Deterministic, balanced course recommendation. The recommendation must be correct and
         # student-specific, not LLM-invented: the planner reads the student's completed courses +
         # the official requirement file and returns a prerequisite-eligible, difficulty-balanced
         # set (no hallucinated courses, canonical names, choice pools de-duplicated). Only runs
-        # when the profile is complete enough to be authoritative; otherwise the LLM path below
-        # handles it with the planner context.
+        # only when the profile is complete enough to be authoritative. Incomplete profiles have
+        # already abstained at the fail-closed profile gate above and never reach the LLM.
         if recommendation_intent and program and profile.get("curriculum_term") and username:
             completed = await get_completed_course_codes(username)
             interest_key = _extract_interest_key(question)
@@ -1586,7 +2211,30 @@ async def ask_question(
                 target=target_courses,
                 minimum_su_credits=minimum_su,
                 exact_course_count=strict_count,
+                academic_year=profile.get("academic_year"),
             )
+            plan_errors = course_planner.validate_proposed_plan(
+                [{"code": item.code} for item in plan.recommended],
+                completed_codes=completed,
+                stage=plan.stage,
+            )
+            if not plan.has_official_data:
+                return _stamp({
+                    "response": _confidence_abstention_message("curriculum_unavailable", language),
+                    "sources": [],
+                    "source_chunk_ids": [],
+                    "intent": intents.COURSE_RECOMMENDATION,
+                    "confidence": _confidence_public("curriculum_unavailable"),
+                })
+            if plan_errors:
+                logger.error("deterministic recommendation validation failed (%s errors)", len(plan_errors))
+                return _stamp({
+                    "response": _confidence_abstention_message("cannot_verify", language),
+                    "sources": [],
+                    "source_chunk_ids": [],
+                    "intent": intents.COURSE_RECOMMENDATION,
+                    "confidence": _confidence_public("cannot_verify"),
+                })
             body, summary = course_planner.render_plan(
                 plan, language=language, interest_label=_interest_label(question)
             )
@@ -1596,11 +2244,12 @@ async def ask_question(
                 "structured_content": course_planner.plan_structured_content(plan, language=language),
                 "sources": ["Deterministic academic-stage planner"],
                 "source_chunk_ids": [],
-                "intent": "ders_onerisi",
+                "intent": intents.COURSE_RECOMMENDATION,
+                "confidence": _confidence_public("verified"),
             })
             await conversation_memory.append_turn(
                 session_id, username=username, question=original_question, answer=body,
-                intent="ders_onerisi", term_code=profile.get("curriculum_term"),
+                intent=intents.COURSE_RECOMMENDATION, term_code=profile.get("curriculum_term"),
                 working_context_updates={"active_topic": "course_recommendation"},
             )
             return rec_result
@@ -1611,15 +2260,10 @@ async def ask_question(
         if schedule_intent and username:
             if not (program and profile.get("curriculum_term")):
                 return _stamp({
-                    "response": (
-                        "Haftalık ders programı hazırlayabilmem için önce akademik profilini "
-                        "(bölüm + müfredat dönemi) ayarlaman gerekiyor."
-                        if language == "tr" else
-                        "To build your weekly schedule I first need your academic profile "
-                        "(major + curriculum term)."
-                    ),
-                    "sources": [], "source_chunk_ids": [], "intent": "ders_programi",
+                    "response": _confidence_abstention_message("profile_required", language),
+                    "sources": [], "source_chunk_ids": [], "intent": intents.WEEKLY_SCHEDULE,
                     "profile_required": True,
+                    "confidence": _confidence_public("profile_required"),
                 })
             completed = await get_completed_course_codes(username)
             interest_key = _extract_interest_key(question)
@@ -1637,7 +2281,26 @@ async def ask_question(
                 target=max(target_courses, 8),
                 minimum_su_credits=minimum_su,
                 exact_course_count=False,
+                academic_year=profile.get("academic_year"),
             )
+            plan_errors = course_planner.validate_proposed_plan(
+                [{"code": item.code} for item in plan.recommended],
+                completed_codes=completed,
+                stage=plan.stage,
+            )
+            if not plan.has_official_data:
+                return _stamp({
+                    "response": _confidence_abstention_message("curriculum_unavailable", language),
+                    "sources": [], "source_chunk_ids": [], "intent": intents.WEEKLY_SCHEDULE,
+                    "confidence": _confidence_public("curriculum_unavailable"),
+                })
+            if plan_errors:
+                logger.error("deterministic schedule proposal validation failed (%s errors)", len(plan_errors))
+                return _stamp({
+                    "response": _confidence_abstention_message("cannot_verify", language),
+                    "sources": [], "source_chunk_ids": [], "intent": intents.WEEKLY_SCHEDULE,
+                    "confidence": _confidence_public("cannot_verify"),
+                })
             timetable = schedule_planner.build_timetable_for_load(
                 [i.code for i in plan.recommended],
                 target_courses=target_courses,
@@ -1648,6 +2311,13 @@ async def ask_question(
                 timetable,
                 language=language,
             )
+            if schedule_payload.get("conflicts"):
+                logger.error("deterministic timetable conflict validation failed")
+                return _stamp({
+                    "response": _confidence_abstention_message("cannot_verify", language),
+                    "sources": [], "source_chunk_ids": [], "intent": intents.WEEKLY_SCHEDULE,
+                    "confidence": _confidence_public("cannot_verify"),
+                })
             saved_schedule: dict | None = None
             try:
                 # Persist the same canonical object returned to the client. The schedule page can
@@ -1666,14 +2336,15 @@ async def ask_question(
                 ),
                 "sources": ["Sabancı SUIS course schedule (official)"],
                 "source_chunk_ids": [],
-                "intent": "ders_programi",
+                "intent": intents.WEEKLY_SCHEDULE,
+                "confidence": _confidence_public("verified"),
             })
             if saved_schedule:
                 sched_result["schedule_revision"] = saved_schedule["revision"]
                 sched_result["schedule_updated_at"] = saved_schedule["updated_at"]
             await conversation_memory.append_turn(
                 session_id, username=username, question=original_question, answer=body,
-                intent="ders_programi", term_code=profile.get("curriculum_term"),
+                intent=intents.WEEKLY_SCHEDULE, term_code=profile.get("curriculum_term"),
                 working_context_updates={"active_topic": "weekly_schedule"},
             )
             return sched_result
@@ -1682,6 +2353,13 @@ async def ask_question(
         # list the exact still-missing first-year University Courses from code — never inferred
         # from a credit gap, and never sent to the out-of-domain fallback.
         if _is_university_courses_query(original_question) and username:
+            if not (program and profile.get("curriculum_term")):
+                return _stamp({
+                    "response": _confidence_abstention_message("profile_required", language),
+                    "sources": [], "source_chunk_ids": [], "intent": intents.UNIVERSITY_COURSES,
+                    "profile_required": True,
+                    "confidence": _confidence_public("profile_required"),
+                })
             completed = await get_completed_course_codes(username)
             missing = course_planner.missing_university_courses(program, completed)
             if missing:
@@ -1695,11 +2373,12 @@ async def ask_question(
                 "response": body,
                 "sources": ["Deterministic academic-stage planner"],
                 "source_chunk_ids": [],
-                "intent": "universite_dersleri",
+                "intent": intents.UNIVERSITY_COURSES,
+                "confidence": _confidence_public("verified"),
             })
             await conversation_memory.append_turn(
                 session_id, username=username, question=original_question,
-                answer=body, intent="universite_dersleri",
+                answer=body, intent=intents.UNIVERSITY_COURSES,
                 term_code=profile.get("curriculum_term"),
             )
             return uni_result
@@ -1709,11 +2388,37 @@ async def ask_question(
         if (graduation_intent or graduation_plan_intent) and program and profile.get("curriculum_term"):
             completed = await get_completed_course_codes(username) if username else []
             audit_result = degree_audit.audit(program, profile["curriculum_term"], completed)
+            if audit_result.get("reliability") == "unavailable":
+                return _stamp({
+                    "response": _confidence_abstention_message("curriculum_unavailable", language),
+                    "sources": [], "source_chunk_ids": [], "intent": intent,
+                    "confidence": _confidence_public("curriculum_unavailable"),
+                })
             if graduation_plan_intent:
                 # "What should I take next?" -> the balanced, prerequisite-eligible plan computed
                 # by the planner, NOT the raw missing-required list (which contains unreachable
                 # 3XX/4XX courses a lower-year student cannot take yet).
-                plan = course_planner.build_plan(program, profile["curriculum_term"], completed)
+                plan = course_planner.build_plan(
+                    program,
+                    profile["curriculum_term"],
+                    completed,
+                    academic_year=profile.get("academic_year"),
+                )
+                plan_errors = course_planner.validate_proposed_plan(
+                    [{"code": item.code} for item in plan.recommended],
+                    completed_codes=completed,
+                    stage=plan.stage,
+                )
+                if not plan.has_official_data or plan_errors:
+                    logger.error(
+                        "deterministic graduation plan validation failed (%s errors)",
+                        len(plan_errors),
+                    )
+                    return _stamp({
+                        "response": _confidence_abstention_message("cannot_verify", language),
+                        "sources": [], "source_chunk_ids": [], "intent": intent,
+                        "confidence": _confidence_public("cannot_verify"),
+                    })
                 rendered_answer, summary = course_planner.render_plan(plan, language=language)
                 structured = course_planner.plan_structured_content(plan, language=language)
                 plan_sources = ["Deterministic academic-stage planner"]
@@ -1728,6 +2433,7 @@ async def ask_question(
                 "sources": plan_sources,
                 "source_chunk_ids": [],
                 "intent": intent,
+                "confidence": _confidence_public("verified"),
             })
             await conversation_memory.append_turn(
                 session_id,
@@ -1775,14 +2481,32 @@ async def ask_question(
             metadata_filter=active_filter,
             hybrid_search=_hybrid_search,
         )
-        if intent == "diger" and not outcome.documents:
+        if intent == intents.OTHER and not outcome.documents:
             return _stamp({
-                "response": NON_ACADEMIC_FALLBACK,
+                "response": localized_message("fallback.non_academic", language),
                 "sources": [],
                 "source_chunk_ids": [],
                 "intent": intent,
             })
+        if not outcome.documents:
+            return _stamp({
+                "response": localized_message("confidence.insufficient_evidence", language),
+                "sources": [],
+                "source_chunk_ids": [],
+                "intent": intent,
+                "confidence": _confidence_public("cannot_verify"),
+            })
         context_docs = _format_for_context(outcome.documents)
+        safe_evidence_docs = list(context_docs)
+        if not safe_evidence_docs:
+            return _stamp({
+                "response": localized_message("confidence.insufficient_evidence", language),
+                "sources": [],
+                "source_chunk_ids": [],
+                "intent": intent,
+                "confidence": _confidence_public("cannot_verify"),
+                "security_filtered": True,
+            })
 
         # Deterministic degree audit: compute the numbers in code, inject as authoritative context.
         audit_result: dict | None = None
@@ -1805,7 +2529,10 @@ async def ask_question(
             context_docs.insert(
                 0,
                 Document(
-                    page_content=f"[Source: MongoDB student profile]\n{user_context}",
+                    page_content=(
+                        "[Source: MongoDB student profile]\n"
+                        + retrieval_boundary(user_context, "student-profile")
+                    ),
                     metadata={
                         "source": "MongoDB student profile",
                         "document_type": "user_course_history",
@@ -1820,7 +2547,12 @@ async def ask_question(
             interest_key = _extract_interest_key(effective_question)
             interest_codes = list(INTEREST_COURSE_HINTS.get(interest_key or "", []))
             planner_doc = Document(
-                page_content=course_planner.build_context(program, taken_codes, interest_codes),
+                page_content=course_planner.build_context(
+                    program,
+                    taken_codes,
+                    interest_codes,
+                    academic_year=profile.get("academic_year"),
+                ),
                 metadata={
                     "source": "Academic-stage planner",
                     "document_type": "academic_stage_plan",
@@ -1838,21 +2570,101 @@ async def ask_question(
         retriever = StaticRetriever(documents=context_docs)
         # Answer in the language the student wrote in. Decided here rather than left to a rule
         # inside the (Turkish) system prompt, which the model was not reliably honouring.
-        chain = get_llm_chain(
+        chain = await asyncio.to_thread(
+            get_llm_chain,
             retriever,
-            intent=intent,
-            language=language,
-            prompt_strategy=prompt_strategy,
+            intent,
+            language,
+            prompt_strategy,
         )
         llm_question = _recommendation_question_for_llm(effective_question, taken_codes) if recommendation_intent else question
-        result = query_chain(chain, llm_question)
-        if recommendation_intent:
-            result = _clean_recommendation_response(result)
-        cleaned_answer = sanitize_student_answer(result.get("response", ""))
-        rendered_answer, summary = ensure_summary_section(
-            cleaned_answer,
-            language=language,
+        # If the provider fails before returning usage, reserve a conservative worst-case token
+        # charge so retry/error traffic cannot bypass the daily quota. Successful calls replace
+        # this with provider-reported usage below.
+        estimated_prompt_tokens_upper_bound = len(llm_question) + sum(
+            len(document.page_content) for document in context_docs
         )
+        usage_total_tokens = (
+            estimated_prompt_tokens_upper_bound + MAX_OUTPUT_TOKENS
+        ) * (LLM_MAX_RETRIES + 1)
+        provider_attempted = True
+        result = await asyncio.to_thread(query_chain, chain, llm_question)
+        provider_telemetry = result.pop("_provider_telemetry", None)
+        if provider_telemetry:
+            if provider_telemetry.get("total_tokens") is not None:
+                usage_total_tokens = provider_telemetry.get("total_tokens")
+            usage_cost_usd = provider_telemetry.get("cost_usd")
+            logger.info(
+                "llm call provider=%s model=%s effective_provider=%s effective_model=%s "
+                "fallback=%s latency_ms=%s total_tokens=%s cost_usd=%s",
+                provider_telemetry.get("requested_provider"),
+                provider_telemetry.get("requested_model"),
+                provider_telemetry.get("effective_provider"),
+                provider_telemetry.get("effective_model"),
+                provider_telemetry.get("fallback_used"),
+                provider_telemetry.get("latency_ms"),
+                provider_telemetry.get("total_tokens"),
+                provider_telemetry.get("cost_usd"),
+            )
+        # Validate the untouched provider output before any formatter can remove a leaked marker.
+        # The allow-list is derived from the server-owned context, never from model text.
+        raw_answer = str(result.get("response") or "")
+        authorized_sources = [
+            label for label in (_document_source_label(doc) for doc in context_docs) if label
+        ]
+        output_validation = validate_output(raw_answer, authorized_sources)
+        returned_sources_authorized = _source_list_is_authorized(
+            list(result.get("sources") or []),
+            authorized_sources,
+        )
+        guardrail_passed = output_validation.safe and returned_sources_authorized
+        evidence_sources = {
+            str(doc.metadata.get("source") or doc.metadata.get("documentType") or "").strip()
+            for doc in safe_evidence_docs
+            if str(doc.metadata.get("source") or doc.metadata.get("documentType") or "").strip()
+        }
+        retrieval_scores = [
+            float(doc.metadata["_score"])
+            for doc in safe_evidence_docs
+            if isinstance(doc.metadata.get("_score"), (int, float))
+        ]
+        confidence = assess_confidence(
+            ConfidenceSignals(
+                intent=intent,
+                retrieval_score=max(retrieval_scores) if retrieval_scores else None,
+                evidence_count=len(safe_evidence_docs),
+                independent_source_count=len(evidence_sources),
+                metadata_compatible=True,
+                evidence_required=True,
+                citations_required=True,
+                citations_present=bool(result.get("sources") or result.get("source_chunk_ids")),
+                citations_authorized=output_validation.safe and returned_sources_authorized,
+                claim_coverage_checked=False,
+                output_schema_valid=bool(raw_answer.strip()),
+                output_language_match=_output_language_matches(raw_answer, language),
+                guardrail_passed=guardrail_passed,
+                provider_response_available=bool(raw_answer.strip()),
+                fallback_used=bool((provider_telemetry or {}).get("fallback_used")),
+            )
+        )
+        if confidence.answer_allowed:
+            if recommendation_intent:
+                result = _clean_recommendation_response(result)
+                raw_answer = str(result.get("response") or "")
+            cleaned_answer = sanitize_student_answer(raw_answer)
+            rendered_answer, summary = ensure_summary_section(cleaned_answer, language=language)
+        else:
+            safe_message = (
+                refusal_message("unsafe_output", language)
+                if confidence.status == "safe_abstention"
+                else _confidence_abstention_message(confidence.status, language)
+            )
+            rendered_answer, summary = ensure_summary_section(safe_message, language=language)
+            result["sources"] = []
+            result["source_chunk_ids"] = []
+        result["security_filtered"] = not guardrail_passed
+        # Expose only the stable user-safe state, never formula inputs, score, or reason codes.
+        result["confidence"] = _confidence_public(confidence.status)
         result["response"] = rendered_answer
         result["summary"] = summary
         result["structured_content"] = merge_structured_content(
@@ -1878,7 +2690,7 @@ async def ask_question(
         result = _stamp(result)
         result["reranked"] = outcome.reranked
         result["num_retrieved_chunks"] = outcome.candidate_count
-        result["num_final_context_chunks"] = len(outcome.documents)
+        result["num_final_context_chunks"] = len(safe_evidence_docs)
 
         # Update bounded session memory (best-effort).
         await conversation_memory.append_turn(
@@ -1897,31 +2709,37 @@ async def ask_question(
         return result
 
     except Exception as e:
-        logger.exception("Error processing question")
-        # Never surface the raw provider payload: it carries the organisation id and quota
-        # internals, and reads as a crash to the student. The full error is in the server log.
+        # Exception messages may contain provider response bodies.  Record only the class and
+        # return a localized safe error; raw payloads and authorization details are never logged.
+        logger.error("question processing failed (error_class=%s)", type(e).__name__)
         detail = str(e)
         if "rate_limit" in detail or "429" in detail:
-            message = (
-                "The language model is temporarily rate limited, so I can't answer right now. "
-                "Please try again in a few minutes — your profile and course history are unaffected."
-            )
+            message = localized_message("errors.rate_limited", language)
         else:
-            message = (
-                "Something went wrong while answering that. Please try again; if it keeps "
-                "happening, check the backend logs."
-            )
+            message = localized_message("errors.internal", language)
         return _stamp({
             "response": message,
             "sources": [],
             "source_chunk_ids": [],
             "intent": "error",
             "error": True,
+            "confidence": _confidence_public(
+                "provider_unavailable" if provider_attempted else "cannot_verify"
+            ),
         })
+    finally:
+        resource_controller.finish(
+            username=username,
+            total_tokens=usage_total_tokens,
+            cost_usd=usage_cost_usd,
+            admission=admission,
+            provider_requests=1 if provider_attempted else 0,
+        )
 
 
 @app.post("/ask/stream")
 async def ask_question_stream(
+    request: Request,
     question: str = Form(...),
     username: str | None = Form(None),
     session_id: str | None = Form(None),
@@ -1931,7 +2749,15 @@ async def ask_question_stream(
     expert_mode: str | None = Form(None),
 ):
     """NDJSON response that renders progressively while retaining the stable /ask contract."""
+    _check_operation_limit(
+        request,
+        kind="stream",
+        identity=username,
+        limit=STREAM_REQUESTS_PER_MINUTE,
+        language=detect_language(question),
+    )
     payload = await ask_question(
+        request=request,
         question=question,
         username=username,
         session_id=session_id,
@@ -1947,8 +2773,12 @@ async def ask_question_stream(
     metadata = {key: value for key, value in payload.items() if key != "response"}
 
     async def events():
+        deadline = time.monotonic() + REQUEST_TIMEOUT_SECONDS
         yield json.dumps({"type": "metadata", "data": metadata}, ensure_ascii=False) + "\n"
         for chunk in re.findall(r"\S+\s*", response_text):
+            if time.monotonic() >= deadline:
+                yield json.dumps({"type": "error", "code": "stream_deadline"}) + "\n"
+                return
             yield json.dumps({"type": "token", "text": chunk}, ensure_ascii=False) + "\n"
             await asyncio.sleep(0.012)
         yield json.dumps({"type": "done"}, ensure_ascii=False) + "\n"
@@ -1961,43 +2791,59 @@ async def ask_question_stream(
 
 
 @app.get("/users/{username}/conversations")
-async def list_conversations(username: str, limit: int = 50):
+async def list_conversations(username: str, request: Request, limit: int = 50):
     """Chat history for the sidebar: newest first, titles only."""
+    _authorize_user(request, username)
     return {"conversations": await conversation_memory.list_conversations(username, limit)}
 
 
 @app.get("/conversations/{session_id}")
-async def get_conversation(session_id: str):
-    conversation = await conversation_memory.get_conversation(session_id)
+async def get_conversation(session_id: str, request: Request):
+    principal = await _authorize_conversation(request, session_id)
+    owner_filter = None if principal.role == "admin" else principal.username
+    conversation = await conversation_memory.get_conversation(
+        session_id, username=owner_filter
+    )
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return conversation
 
 
 @app.patch("/conversations/{session_id}")
-async def update_conversation(session_id: str, payload: ConversationUpdatePayload):
+async def update_conversation(session_id: str, payload: ConversationUpdatePayload, request: Request):
+    principal = await _authorize_conversation(request, session_id)
+    owner_filter = None if principal.role == "admin" else principal.username
     conversation = None
     if payload.title is not None:
-        conversation = await conversation_memory.rename_conversation(session_id, payload.title)
+        conversation = await conversation_memory.rename_conversation(
+            session_id, payload.title, username=owner_filter
+        )
         if not conversation:
             raise HTTPException(status_code=404, detail="Conversation not found")
     if payload.pinned is not None:
         conversation = await conversation_memory.set_conversation_pinned(
             session_id,
             payload.pinned,
+            username=owner_filter,
         )
         if not conversation:
             raise HTTPException(status_code=404, detail="Conversation not found")
     if conversation is None:
-        conversation = await conversation_memory.get_conversation(session_id)
+        conversation = await conversation_memory.get_conversation(
+            session_id, username=owner_filter
+        )
         if not conversation:
             raise HTTPException(status_code=404, detail="Conversation not found")
     return conversation
 
 
 @app.delete("/conversations/{session_id}")
-async def delete_conversation(session_id: str):
-    deleted = await conversation_memory.delete_conversation(session_id)
+async def delete_conversation(session_id: str, request: Request):
+    principal = await _authorize_conversation(request, session_id)
+    owner_filter = None if principal.role == "admin" else principal.username
+    deleted = await conversation_memory.delete_conversation(
+        session_id, username=owner_filter
+    )
     if not deleted:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return {"deleted": True}

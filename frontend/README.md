@@ -82,3 +82,10 @@ frontend/
 ├── tsconfig.json
 └── vite.config.ts
 ```
+
+## Design acknowledgement
+
+The weekly schedule builder is an original AdviSU implementation inspired by
+[aburakayaz/SUchedule](https://github.com/aburakayaz/suchedule), an MIT-licensed schedule-building
+interface created for Sabancı University students. The acknowledgement is also shown as a visible
+link in the schedule page header.

@@ -13,7 +13,7 @@ Kept free of MongoDB imports so it can be unit-tested in isolation.
 
 from dataclasses import dataclass, field
 
-from modules import curriculum_registry
+from modules import curriculum_registry, intents
 
 
 @dataclass(frozen=True)
@@ -27,21 +27,21 @@ class RetrievalPolicy:
 
 
 _POLICIES: dict[str, RetrievalPolicy] = {
-    "mezuniyet_durumu": RetrievalPolicy(
-        "mezuniyet_durumu", ("curriculum_requirement",),
+    intents.GRADUATION_STATUS: RetrievalPolicy(
+        intents.GRADUATION_STATUS, ("curriculum_requirement",),
         required_profile_fields=("major", "curriculum_term"),
         scope_program=True, scope_curriculum_term=True, authoritative=True,
     ),
-    "ders_onerisi": RetrievalPolicy(
-        "ders_onerisi", ("curriculum_requirement",),
+    intents.COURSE_RECOMMENDATION: RetrievalPolicy(
+        intents.COURSE_RECOMMENDATION, ("curriculum_requirement",),
         required_profile_fields=("major", "curriculum_term"),
         scope_program=True, scope_curriculum_term=True,
     ),
-    "ders_ayrintisi": RetrievalPolicy("ders_ayrintisi", ("curriculum_requirement",)),
-    "calisma_plani": RetrievalPolicy("calisma_plani", ("curriculum_requirement",)),
-    "major_secimi": RetrievalPolicy("major_secimi", ("curriculum_requirement",)),
-    "alanda_ozellesme": RetrievalPolicy("alanda_ozellesme", ("curriculum_requirement",)),
-    "minor": RetrievalPolicy("minor", ("minor_requirement",)),
+    intents.COURSE_DETAIL: RetrievalPolicy(intents.COURSE_DETAIL, ("curriculum_requirement",)),
+    intents.STUDY_PLAN: RetrievalPolicy(intents.STUDY_PLAN, ("curriculum_requirement",)),
+    intents.MAJOR_SELECTION: RetrievalPolicy(intents.MAJOR_SELECTION, ("curriculum_requirement",)),
+    intents.SPECIALIZATION: RetrievalPolicy(intents.SPECIALIZATION, ("curriculum_requirement",)),
+    intents.MINOR: RetrievalPolicy(intents.MINOR, ("minor_requirement",)),
 }
 
 

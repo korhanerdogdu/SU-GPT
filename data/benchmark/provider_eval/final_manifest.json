@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "dataset_id": "advisu-provider-eval-final-v1-not-provisioned",
+  "dataset_role": "final_untouched",
+  "status": "not_provisioned",
+  "untouched": false,
+  "created_from_commit": "5a6949c1e2e5b0603d8c1c88820f590099000f34",
+  "dataset_path": null,
+  "content_sha256": null,
+  "materialized_inputs_sha256": null,
+  "frozen_contexts_sha256": null,
+  "run_ledger_path": "../../../outputs/provider_evaluation/final-v1-run-ledger.json",
+  "independent_scorer_id": null,
+  "owner_thresholds": {
+    "latency_p95_limit_ms": null,
+    "cost_per_query_limit_usd": null,
+    "api_error_rate_noninferiority_margin": null
+  },
+  "external_gate_artifacts": {},
+  "materialization_configuration": {
+    "protocol_id": "advisu-openrouter-deepseek-v4-pro-prereg-v2",
+    "registered_base_commit": "5a6949c1e2e5b0603d8c1c88820f590099000f34",
+    "run_ordinal": 1,
+    "retrieval_mode": "hybrid_meta",
+    "retrieval_first_stage_depth": 200,
+    "retrieval_provider_context_cutoff": 20,
+    "final_context_top_k": 6,
+    "ranker_id": "bm25f_e5_small_rrf_k60_metadata_boost",
+    "reranker_id": null,
+    "contexts_frozen_before_provider_calls": true,
+    "prompt_strategy": "structured_lookup",
+    "application_prompt_template_sha256": "29bae5340a76c1291005477132a55053d177a27ee8f58a462a7fbbc29d7028c3",
+    "strategy_directive_sha256": "15a27de0228dc32279acde9e6731d5ceb16a7aa54a4efdf0f28de47323ce9cef",
+    "language_directive_sha256": {
+      "tr": "68f7a37eda460c9958b44ed348b5445fc6f6baf411ddb595508729be5acdb404",
+      "en": "d21b1a7294aa05d34288fcd7d4d0d1807988997c66a5832b8c7c9e41b51df44c"
+    },
+    "reasoning_enabled": false,
+    "temperature": 0.0,
+    "maximum_output_tokens": 1024,
+    "request_timeout_seconds": 60,
+    "maximum_retries": 2,
+    "fallback_provider": null
+  },
+  "cluster_id_policy": "The sealed final set must assign a common cluster_id to related paraphrases, shared-source items, and variants of one profile/scenario; otherwise cluster_id defaults to item_id.",
+  "required_minimums": {
+    "tr": 100,
+    "en": 100,
+    "total": 200
+  },
+  "required_category_minimums_per_language": {
+    "quality": 60,
+    "safety": 15,
+    "adversarial": 15,
+    "planner": 10
+  },
+  "required_categories": [
+    "quality",
+    "safety",
+    "adversarial",
+    "planner"
+  ],
+  "default_switch_verdict": "BLOCKED",
+  "blockers": [
+    "No independently authored final JSONL has been provisioned or sealed.",
+    "The repository does not currently contain at least 100 untouched Turkish and 100 untouched English provider-evaluation items.",
+    "Safety, adversarial, and planner veto strata have not been independently authored and frozen.",
+    "Product-owner p95 latency, per-query cost, and API error non-inferiority thresholds are unresolved.",
+    "The code-bound independent scorer and repository-hashed external gate artifacts are not provisioned."
+  ],
+  "prohibition": "Do not copy or paraphrase development/test items after seeing provider outputs and label them as final."
+}
