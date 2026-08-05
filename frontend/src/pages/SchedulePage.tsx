@@ -19,7 +19,9 @@ import {
 import { toast } from "sonner";
 import LanguageToggle from "@/components/LanguageToggle";
 import ThemeToggle from "@/components/ThemeToggle";
+import HelpButton from "@/components/HelpButton";
 import { Button } from "@/components/ui/button";
+import ConfirmDialog from "@/components/ui/confirm-dialog";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLocale } from "@/contexts/LocaleContext";
 import { localizedWeekDays } from "@/localization/resources";
@@ -55,13 +57,17 @@ const GRID_START = 8 * 60 + 40;
 const GRID_END = 19 * 60 + 40;
 const GRID_DURATION = GRID_END - GRID_START;
 
+// Note: index.html pins `class="dark"` permanently (the app's actual light/dark switch is the
+// `data-theme` attribute + CSS custom properties, not Tailwind's class strategy), so a `dark:`
+// variant here would always win regardless of the resolved theme. Each entry is a single value
+// that reads well on both a light and a dark grid — no dark: pair to keep.
 const COURSE_COLOURS = [
-  "border-sky-700 bg-sky-600 text-white dark:border-sky-500 dark:bg-sky-700",
-  "border-indigo-700 bg-indigo-600 text-white dark:border-indigo-500 dark:bg-indigo-700",
-  "border-teal-700 bg-teal-600 text-white dark:border-teal-500 dark:bg-teal-700",
-  "border-violet-700 bg-violet-600 text-white dark:border-violet-500 dark:bg-violet-700",
-  "border-fuchsia-700 bg-fuchsia-600 text-white dark:border-fuchsia-500 dark:bg-fuchsia-700",
-  "border-amber-600 bg-amber-400 text-slate-950 dark:border-amber-400 dark:bg-amber-500",
+  "border-sky-500 bg-sky-700 text-white",
+  "border-indigo-500 bg-indigo-700 text-white",
+  "border-teal-500 bg-teal-700 text-white",
+  "border-violet-500 bg-violet-700 text-white",
+  "border-fuchsia-500 bg-fuchsia-700 text-white",
+  "border-amber-400 bg-amber-500 text-slate-950",
 ] as const;
 
 type SyncState = "idle" | "saving" | "saved" | "offline";
@@ -179,6 +185,7 @@ export default function SchedulePage() {
   const [focusedCourse, setFocusedCourse] = useState<string | null>(null);
   const [dayFilters, setDayFilters] = useState<ScheduleDay[]>([]);
   const [copied, setCopied] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
   const hydrated = useRef(false);
   const focusRequest = useRef(0);
   const courseRefs = useRef(new Map<string, HTMLLIElement>());
@@ -400,8 +407,7 @@ export default function SchedulePage() {
   }
 
   function clearSchedule() {
-    if (!window.confirm(t("schedule.clearConfirm"))) return;
-    replaceItems([], t("schedule.cleared"));
+    setConfirmClear(true);
   }
 
   function updateQuery(value: string) {
@@ -446,6 +452,7 @@ export default function SchedulePage() {
               <RotateCcw className="mr-1.5 h-3.5 w-3.5" /> {t("common.clear")}
             </Button>
           </div>
+          <HelpButton />
           <LanguageToggle />
           <ThemeToggle />
         </div>
@@ -489,7 +496,7 @@ export default function SchedulePage() {
                       type="button"
                       aria-pressed={active}
                       onClick={() => setDayFilters((current) => active ? current.filter((code) => code !== day.code) : [...current, day.code])}
-                      className={`rounded-lg px-2 py-1 text-[10px] font-bold transition ${active ? "bg-primary text-primary-foreground shadow-sm" : "border border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground"}`}
+                      className={`rounded-lg px-2.5 py-1.5 text-[11px] font-bold transition ${active ? "bg-primary text-primary-foreground shadow-sm" : "border border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground"}`}
                     >
                       {day.short.toLocaleUpperCase(locale === "tr" ? "tr-TR" : "en-US")}
                     </button>
@@ -531,7 +538,7 @@ export default function SchedulePage() {
                             <span className="block text-sm font-extrabold text-foreground">{group.courseId}</span>
                             <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">{group.title}</span>
                           </span>
-                          {selectedCount > 0 && <span className="rounded-full bg-emerald-500/12 px-2 py-0.5 text-[10px] font-bold text-emerald-700 dark:text-emerald-300">{t("schedule.selected", { count: selectedCount })}</span>}
+                          {selectedCount > 0 && <span className="rounded-full bg-success/15 px-2 py-0.5 text-[11px] font-bold text-success">{t("schedule.selected", { count: selectedCount })}</span>}
                           {open ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
                         </button>
                         {open && (
@@ -597,7 +604,7 @@ export default function SchedulePage() {
                   {tbaItems.map((item) => (
                     <span key={item.id} className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-border bg-card py-1 pl-2 pr-1 text-[11px] font-semibold">
                       <button type="button" onClick={() => void focusCourse(item)} className="hover:text-primary">{item.courseCode} · {item.section || item.component}</button>
-                      <button type="button" onClick={() => removeBundle(item)} aria-label={t("schedule.removeBundle", { course: item.courseCode })} className="grid h-5 w-5 place-items-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"><X className="h-3 w-3" /></button>
+                      <button type="button" onClick={() => removeBundle(item)} aria-label={t("schedule.removeBundle", { course: item.courseCode })} className="grid h-6 w-6 place-items-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"><X className="h-3.5 w-3.5" /></button>
                     </span>
                   ))}
                 </div>
@@ -611,6 +618,19 @@ export default function SchedulePage() {
           </section>
         </div>
       </main>
+
+      <ConfirmDialog
+        open={confirmClear}
+        title={t("schedule.clearConfirmTitle")}
+        description={t("schedule.clearConfirm")}
+        confirmLabel={t("common.clear")}
+        destructive
+        onConfirm={() => {
+          replaceItems([], t("schedule.cleared"));
+          setConfirmClear(false);
+        }}
+        onCancel={() => setConfirmClear(false)}
+      />
     </div>
   );
 }
@@ -641,7 +661,7 @@ function ConflictStat({ conflicts }: { conflicts: ScheduleConflict[] }) {
   const first = conflicts[0];
   const day = weekDays.find((candidate) => candidate.code === first.day)?.label ?? first.day;
   return (
-    <span title={`${day} ${first.start}-${first.end}`} className="inline-flex items-center gap-1 rounded-lg border border-rose-400/60 bg-rose-500/10 px-2 py-1 text-[10px] font-bold text-rose-700 dark:text-rose-300">
+    <span title={`${day} ${first.start}-${first.end}`} className="inline-flex items-center gap-1 rounded-lg border border-destructive/50 bg-destructive/10 px-2 py-1 text-[11px] font-bold text-destructive">
       <AlertTriangle className="h-3 w-3" /> {t("schedule.conflicts", { count: conflicts.length })}
     </span>
   );
@@ -723,7 +743,7 @@ function DesktopWeekGrid({
                         onRemove(event.item);
                       }}
                       aria-label={t("schedule.removeBundle", { course: event.item.courseCode })}
-                      className="absolute right-1 top-1 grid h-6 w-6 place-items-center rounded-md bg-black/15 text-white/90 backdrop-blur-sm transition hover:bg-white hover:text-slate-950 focus-visible:bg-white focus-visible:text-slate-950"
+                      className="absolute right-1 top-1 grid h-7 w-7 place-items-center rounded-md bg-black/15 text-white/90 backdrop-blur-sm transition hover:bg-white hover:text-slate-950 focus-visible:bg-white focus-visible:text-slate-950"
                     >
                       <X className="h-3.5 w-3.5" />
                     </button>

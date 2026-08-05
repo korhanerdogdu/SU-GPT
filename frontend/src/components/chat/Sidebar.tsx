@@ -1,4 +1,4 @@
-import { useEffect, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { Link } from "react-router-dom";
 import {
   BookOpen,
@@ -19,6 +19,7 @@ import { useTheme } from "@/contexts/ThemeContext";
 import type { ConversationSummary } from "@/lib/api";
 import { useLocale } from "@/contexts/LocaleContext";
 import { translate, type Locale } from "@/localization/resources";
+import ConfirmDialog from "@/components/ui/confirm-dialog";
 
 interface SidebarProps {
   conversations: ConversationSummary[];
@@ -61,6 +62,7 @@ export default function Sidebar({
   const { locale, t } = useLocale();
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [pendingDelete, setPendingDelete] = useState<ConversationSummary | null>(null);
 
   // Drag-resizable width (persisted). Collapse is a separate control; this only tunes the
   // expanded width between sensible bounds.
@@ -91,6 +93,16 @@ export default function Sidebar({
     document.body.style.cursor = "col-resize";
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup", onUp);
+  }
+
+  // Keyboard-operable alternative to the mouse drag above, so resizing does not require a
+  // dragging gesture (WCAG 2.5.7). Arrow keys nudge by 16px; Home/End jump to the bounds.
+  function onResizeKeyDown(e: ReactKeyboardEvent) {
+    const STEP = 16;
+    if (e.key === "ArrowLeft") { e.preventDefault(); setWidth((w) => Math.max(MIN_W, w - STEP)); }
+    else if (e.key === "ArrowRight") { e.preventDefault(); setWidth((w) => Math.min(MAX_W, w + STEP)); }
+    else if (e.key === "Home") { e.preventDefault(); setWidth(MIN_W); }
+    else if (e.key === "End") { e.preventDefault(); setWidth(MAX_W); }
   }
 
   function beginRename(item: ConversationSummary) {
@@ -233,12 +245,14 @@ export default function Sidebar({
                           {relativeTime(item.updated_at, locale)}
                         </span>
                       </button>
-                      <div className="flex pt-1.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                      {/* Always at reduced opacity on touch widths (no hover state to reveal
+                          them there); the hover-only reveal is desktop-only polish. */}
+                      <div className="flex pt-1 opacity-60 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 md:opacity-0">
                         <button
                           type="button"
                           onClick={() => onPinChat(item.session_id, !item.pinned)}
                           aria-label={item.pinned ? t("sidebar.unpin") : t("sidebar.pin")}
-                          className="rounded p-1 text-muted-foreground hover:bg-background hover:text-foreground"
+                          className="grid h-7 w-7 place-items-center rounded text-muted-foreground hover:bg-background hover:text-foreground"
                         >
                           {item.pinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
                         </button>
@@ -246,15 +260,15 @@ export default function Sidebar({
                           type="button"
                           onClick={() => beginRename(item)}
                           aria-label={t("sidebar.rename")}
-                          className="rounded p-1 text-muted-foreground hover:bg-background hover:text-foreground"
+                          className="grid h-7 w-7 place-items-center rounded text-muted-foreground hover:bg-background hover:text-foreground"
                         >
                           <Pencil className="h-3.5 w-3.5" />
                         </button>
                         <button
                           type="button"
-                          onClick={() => onDeleteChat(item.session_id)}
+                          onClick={() => setPendingDelete(item)}
                           aria-label={t("sidebar.delete")}
-                          className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                          className="grid h-7 w-7 place-items-center rounded text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>
@@ -295,18 +309,38 @@ export default function Sidebar({
           </div>
         </div>
 
-        {/* Drag handle: resize the sidebar width (desktop only). */}
+        {/* Resize handle: drag with the mouse, or focus it and use the arrow/Home/End keys
+            (WCAG 2.5.7 — dragging must have a non-drag alternative). The clickable zone is a
+            full 24px even though the visible line stays hairline-thin (WCAG 2.5.8). */}
         <div
           onMouseDown={startResize}
+          onKeyDown={onResizeKeyDown}
+          tabIndex={0}
           role="separator"
           aria-orientation="vertical"
           aria-label={t("sidebar.resize")}
+          aria-valuenow={width}
+          aria-valuemin={MIN_W}
+          aria-valuemax={MAX_W}
           title={t("sidebar.resizeTitle")}
-          className="group absolute inset-y-0 -right-1 z-10 hidden w-2 cursor-col-resize md:block"
+          className="group absolute inset-y-0 -right-3 z-10 hidden w-6 cursor-col-resize items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card md:flex"
         >
-          <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent transition-colors group-hover:bg-primary/50" />
+          <div className="h-full w-px bg-transparent transition-colors group-hover:bg-primary/50 group-focus-visible:bg-primary" />
         </div>
       </aside>
+
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title={t("sidebar.deleteConfirmTitle")}
+        description={translate(locale, "sidebar.deleteConfirmBody", { title: pendingDelete?.title ?? "" })}
+        confirmLabel={t("sidebar.delete")}
+        destructive
+        onConfirm={() => {
+          if (pendingDelete) onDeleteChat(pendingDelete.session_id);
+          setPendingDelete(null);
+        }}
+        onCancel={() => setPendingDelete(null)}
+      />
     </>
   );
 }

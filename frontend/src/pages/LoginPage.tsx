@@ -10,6 +10,7 @@ import { useLocale } from "@/contexts/LocaleContext";
 import { useTheme } from "@/contexts/ThemeContext";
 import ThemeToggle from "@/components/ThemeToggle";
 import LanguageToggle from "@/components/LanguageToggle";
+import HelpButton from "@/components/HelpButton";
 import { sampleQuestions } from "@/lib/sample-questions";
 
 /**
@@ -265,6 +266,7 @@ export default function LoginPage() {
       {/* ── Right: the form. Quiet, so the one action is obvious. */}
       <section className="relative flex w-full flex-col justify-center border-t border-border bg-card px-6 py-12 sm:px-12 lg:w-[28rem] lg:shrink-0 lg:overflow-y-auto lg:border-l lg:border-t-0 lg:py-8 xl:w-[32rem] xl:px-14">
         <div className="absolute right-5 top-5 flex items-center gap-2">
+          <HelpButton />
           <LanguageToggle />
           <ThemeToggle />
         </div>
@@ -291,7 +293,7 @@ export default function LoginPage() {
                 placeholder="student"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                className="h-11 rounded-xl border-border bg-background px-4 focus-visible:border-sabanci-gold focus-visible:ring-1 focus-visible:ring-sabanci-gold focus-visible:ring-offset-0"
+                className="h-11 rounded-xl border-border bg-background px-4 focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0"
               />
             </div>
 
@@ -310,13 +312,13 @@ export default function LoginPage() {
                   placeholder={t("login.passwordHint")}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="h-11 rounded-xl border-border bg-background px-4 pr-11 focus-visible:border-sabanci-gold focus-visible:ring-1 focus-visible:ring-sabanci-gold focus-visible:ring-offset-0"
+                  className="h-11 rounded-xl border-border bg-background px-4 pr-11 focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword((s) => !s)}
                   aria-label={showPassword ? t("login.hidePassword") : t("login.showPassword")}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 rounded-md p-1 text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sabanci-gold"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 rounded-md p-1.5 text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
@@ -331,7 +333,7 @@ export default function LoginPage() {
                 backgroundImage:
                   "linear-gradient(100deg, hsl(var(--primary)) 0%, hsl(var(--primary)) 42%, #B98A3C 88%, #D6A13A 100%)",
               }}
-              className="group h-11 w-full rounded-xl text-[0.95rem] font-semibold text-primary-foreground shadow-md transition-all hover:brightness-110 focus-visible:ring-2 focus-visible:ring-sabanci-gold focus-visible:ring-offset-2 focus-visible:ring-offset-card disabled:opacity-60"
+              className="group h-11 w-full rounded-xl text-[0.95rem] font-semibold text-primary-foreground shadow-md transition-all hover:brightness-110 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card disabled:opacity-60"
               disabled={submitting}
             >
               {submitting ? t("login.submitting") : t("login.submit")}

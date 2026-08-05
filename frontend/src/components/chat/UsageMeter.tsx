@@ -19,7 +19,7 @@ export default function UsageMeter({ usage }: { usage: UsageStatus | null }) {
     remaining === 0
       ? "border-destructive/40 bg-destructive/10 text-destructive"
       : ratio <= 0.25
-        ? "border-amber-500/40 bg-amber-400/10 text-amber-700 dark:text-amber-300"
+        ? "border-warning/40 bg-warning/10 text-warning"
         : "border-border bg-background text-muted-foreground";
 
   return (

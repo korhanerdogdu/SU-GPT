@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/AuthContext";
 import ThemeToggle from "@/components/ThemeToggle";
 import LanguageToggle from "@/components/LanguageToggle";
+import HelpButton from "@/components/HelpButton";
 import { useLocale } from "@/contexts/LocaleContext";
 import { exportAuditXlsx } from "@/lib/export-xlsx";
 import {
@@ -18,8 +19,8 @@ import {
 } from "@/lib/api";
 
 const selectCls =
-  "w-full rounded-md border border-[#D8E6F3] bg-white px-3 py-2 text-sm text-[#1a2b45] " +
-  "focus:outline-none focus:ring-2 focus:ring-[#004B93]/40";
+  "w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground " +
+  "focus:outline-none focus:ring-2 focus:ring-primary/40";
 
 export default function ProfilePage() {
   const { user } = useAuth();
@@ -91,8 +92,8 @@ export default function ProfilePage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#F5F8FC] text-[#1a2b45]">
-      <header className="flex items-center gap-3 border-b border-[#D8E6F3] bg-[#004B93] px-6 py-4 text-white">
+    <div className="min-h-screen bg-background text-foreground">
+      <header className="flex items-center gap-3 border-b border-border bg-primary px-6 py-4 text-primary-foreground">
         <Link to="/" className="flex items-center gap-1 text-sm opacity-90 hover:opacity-100">
           <ArrowLeft size={16} /> {t("common.chat")}
         </Link>
@@ -100,14 +101,15 @@ export default function ProfilePage() {
           <GraduationCap size={20} />
           <span className="font-semibold">{t("profile.title")}</span>
         </div>
-        <LanguageToggle className="ml-auto" />
+        <HelpButton className="ml-auto" />
+        <LanguageToggle />
         <ThemeToggle />
       </header>
 
       <main className="mx-auto grid max-w-5xl gap-6 p-6 md:grid-cols-2">
         {/* Profile form */}
-        <section className="rounded-xl border border-[#D8E6F3] bg-white p-5 shadow-sm">
-          <h2 className="mb-4 text-lg font-semibold text-[#003B73]">{t("profile.curriculum")}</h2>
+        <section className="rounded-xl border border-border bg-card p-5 shadow-sm">
+          <h2 className="mb-4 text-lg font-semibold text-foreground">{t("profile.curriculum")}</h2>
           <div className="space-y-4">
             <div>
               <label className="mb-1 block text-sm font-medium">{t("profile.major")}</label>
@@ -128,7 +130,7 @@ export default function ProfilePage() {
                   </option>
                 ))}
               </select>
-              {degreeCode && <p className="mt-1 text-xs text-[#4A5568]">{t("profile.degreeCode", { code: degreeCode })}</p>}
+              {degreeCode && <p className="mt-1 text-xs text-muted-foreground">{t("profile.degreeCode", { code: degreeCode })}</p>}
             </div>
             <div>
               <label className="mb-1 block text-sm font-medium">{t("profile.year")}</label>
@@ -143,40 +145,40 @@ export default function ProfilePage() {
                 ))}
               </select>
             </div>
-            <Button onClick={handleSave} disabled={saving} className="w-full bg-[#004B93] hover:bg-[#003B73]">
+            <Button onClick={handleSave} disabled={saving} className="w-full">
               {saving ? <Loader2 className="mr-2 animate-spin" size={16} /> : null} {t("profile.save")}
             </Button>
-            <p className="text-xs text-[#4A5568]">
+            <p className="text-xs text-muted-foreground">
               {t("profile.contract")}
             </p>
           </div>
         </section>
 
         {/* Audit */}
-        <section className="rounded-xl border border-[#D8E6F3] bg-white p-5 shadow-sm">
+        <section className="rounded-xl border border-border bg-card p-5 shadow-sm">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-lg font-semibold text-[#003B73]">{t("profile.audit")}</h2>
+            <h2 className="text-lg font-semibold text-foreground">{t("profile.audit")}</h2>
             <div className="flex items-center gap-2">
               {audit && audit.categories && (
                 <Button
                   onClick={() => exportAuditXlsx(audit, username)}
                   variant="outline"
                   size="sm"
-                  className="border-[#0f7a3d] text-[#0f7a3d] hover:bg-[#0f7a3d]/5"
+                  className="border-success text-success hover:bg-success/10"
                 >
                   <FileSpreadsheet className="mr-1.5" size={15} /> Excel
                 </Button>
               )}
-              <Button onClick={handleAudit} disabled={auditing} variant="outline" className="border-[#004B93] text-[#004B93]">
+              <Button onClick={handleAudit} disabled={auditing} variant="outline" className="border-primary text-primary">
                 {auditing ? <Loader2 className="mr-2 animate-spin" size={16} /> : null} {t("profile.runAudit")}
               </Button>
             </div>
           </div>
 
           {!audit && (
-            <p className="text-sm text-[#4A5568]">
+            <p className="text-sm text-muted-foreground">
               {t("profile.auditHelpBefore")}{" "}
-              <Link to="/courses" className="font-medium text-[#004B93] underline">
+              <Link to="/courses" className="font-medium text-primary underline">
                 {t("profile.auditHelpLink")}
               </Link>{" "}
               {t("profile.auditHelpAfter")}
@@ -184,31 +186,31 @@ export default function ProfilePage() {
           )}
 
           {audit && audit.reliability === "unavailable" && (
-            <p className="rounded-md bg-amber-50 p-3 text-sm text-amber-800">{audit.message}</p>
+            <p className="rounded-md bg-warning/10 p-3 text-sm text-warning">{audit.message}</p>
           )}
 
           {audit && audit.categories && (
             <div className="space-y-3">
               <div className="flex items-baseline gap-2">
-                <span className="text-2xl font-bold text-[#004B93]">{audit.completed_su_credits}</span>
-                <span className="text-sm text-[#4A5568]">{t("profile.suCredits", { total: audit.total_min_su_credits ?? "—" })}</span>
-                <span className={`ml-auto rounded-full px-2 py-0.5 text-xs font-medium ${audit.status === "complete" ? "bg-green-100 text-green-700" : "bg-blue-100 text-[#004B93]"}`}>
+                <span className="text-2xl font-bold text-primary">{audit.completed_su_credits}</span>
+                <span className="text-sm text-muted-foreground">{t("profile.suCredits", { total: audit.total_min_su_credits ?? "—" })}</span>
+                <span className={`ml-auto rounded-full px-2 py-0.5 text-xs font-bold ${audit.status === "complete" ? "bg-success/15 text-success" : "bg-primary/10 text-primary"}`}>
                   {audit.status}
                 </span>
               </div>
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b border-[#D8E6F3] text-left text-xs text-[#4A5568]">
+                  <tr className="border-b border-border text-left text-xs text-muted-foreground">
                     <th className="py-1">{t("profile.category")}</th><th>{t("profile.done")}</th><th>{t("profile.need")}</th><th>{t("profile.remaining")}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {audit.categories.map((c) => (
-                    <tr key={c.category} className="border-b border-[#eef4fa]">
+                    <tr key={c.category} className="border-b border-border/60">
                       <td className="py-1 capitalize">{c.category.replace(/_/g, " ")}</td>
                       <td>{c.completed_su_credits}</td>
                       <td>{c.required_su_credits ?? "—"}</td>
-                      <td className={c.remaining_su_credits ? "font-medium text-[#004B93]" : "text-green-600"}>
+                      <td className={c.remaining_su_credits ? "font-medium text-primary" : "text-success"}>
                         {c.remaining_su_credits ?? "—"}
                       </td>
                     </tr>
@@ -216,13 +218,13 @@ export default function ProfilePage() {
                 </tbody>
               </table>
               {audit.ects_requirements && audit.ects_requirements.length > 0 && (
-                <div className="rounded-md bg-[#F5F8FC] p-2 text-sm">
+                <div className="rounded-md bg-muted/40 p-2 text-sm">
                   {audit.ects_requirements.map((e) => (
                     <div key={e.category} className="flex justify-between">
                       <span className="capitalize">{e.category.replace(/_/g, " ")} ECTS</span>
                       <span>
                         {e.completed_ects} / {e.required_ects}
-                        <span className={e.remaining_ects ? "ml-2 text-[#004B93]" : "ml-2 text-green-600"}>
+                        <span className={e.remaining_ects ? "ml-2 text-primary" : "ml-2 text-success"}>
                           ({t("profile.left", { count: e.remaining_ects })})
                         </span>
                       </span>
@@ -233,7 +235,7 @@ export default function ProfilePage() {
               {audit.missing_required_courses && audit.missing_required_courses.length > 0 && (
                 <p className="text-sm"><span className="font-medium">{t("profile.missing")}</span> {audit.missing_required_courses.join(", ")}</p>
               )}
-              <p className="text-xs text-[#4A5568]">{t("profile.reliability", { value: audit.reliability })}</p>
+              <p className="text-xs text-muted-foreground">{t("profile.reliability", { value: audit.reliability })}</p>
             </div>
           )}
         </section>

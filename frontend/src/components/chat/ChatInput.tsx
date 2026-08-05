@@ -31,10 +31,12 @@ export default function ChatInput({ onSend, disabled, variant = "docked", autoFo
 
   const hero = variant === "hero";
 
-  // No hard focus outline: focus only softens the shadow, never draws a blue rectangle border.
+  // Focus lives on the wrapping box, not the textarea itself, so the whole composer — including
+  // the send button — reads as one focused control (WCAG 2.4.13 Focus Appearance): a real
+  // 2px ring in the `--ring` token, softened shadow underneath as a secondary cue.
   const box = (
     <div
-      className={`flex items-end gap-2 rounded-2xl border border-border bg-background px-4 transition-shadow ${
+      className={`flex items-end gap-2 rounded-2xl border border-border bg-background px-4 transition-shadow focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/70 ${
         hero
           ? "py-3 shadow-[0_18px_50px_-18px_rgba(2,20,45,0.5)] focus-within:shadow-[0_22px_60px_-16px_rgba(0,75,147,0.4)]"
           : "py-2.5 shadow-sm focus-within:shadow-md"

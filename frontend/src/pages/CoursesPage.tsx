@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/AuthContext";
 import ThemeToggle from "@/components/ThemeToggle";
 import LanguageToggle from "@/components/LanguageToggle";
+import HelpButton from "@/components/HelpButton";
 import { useLocale } from "@/contexts/LocaleContext";
 import { exportCoursesXlsx } from "@/lib/export-xlsx";
 import {
@@ -28,9 +29,8 @@ function formatSize(bytes: number) {
  * history is setup, and — more importantly — after saving you need to SEE what the system now
  * believes you have completed.
  *
- * Styled to match ProfilePage: both are "set up your record" screens, so they share the light
- * Sabancı palette (#F5F8FC page, #004B93 header, white cards on #D8E6F3 borders) rather than the
- * dark chat chrome.
+ * Styled to match ProfilePage: both are "set up your record" screens, so they share the same
+ * primary/card/border tokens as the rest of the app and follow the active theme.
  */
 export default function CoursesPage() {
   const { user } = useAuth();
@@ -161,8 +161,8 @@ export default function CoursesPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#F5F8FC] text-[#1a2b45]">
-      <header className="flex items-center gap-3 border-b border-[#D8E6F3] bg-[#004B93] px-6 py-4 text-white">
+    <div className="min-h-screen bg-background text-foreground">
+      <header className="flex items-center gap-3 border-b border-border bg-primary px-6 py-4 text-primary-foreground">
         <Link to="/" className="flex items-center gap-1 text-sm opacity-90 hover:opacity-100">
           <ArrowLeft size={16} /> {t("common.chat")}
         </Link>
@@ -170,26 +170,27 @@ export default function CoursesPage() {
           <BookOpen size={18} />
           <span className="font-semibold">{t("courses.title")}</span>
         </div>
-        <LanguageToggle className="ml-auto" />
+        <HelpButton className="ml-auto" />
+        <LanguageToggle />
         <ThemeToggle />
       </header>
 
       <main className="mx-auto grid max-w-5xl gap-6 p-6 md:grid-cols-2">
         {/* Completed courses — the answer to "what did I select?" */}
-        <section className="rounded-xl border border-[#D8E6F3] bg-white p-5 shadow-sm">
+        <section className="rounded-xl border border-border bg-card p-5 shadow-sm">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <h2 className="text-lg font-semibold text-[#003B73]">{t("courses.completed")}</h2>
+            <h2 className="text-lg font-semibold text-foreground">{t("courses.completed")}</h2>
             <div className="flex items-center gap-3">
-              <span className="text-sm text-[#4A5568]">
-                <span className="font-semibold text-[#004B93]">{t("courses.savedCount", { count: saved.length })}</span> ·{" "}
-                <span className="font-semibold text-[#004B93]">{totalSu}</span> SU
+              <span className="text-sm text-muted-foreground">
+                <span className="font-semibold text-primary">{t("courses.savedCount", { count: saved.length })}</span> ·{" "}
+                <span className="font-semibold text-primary">{totalSu}</span> SU
               </span>
               {saved.length > 0 && (
                 <Button
                   onClick={() => exportCoursesXlsx(saved, user?.username ?? "student")}
                   variant="outline"
                   size="sm"
-                  className="border-[#0f7a3d] text-[#0f7a3d] hover:bg-[#0f7a3d]/5"
+                  className="border-success text-success hover:bg-success/10"
                 >
                   <FileSpreadsheet className="mr-1.5" size={15} /> Excel
                 </Button>
@@ -198,7 +199,7 @@ export default function CoursesPage() {
           </div>
 
           {saved.length === 0 ? (
-            <p className="text-sm leading-relaxed text-[#4A5568]">
+            <p className="text-sm leading-relaxed text-muted-foreground">
               {t("courses.empty")}
             </p>
           ) : (
@@ -206,17 +207,17 @@ export default function CoursesPage() {
               {saved.map((c) => (
                 <li
                   key={c.id}
-                  className="flex items-start gap-3 rounded-md border border-[#eef4fa] bg-[#F5F8FC] px-3 py-2"
+                  className="flex items-start gap-3 rounded-md border border-border bg-muted/40 px-3 py-2"
                 >
-                  <Check className="mt-0.5 h-4 w-4 shrink-0 text-[#004B93]" />
+                  <Check className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-[#003B73]">{c.code}</p>
-                    <p className="text-xs text-[#4A5568]">{c.title}</p>
-                    <span className="mt-1 inline-flex rounded-full bg-[#eef4fa] px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[#004B93]">
+                    <p className="text-sm font-semibold text-foreground">{c.code}</p>
+                    <p className="text-xs text-muted-foreground">{c.title}</p>
+                    <span className="mt-1 inline-flex rounded-full bg-muted px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-primary">
                       {c.status ?? "completed"}
                     </span>
                   </div>
-                  <span className="shrink-0 text-xs font-medium text-[#4A5568]">
+                  <span className="shrink-0 text-xs font-medium text-muted-foreground">
                     {c.su_credits ?? "—"} SU
                   </span>
                 </li>
@@ -224,34 +225,34 @@ export default function CoursesPage() {
             </ul>
           )}
 
-          <p className="mt-4 border-t border-[#D8E6F3] pt-3 text-xs text-[#4A5568]">
+          <p className="mt-4 border-t border-border pt-3 text-xs text-muted-foreground">
             {t("courses.countNote")}
           </p>
         </section>
 
         {/* Picker + upload */}
         <div className="space-y-6">
-          <section className="rounded-xl border border-[#D8E6F3] bg-white p-5 shadow-sm">
-            <h2 className="mb-4 text-lg font-semibold text-[#003B73]">{t("courses.add")}</h2>
+          <section className="rounded-xl border border-border bg-card p-5 shadow-sm">
+            <h2 className="mb-4 text-lg font-semibold text-foreground">{t("courses.add")}</h2>
 
             <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#4A5568]" />
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder={t("courses.search")}
-                className="w-full rounded-md border border-[#D8E6F3] bg-white py-2 pl-9 pr-3 text-sm text-[#1a2b45] placeholder:text-[#94a3b8] focus:border-[#004B93] focus:outline-none focus:ring-1 focus:ring-[#004B93]"
+                className="w-full rounded-md border border-border bg-background py-2 pl-9 pr-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
               />
             </div>
 
             <div className="mt-3 max-h-[24rem] space-y-1.5 overflow-y-auto pr-1 scrollbar-thin">
               {loadingPool ? (
-                <div className="flex items-center gap-2 rounded-md border border-[#D8E6F3] bg-[#F5F8FC] px-3 py-2 text-sm text-[#4A5568]">
+                <div className="flex items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
                   <Loader2 className="h-4 w-4 animate-spin" />
                   {t("courses.loading")}
                 </div>
               ) : pool.length === 0 ? (
-                <div className="rounded-md border border-[#D8E6F3] bg-[#F5F8FC] px-3 py-2 text-sm text-[#4A5568]">
+                <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
                   {t("courses.none")}
                 </div>
               ) : (
@@ -262,23 +263,23 @@ export default function CoursesPage() {
                       key={course.id}
                       className={`flex cursor-pointer items-start gap-3 rounded-md border px-3 py-2 transition-colors ${
                         checked
-                          ? "border-[#004B93] bg-[#eef4fa]"
-                          : "border-[#eef4fa] bg-white hover:border-[#D8E6F3] hover:bg-[#F5F8FC]"
+                          ? "border-primary bg-primary/10"
+                          : "border-border bg-card hover:border-primary/40 hover:bg-muted/40"
                       }`}
                     >
                       <input
                         type="checkbox"
                         checked={checked}
                         onChange={() => toggle(course.id)}
-                        className="mt-1 h-3.5 w-3.5 accent-[#004B93]"
+                        className="mt-1 h-3.5 w-3.5 accent-primary"
                       />
                       <span className="min-w-0 flex-1">
-                        <span className="block text-sm font-semibold text-[#003B73]">
+                        <span className="block text-sm font-semibold text-foreground">
                           {course.code}
                         </span>
-                        <span className="line-clamp-2 text-xs text-[#4A5568]">{course.title}</span>
+                        <span className="line-clamp-2 text-xs text-muted-foreground">{course.title}</span>
                       </span>
-                      <span className="shrink-0 text-xs text-[#4A5568]">
+                      <span className="shrink-0 text-xs text-muted-foreground">
                         {course.su_credits ?? "—"} SU
                       </span>
                     </label>
@@ -290,7 +291,7 @@ export default function CoursesPage() {
             <Button
               onClick={save}
               disabled={saving || !dirty}
-              className="mt-4 w-full bg-[#004B93] hover:bg-[#003B73]"
+              className="mt-4 w-full"
             >
               {saving ? (
                 <Loader2 className="mr-2 animate-spin" size={16} />
@@ -302,12 +303,12 @@ export default function CoursesPage() {
           </section>
 
           {user?.role === "admin" && (
-          <section className="rounded-xl border border-[#D8E6F3] bg-white p-5 shadow-sm">
-            <h2 className="mb-4 text-lg font-semibold text-[#003B73]">{t("courses.documents")}</h2>
-            <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-md border border-dashed border-[#D8E6F3] bg-[#F5F8FC] px-3 py-5 text-center text-sm text-[#4A5568] transition-colors hover:border-[#004B93] hover:bg-[#eef4fa]">
-              <Upload className="h-5 w-5 text-[#004B93]" />
+          <section className="rounded-xl border border-border bg-card p-5 shadow-sm">
+            <h2 className="mb-4 text-lg font-semibold text-foreground">{t("courses.documents")}</h2>
+            <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-md border border-dashed border-border bg-muted/40 px-3 py-5 text-center text-sm text-muted-foreground transition-colors hover:border-primary hover:bg-primary/5">
+              <Upload className="h-5 w-5 text-primary" />
               <span>
-                <span className="font-medium text-[#003B73]">{t("courses.browse")}</span>
+                <span className="font-medium text-foreground">{t("courses.browse")}</span>
                 <br />
                 <span className="text-xs">PDF, PPTX, DOCX, MD, TXT</span>
               </span>
@@ -326,17 +327,17 @@ export default function CoursesPage() {
                   {files.map((f, i) => (
                     <li
                       key={f.name + i}
-                      className="flex items-center gap-2.5 rounded-md border border-[#eef4fa] bg-[#F5F8FC] px-3 py-2"
+                      className="flex items-center gap-2.5 rounded-md border border-border bg-muted/40 px-3 py-2"
                     >
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm text-[#1a2b45]">{f.name}</p>
-                        <p className="text-xs text-[#4A5568]">{formatSize(f.size)}</p>
+                        <p className="truncate text-sm text-foreground">{f.name}</p>
+                        <p className="text-xs text-muted-foreground">{formatSize(f.size)}</p>
                       </div>
                       <button
                         type="button"
                         onClick={() => setFiles((prev) => prev.filter((_, idx) => idx !== i))}
                         aria-label={t("courses.removeFile")}
-                        className="rounded-full p-1 text-[#4A5568] transition-colors hover:bg-[#D8E6F3] hover:text-[#003B73]"
+                        className="grid h-6 w-6 shrink-0 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                       >
                         <X className="h-4 w-4" />
                       </button>
@@ -347,7 +348,7 @@ export default function CoursesPage() {
                   onClick={handleUpload}
                   disabled={uploading}
                   variant="outline"
-                  className="mt-3 w-full border-[#004B93] text-[#004B93]"
+                  className="mt-3 w-full border-primary text-primary"
                 >
                   {uploading ? <Loader2 className="mr-2 animate-spin" size={16} /> : null}
                   {uploading ? t("courses.indexing") : t("courses.upload")}
