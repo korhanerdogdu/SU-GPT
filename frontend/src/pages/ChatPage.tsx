@@ -19,6 +19,7 @@ import {
   saveUserSchedule,
   startNewSession,
   updateConversation,
+  uploadTranscript,
   useSession,
   type ConversationSummary,
   type UsageStatus,
@@ -39,6 +40,7 @@ export default function ChatPage() {
   const navigate = useNavigate();
   const [messages, setMessages] = useState<Message[]>([]);
   const [busy, setBusy] = useState(false);
+  const [fileBusy, setFileBusy] = useState(false);
   const [sessionId, setSessionId] = useState<string>(() => currentSessionId());
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [profileReady, setProfileReady] = useState(true); // assume ok until told otherwise
@@ -169,6 +171,31 @@ export default function ChatPage() {
     }
   }
 
+  /** A transcript upload is a deterministic action, not a model turn: it never touches
+   *  askQuestionStream or the daily usage quota. The user+assistant bubbles are appended
+   *  directly so the exchange still reads naturally in the transcript. */
+  async function handleFileUpload(file: File) {
+    if (!user?.username) return;
+    setMessages((m) => [...m, { id: makeId(), role: "user", content: t("chat.transcriptAttached", { filename: file.name }) }]);
+    setFileBusy(true);
+    try {
+      const result = await uploadTranscript(user.username, file);
+      let body = t("chat.transcriptProcessed", {
+        count: result.matched_course_codes.length,
+        gpa: result.summary.gpa ?? "—",
+      });
+      if (result.unmatched_course_codes.length > 0) {
+        body += t("chat.transcriptProcessedUnmatched", { codes: result.unmatched_course_codes.join(", ") });
+      }
+      setMessages((m) => [...m, { id: makeId(), role: "assistant", content: body }]);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : t("chat.requestFailed");
+      setMessages((m) => [...m, { id: makeId(), role: "assistant", content: t("chat.transcriptChatFailed", { message }) }]);
+    } finally {
+      setFileBusy(false);
+    }
+  }
+
   function handleNewChat() {
     setSessionId(startNewSession());
     setMessages([]);
@@ -250,13 +277,25 @@ export default function ChatPage() {
         {messages.length === 0 ? (
           // Empty state owns its own centered composer (Claude/Gemini style), so the docked
           // bar is not rendered here — there is exactly one input on screen.
-          <EmptyState name={user?.username} onSend={handleSend} disabled={busy} />
+          <EmptyState
+            name={user?.username}
+            onSend={handleSend}
+            disabled={busy}
+            onFileSelect={handleFileUpload}
+            fileBusy={fileBusy}
+          />
         ) : (
           <>
             <div className="flex-1 overflow-y-auto scrollbar-thin">
               <ChatMessages messages={messages} showSources={user?.role === "admin"} />
             </div>
-            <ChatInput variant="docked" onSend={handleSend} disabled={busy} />
+            <ChatInput
+              variant="docked"
+              onSend={handleSend}
+              disabled={busy}
+              onFileSelect={handleFileUpload}
+              fileBusy={fileBusy}
+            />
           </>
         )}
       </main>

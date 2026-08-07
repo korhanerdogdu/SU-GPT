@@ -118,29 +118,57 @@ export default function Sidebar({
   if (collapsed && !mobileOpen) {
     return (
       <aside className="hidden h-screen w-16 shrink-0 flex-col items-center border-r border-border bg-card py-4 md:flex">
+        <img src="/assets/small_witihoutbg.png" alt="adviSU" className="h-8 w-8 object-contain" />
         <button
           type="button"
           onClick={onToggle}
           aria-label={t("chat.openHistory")}
-          className="rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground"
+          className="mt-4 rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground"
         >
           <PanelLeftOpen className="h-5 w-5" />
         </button>
-        <Link
-          to="/schedule"
-          aria-label={t("sidebar.schedule")}
-          title={t("sidebar.schedule")}
-          className="mt-3 rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-primary"
-        >
-          <CalendarDays className="h-5 w-5" />
-        </Link>
         <button
           type="button"
           onClick={onNewChat}
           aria-label={t("sidebar.newChat")}
-          className="mt-4 rounded-lg bg-primary p-2 text-primary-foreground"
+          className="mt-3 rounded-lg bg-primary p-2 text-primary-foreground"
         >
           <MessageSquarePlus className="h-5 w-5" />
+        </button>
+        <div className="mt-4 flex flex-col items-center gap-1 border-t border-border pt-4">
+          <Link
+            to="/schedule"
+            aria-label={t("sidebar.schedule")}
+            title={t("sidebar.schedule")}
+            className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-primary-emphasis"
+          >
+            <CalendarDays className="h-5 w-5" />
+          </Link>
+          <Link
+            to="/courses"
+            aria-label={t("sidebar.courseHistory")}
+            title={t("sidebar.courseHistory")}
+            className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-primary-emphasis"
+          >
+            <BookOpen className="h-5 w-5" />
+          </Link>
+          <Link
+            to="/profile"
+            aria-label={t("sidebar.profile")}
+            title={t("sidebar.profile")}
+            className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-primary-emphasis"
+          >
+            <GraduationCap className="h-5 w-5" />
+          </Link>
+        </div>
+        <button
+          type="button"
+          onClick={signOut}
+          aria-label={t("sidebar.signOut")}
+          title={t("sidebar.signOut")}
+          className="mt-auto rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground"
+        >
+          <LogOut className="h-5 w-5" />
         </button>
       </aside>
     );
@@ -190,7 +218,7 @@ export default function Sidebar({
             onClick={onNewChat}
             className="flex w-full items-center gap-2.5 rounded-xl border border-border bg-background px-3 py-2.5 text-sm font-medium text-foreground hover:bg-muted"
           >
-            <MessageSquarePlus className="h-4 w-4 text-primary" />
+            <MessageSquarePlus className="h-4 w-4 text-primary-emphasis" />
             {t("sidebar.newChat")}
           </button>
         </div>
@@ -235,8 +263,8 @@ export default function Sidebar({
                           />
                         ) : (
                           <span className="flex items-center gap-1.5">
-                            {item.pinned && <Pin className="h-3 w-3 shrink-0 text-primary" />}
-                            <span className={`block truncate text-[0.9rem] ${active ? "font-medium text-primary" : "text-foreground"}`}>
+                            {item.pinned && <Pin className="h-3 w-3 shrink-0 text-primary-emphasis" />}
+                            <span className={`block truncate text-[0.9rem] ${active ? "font-medium text-primary-emphasis" : "text-foreground"}`}>
                               {item.title}
                             </span>
                           </span>
@@ -268,7 +296,7 @@ export default function Sidebar({
                           type="button"
                           onClick={() => setPendingDelete(item)}
                           aria-label={t("sidebar.delete")}
-                          className="grid h-7 w-7 place-items-center rounded text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                          className="grid h-7 w-7 place-items-center rounded text-muted-foreground hover:bg-destructive/10 hover:text-destructive-emphasis"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>

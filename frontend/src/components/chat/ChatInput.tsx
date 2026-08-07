@@ -1,5 +1,5 @@
 import { useState, type KeyboardEvent } from "react";
-import { ArrowUp } from "lucide-react";
+import { ArrowUp, Loader2, Paperclip } from "lucide-react";
 import { useLocale } from "@/contexts/LocaleContext";
 
 interface Props {
@@ -9,9 +9,13 @@ interface Props {
    *  empty state (Claude/Gemini style) with a softer, floating shadow. */
   variant?: "docked" | "hero";
   autoFocus?: boolean;
+  /** Present only where a caller actually handles files (the chat page); the composer stays a
+   *  pure text box everywhere else rather than showing a button that does nothing. */
+  onFileSelect?: (file: File) => void;
+  fileBusy?: boolean;
 }
 
-export default function ChatInput({ onSend, disabled, variant = "docked", autoFocus }: Props) {
+export default function ChatInput({ onSend, disabled, variant = "docked", autoFocus, onFileSelect, fileBusy }: Props) {
   const [value, setValue] = useState("");
   const { t } = useLocale();
 
@@ -42,6 +46,32 @@ export default function ChatInput({ onSend, disabled, variant = "docked", autoFo
           : "py-2.5 shadow-sm focus-within:shadow-md"
       }`}
     >
+      {onFileSelect && (
+        <label
+          className={`flex shrink-0 cursor-pointer items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-muted hover:text-foreground ${
+            fileBusy ? "pointer-events-none opacity-50" : ""
+          } ${hero ? "h-10 w-10" : "h-9 w-9"}`}
+          title={t("chat.attachTranscript")}
+        >
+          <span className="sr-only">{t("chat.attachTranscript")}</span>
+          {fileBusy ? (
+            <Loader2 className={`animate-spin ${hero ? "h-5 w-5" : "h-4 w-4"}`} />
+          ) : (
+            <Paperclip className={hero ? "h-5 w-5" : "h-4 w-4"} />
+          )}
+          <input
+            type="file"
+            accept="application/pdf,.pdf"
+            className="hidden"
+            disabled={disabled || fileBusy}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = "";
+              if (file) onFileSelect(file);
+            }}
+          />
+        </label>
+      )}
       <textarea
         value={value}
         onChange={(e) => setValue(e.target.value)}

@@ -33,6 +33,15 @@
     --success-foreground: 0 0% 100%;
     --warning: 38 75% 34%;
     --warning-foreground: 0 0% 100%;
+
+    /* `--primary`/`--destructive` do double duty as solid button fills (white text on top,
+       needs to stay dark/saturated) AND as inline text/icon/link colour (needs to stay light
+       enough to read against `--background`). One hue can't satisfy both once the surface goes
+       dark, so `-emphasis` is the dedicated foreground-text variant; only the dark theme below
+       overrides it — here it just mirrors the base colour, since light-mode `--primary` already
+       reads at APCA Lc ~86-91 on `--background`/`--card`. */
+    --primary-emphasis: 213 100% 29%;
+    --destructive-emphasis: 0 62% 50%;
   }
 
   :root[data-theme="dark"] {
@@ -45,11 +54,20 @@
     --secondary: 217 33% 17%;
     --secondary-foreground: 210 40% 96%;
     --muted: 217 33% 17%;
-    --muted-foreground: 215 20% 65%;
+    /* Lifted from L65% (APCA Lc ~51 on this background, below the 60 floor for UI/body text) to
+       L74% (Lc ~64) — still visibly de-emphasised next to `--foreground`, but legible. */
+    --muted-foreground: 215 20% 74%;
     --border: 217 33% 22%;
     --input: 217 33% 17%;
     --success: 152 55% 58%;
     --warning: 40 85% 64%;
+    /* Same navy as `--primary` reads at APCA Lc ~11 as text on this background — effectively
+       invisible. Lightened until legible (Lc ~71) while keeping the hue recognisably "brand
+       blue"; `--primary` itself stays untouched so `bg-primary` buttons keep their high-contrast
+       white-on-navy fill. */
+    --primary-emphasis: 213 85% 80%;
+    /* Same reasoning: the light-mode destructive red reads at APCA Lc ~27 on this background. */
+    --destructive-emphasis: 0 85% 78%;
   }
 
   * {

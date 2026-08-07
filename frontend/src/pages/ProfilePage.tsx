@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
-import { ArrowLeft, FileSpreadsheet, GraduationCap, Loader2 } from "lucide-react";
+import { ArrowLeft, ClipboardCheck, FileSpreadsheet, GraduationCap, Layers, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/AuthContext";
 import ThemeToggle from "@/components/ThemeToggle";
@@ -19,8 +19,8 @@ import {
 } from "@/lib/api";
 
 const selectCls =
-  "w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground " +
-  "focus:outline-none focus:ring-2 focus:ring-primary/40";
+  "w-full rounded-xl border border-input bg-background px-3 py-2.5 text-sm text-foreground outline-none " +
+  "focus:border-primary focus:ring-2 focus:ring-primary/15";
 
 export default function ProfilePage() {
   const { user } = useAuth();
@@ -93,7 +93,7 @@ export default function ProfilePage() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <header className="flex items-center gap-3 border-b border-border bg-primary px-6 py-4 text-primary-foreground">
+      <header className="flex items-center gap-3 border-b border-white/10 bg-sabanci-header px-6 py-4 text-primary-foreground shadow-md shadow-black/20">
         <Link to="/" className="flex items-center gap-1 text-sm opacity-90 hover:opacity-100">
           <ArrowLeft size={16} /> {t("common.chat")}
         </Link>
@@ -106,10 +106,36 @@ export default function ProfilePage() {
         <ThemeToggle />
       </header>
 
-      <main className="mx-auto grid max-w-5xl gap-6 p-6 md:grid-cols-2">
+      <main className="relative overflow-hidden">
+        {/* Ambient brand wash — purely decorative, keeps the page from reading as two bare
+            cards on an empty canvas at wide desktop scale. */}
+        <div aria-hidden="true" className="pointer-events-none absolute inset-0 -z-10">
+          <div className="absolute -top-32 right-0 h-80 w-80 rounded-full bg-[radial-gradient(circle,_hsl(var(--primary)/0.10)_0%,_transparent_70%)] blur-2xl" />
+          <div className="absolute -bottom-24 left-0 h-72 w-72 rounded-full bg-[radial-gradient(circle,_rgba(214,161,58,0.09)_0%,_transparent_70%)] blur-2xl" />
+        </div>
+
+        <div className="mx-auto max-w-5xl px-6 pb-12 pt-10">
+          <div className="mb-8 max-w-xl">
+            <p className="font-ledger text-xs uppercase tracking-[0.18em] text-muted-foreground">
+              {t("profile.eyebrow")}
+            </p>
+            <h2 className="mt-2 text-2xl font-bold tracking-tight text-foreground sm:text-[1.75rem]">
+              {t("profile.heroTitle")}
+            </h2>
+            <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+              {t("profile.heroBody")}
+            </p>
+          </div>
+
+          <div className="grid gap-6 md:grid-cols-2">
         {/* Profile form */}
-        <section className="rounded-xl border border-border bg-card p-5 shadow-sm">
-          <h2 className="mb-4 text-lg font-semibold text-foreground">{t("profile.curriculum")}</h2>
+        <section className="rounded-2xl border border-border bg-card p-5 shadow-sm transition-shadow hover:shadow-md">
+          <h2 className="mb-4 flex items-center gap-2.5 text-lg font-semibold text-foreground">
+            <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary-emphasis">
+              <Layers className="h-4 w-4" />
+            </span>
+            {t("profile.curriculum")}
+          </h2>
           <div className="space-y-4">
             <div>
               <label className="mb-1 block text-sm font-medium">{t("profile.major")}</label>
@@ -140,7 +166,7 @@ export default function ProfilePage() {
                 onChange={(e) => setAcademicYear(e.target.value)}
               >
                 <option value="">{t("profile.yearUnknown")}</option>
-                {[1, 2, 3, 4, 5, 6].map((year) => (
+                {[1, 2, 3, 4, 5, 6, 7, 8].map((year) => (
                   <option key={year} value={year}>{year}</option>
                 ))}
               </select>
@@ -155,9 +181,14 @@ export default function ProfilePage() {
         </section>
 
         {/* Audit */}
-        <section className="rounded-xl border border-border bg-card p-5 shadow-sm">
+        <section className="rounded-2xl border border-border bg-card p-5 shadow-sm transition-shadow hover:shadow-md">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-lg font-semibold text-foreground">{t("profile.audit")}</h2>
+            <h2 className="flex items-center gap-2.5 text-lg font-semibold text-foreground">
+              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary-emphasis">
+                <ClipboardCheck className="h-4 w-4" />
+              </span>
+              {t("profile.audit")}
+            </h2>
             <div className="flex items-center gap-2">
               {audit && audit.categories && (
                 <Button
@@ -169,7 +200,7 @@ export default function ProfilePage() {
                   <FileSpreadsheet className="mr-1.5" size={15} /> Excel
                 </Button>
               )}
-              <Button onClick={handleAudit} disabled={auditing} variant="outline" className="border-primary text-primary">
+              <Button onClick={handleAudit} disabled={auditing} variant="outline" className="border-primary-emphasis text-primary-emphasis">
                 {auditing ? <Loader2 className="mr-2 animate-spin" size={16} /> : null} {t("profile.runAudit")}
               </Button>
             </div>
@@ -178,7 +209,7 @@ export default function ProfilePage() {
           {!audit && (
             <p className="text-sm text-muted-foreground">
               {t("profile.auditHelpBefore")}{" "}
-              <Link to="/courses" className="font-medium text-primary underline">
+              <Link to="/courses" className="font-medium text-primary-emphasis underline">
                 {t("profile.auditHelpLink")}
               </Link>{" "}
               {t("profile.auditHelpAfter")}
@@ -192,9 +223,9 @@ export default function ProfilePage() {
           {audit && audit.categories && (
             <div className="space-y-3">
               <div className="flex items-baseline gap-2">
-                <span className="text-2xl font-bold text-primary">{audit.completed_su_credits}</span>
+                <span className="text-2xl font-bold text-primary-emphasis">{audit.completed_su_credits}</span>
                 <span className="text-sm text-muted-foreground">{t("profile.suCredits", { total: audit.total_min_su_credits ?? "—" })}</span>
-                <span className={`ml-auto rounded-full px-2 py-0.5 text-xs font-bold ${audit.status === "complete" ? "bg-success/15 text-success" : "bg-primary/10 text-primary"}`}>
+                <span className={`ml-auto rounded-full px-2 py-0.5 text-xs font-bold ${audit.status === "complete" ? "bg-success/15 text-success" : "bg-primary/10 text-primary-emphasis"}`}>
                   {audit.status}
                 </span>
               </div>
@@ -210,7 +241,7 @@ export default function ProfilePage() {
                       <td className="py-1 capitalize">{c.category.replace(/_/g, " ")}</td>
                       <td>{c.completed_su_credits}</td>
                       <td>{c.required_su_credits ?? "—"}</td>
-                      <td className={c.remaining_su_credits ? "font-medium text-primary" : "text-success"}>
+                      <td className={c.remaining_su_credits ? "font-medium text-primary-emphasis" : "text-success"}>
                         {c.remaining_su_credits ?? "—"}
                       </td>
                     </tr>
@@ -224,7 +255,7 @@ export default function ProfilePage() {
                       <span className="capitalize">{e.category.replace(/_/g, " ")} ECTS</span>
                       <span>
                         {e.completed_ects} / {e.required_ects}
-                        <span className={e.remaining_ects ? "ml-2 text-primary" : "ml-2 text-success"}>
+                        <span className={e.remaining_ects ? "ml-2 text-primary-emphasis" : "ml-2 text-success"}>
                           ({t("profile.left", { count: e.remaining_ects })})
                         </span>
                       </span>
@@ -239,6 +270,8 @@ export default function ProfilePage() {
             </div>
           )}
         </section>
+          </div>
+        </div>
       </main>
     </div>
   );

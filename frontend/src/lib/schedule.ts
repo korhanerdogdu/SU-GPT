@@ -5,6 +5,17 @@ export const SCHEDULE_STORAGE_PREFIX = "advisu-weekly-schedule";
 export const SCHEDULE_REPLACE_EVENT = "advisu:schedule-replace";
 export const DEFAULT_SCHEDULE_TERM = "202601";
 
+/** "202601" -> "2026 Güz" / "2026 Fall". SUIS term codes end 01/02/03 for fall/spring/summer;
+ *  anything else (or malformed input) falls back to the raw code rather than guessing. */
+export function humanizeScheduleTerm(term: string, locale: Locale): string {
+  const match = /^(\d{4})(0[1-3])$/.exec(term ?? "");
+  if (!match) return term;
+  const [, year, session] = match;
+  const seasonKey =
+    session === "01" ? "schedule.seasonFall" : session === "02" ? "schedule.seasonSpring" : "schedule.seasonSummer";
+  return `${year} ${translate(locale, seasonKey)}`;
+}
+
 export const WEEK_DAYS = [
   { code: "M", short: "Pzt", label: "Pazartesi" },
   { code: "T", short: "Sal", label: "Salı" },

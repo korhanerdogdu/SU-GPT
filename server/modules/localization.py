@@ -65,6 +65,12 @@ _EN = {
         "I can help with respectful educational information."
     ),
     "course_reviews.disabled": "Course reviews are not enabled.",
+    "chat.instructor_opinion_redirect": (
+        "I can't confirm or weigh in on opinions or rumors like that -- subjective comments "
+        "about instructors aren't something this system tracks. What I can actually help with "
+        "is official information: a course's content, prerequisites, credits, or where it fits "
+        "in your curriculum. Ask me about any of that and I'll look it up."
+    ),
     "course_reviews.enabled": "Course-only ratings are available under the privacy policy.",
     "course_reviews.consent_required": "Explicit consent is required before submitting a review.",
     "course_reviews.invalid_score": "Each course rating must be a whole number from 1 to 5.",
@@ -143,6 +149,12 @@ _TR = {
         "Saygılı ve eğitsel bilgiyle yardımcı olabilirim."
     ),
     "course_reviews.disabled": "Ders değerlendirmeleri etkin değil.",
+    "chat.instructor_opinion_redirect": (
+        "Bu tür bir yorumu ya da söylentiyi ne doğrulayabilirim ne de onaylayabilirim — hocalar "
+        "hakkındaki öznel görüşler bu sistemin takip ettiği bir şey değil. Asıl yardımcı "
+        "olabileceğim konular resmî bilgiler: bir dersin içeriği, ön koşulları, kredisi veya "
+        "müfredattaki yeri gibi. Bunlardan herhangi birini sorarsan bakabilirim."
+    ),
     "course_reviews.enabled": "Yalnızca ders puanlama özelliği gizlilik politikasıyla kullanılabilir.",
     "course_reviews.consent_required": "Değerlendirme göndermeden önce açık onay vermen gerekir.",
     "course_reviews.invalid_score": "Her ders puanı 1 ile 5 arasında bir tam sayı olmalıdır.",

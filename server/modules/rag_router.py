@@ -81,6 +81,21 @@ def route_query(question: str, resolved_intent: str | None = None) -> RagRoute:
             document_types=["exam"],
         )
 
+    # A caller-supplied resolved_intent already went through main.py's more specific, carefully
+    # ordered regex chain (e.g. UNTIL_GRAD_RECOMMENDATION_RE before the bare GRADUATION_INTENT_RE
+    # keyword match, so "mezun olana kadar hangi dersleri almalıyım" resolves to
+    # COURSE_RECOMMENDATION rather than GRADUATION_STATUS even though it contains "mezun"). This
+    # module's own GRADUATION_RE/COURSE_RECOMMENDATION_RE below are coarser bare-keyword guards
+    # for when no such resolution happened -- they must not silently re-derive a *different*,
+    # less specific intent and discard a resolution that was already made correctly.
+    if intent in intents.CURRICULUM_INTENTS:
+        return RagRoute(
+            intent=intent,
+            base_intent=base_intent,
+            confidence=confidence,
+            document_types=["course"],
+        )
+
     if GRADUATION_RE.search(q):
         return RagRoute(
             intent=intents.GRADUATION_STATUS,
@@ -92,14 +107,6 @@ def route_query(question: str, resolved_intent: str | None = None) -> RagRoute:
     if COURSE_RECOMMENDATION_RE.search(q):
         return RagRoute(
             intent=intents.COURSE_RECOMMENDATION,
-            base_intent=base_intent,
-            confidence=confidence,
-            document_types=["course"],
-        )
-
-    if intent in intents.CURRICULUM_INTENTS:
-        return RagRoute(
-            intent=intent,
             base_intent=base_intent,
             confidence=confidence,
             document_types=["course"],

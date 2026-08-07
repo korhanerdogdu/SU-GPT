@@ -160,10 +160,46 @@ export interface Course {
   basic_science_ects?: number | null;
   faculty?: string | null;
   status?: "completed" | "enrolled" | "failed" | "withdrawn" | "transfer" | "exempted";
+  grade?: string | null;
   description?: string;
   prerequisites?: string;
   corequisites?: string;
   source_url?: string;
+}
+
+/** The transcript's own grading vocabulary (letter grades + non-GPA administrative codes),
+ *  kept in sync with server/modules/transcript_parser.py's ALL_GRADES. */
+export const ALL_GRADES = [
+  "A", "A-", "B+", "B", "B-", "C+", "C", "C-", "D+", "D", "F",
+  "S", "T", "W", "I", "IP", "P", "NP", "NA", "SL", "UL", "EL", "U",
+] as const;
+export const GPA_ELIGIBLE_GRADES = new Set([
+  "A", "A-", "B+", "B", "B-", "C+", "C", "C-", "D+", "D", "F",
+]);
+
+export interface TranscriptSummary {
+  id: string;
+  filename: string;
+  uploaded_at: string;
+  course_count: number;
+  gpa: number | null;
+  total_su_credits: number | null;
+  total_ects: number | null;
+  warnings: string[];
+}
+
+export interface TranscriptUploadResult {
+  summary: TranscriptSummary;
+  matched_course_codes: string[];
+  unmatched_course_codes: string[];
+  courses: Course[];
+}
+
+export interface GpaResult {
+  gpa: number | null;
+  gpa_eligible_course_count: number;
+  gpa_eligible_su_credits: number;
+  courses: { code: string; title: string; grade: string; su_credits?: number | null }[];
 }
 
 export interface UploadResponse {
@@ -194,28 +230,45 @@ function authHeaders(extra: Record<string, string> = {}): Record<string, string>
   }
 }
 
+/** The active thread id is scoped per logged-in account. A single shared "advisu-session" key
+ *  meant that using the login page's own student/admin demo-account shortcuts in one browser
+ *  reused the other account's thread id -- the backend correctly rejects that as a conversation
+ *  ownership mismatch (403), which read as "queries don't work" until the user manually started
+ *  a new chat. Namespacing by username means switching accounts never collides, and each account
+ *  keeps its own last-active thread. */
+function sessionStorageKey(): string {
+  try {
+    const raw = localStorage.getItem("su-gpt-auth");
+    const username = raw ? (JSON.parse(raw) as { username?: string }).username : null;
+    return username ? `advisu-session:${username}` : "advisu-session";
+  } catch {
+    return "advisu-session";
+  }
+}
+
 function getSessionId(): string {
-  let sid = localStorage.getItem("advisu-session");
+  const key = sessionStorageKey();
+  let sid = localStorage.getItem(key);
   if (!sid) {
     sid = `s-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-    localStorage.setItem("advisu-session", sid);
+    localStorage.setItem(key, sid);
   }
   return sid;
 }
 
 export function resetSession(): void {
-  localStorage.removeItem("advisu-session");
+  localStorage.removeItem(sessionStorageKey());
 }
 
 /** Start a fresh chat thread and return its id. */
 export function startNewSession(): string {
-  localStorage.removeItem("advisu-session");
+  localStorage.removeItem(sessionStorageKey());
   return getSessionId();
 }
 
 /** Switch the active thread to an existing conversation. */
 export function useSession(sessionId: string): void {
-  localStorage.setItem("advisu-session", sessionId);
+  localStorage.setItem(sessionStorageKey(), sessionId);
 }
 
 export function currentSessionId(): string {
@@ -435,14 +488,39 @@ export async function saveUserCourses(
   username: string,
   courseIds: string[],
   statuses: Record<string, Course["status"]> = {},
+  grades: Record<string, string> = {},
 ): Promise<Course[]> {
   const res = await fetch(`${API_URL}/users/${encodeURIComponent(username)}/courses`, {
     method: "PUT",
     headers: authHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify({ course_ids: courseIds, statuses }),
+    body: JSON.stringify({ course_ids: courseIds, statuses, grades }),
   });
   const data = await parseJsonOrThrow<{ courses: Course[] }>(res);
   return data.courses;
+}
+
+/** Uploads an official transcript PDF; the backend parses it and immediately applies every
+ *  recognised course (status + grade) to the student's course history — no separate save step. */
+export async function uploadTranscript(username: string, file: File): Promise<TranscriptUploadResult> {
+  const form = new FormData();
+  form.append("file", file, file.name);
+  const res = await fetch(`${API_URL}/users/${encodeURIComponent(username)}/transcript`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: form,
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail || translate(getStoredLocale(), "errors.http", { status: res.status }));
+  }
+  return res.json() as Promise<TranscriptUploadResult>;
+}
+
+export async function fetchGpa(username: string): Promise<GpaResult> {
+  const res = await fetch(`${API_URL}/users/${encodeURIComponent(username)}/gpa`, {
+    headers: authHeaders(),
+  });
+  return parseJsonOrThrow<GpaResult>(res);
 }
 
 export async function uploadDocuments(files: File[]): Promise<UploadResponse> {

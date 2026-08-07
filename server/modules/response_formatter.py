@@ -75,9 +75,18 @@ def compact_summary(answer: str, *, language: str = "tr", max_chars: int = 420) 
 
 
 def ensure_summary_section(answer: str, *, language: str = "tr") -> tuple[str, str]:
-    """Ensure the legacy markdown response ends with a compact summary section."""
+    """Ensure the legacy markdown response ends with a compact summary section.
+
+    A body that is already a single short sentence (a fixed abstention/refusal message, for
+    example) has nothing left to summarize -- compact_summary's extractive fallback would just
+    reproduce that same sentence, and appending it under a "Short Summary" heading would show
+    the identical sentence twice in one response. Skip the summary section in that case instead
+    of visibly duplicating it.
+    """
     body, summary = split_summary(answer)
     summary = summary or compact_summary(body, language=language)
+    if _plain_text(body) == summary.strip():
+        return body.rstrip(), ""
     heading = "## Kısa Özet" if language == "tr" else "## Short Summary"
     rendered = f"{body.rstrip()}\n\n{heading}\n\n{summary}".strip()
     return rendered, summary

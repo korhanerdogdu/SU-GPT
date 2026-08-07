@@ -55,7 +55,18 @@ function MessageBubble({
   const isUser = message.role === "user";
   const { t } = useLocale();
   return (
-    <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
+    <div className={`flex items-end gap-2.5 ${isUser ? "justify-end" : "justify-start"}`}>
+      {/* Assistant gets a fixed identity chip so a reader scanning the thread never confuses
+          "who said this" — the user's own bubbles are already anchored right, so they don't
+          need a mirrored avatar to read as theirs. */}
+      {!isUser && (
+        <span
+          aria-hidden="true"
+          className="mb-0.5 grid h-10 w-10 shrink-0 place-items-center rounded-full bg-primary/10 text-primary-emphasis"
+        >
+          <img src="/assets/small_witihoutbg.png" alt="" className="h-7 w-7 object-contain" />
+        </span>
+      )}
       <article
         className={`min-w-0 max-w-[92%] px-4 py-3 text-sm leading-relaxed sm:max-w-[86%] ${
           isUser
@@ -164,7 +175,7 @@ function CopyCrns({ crns }: { crns: string[] }) {
       <button
         type="button"
         onClick={copy}
-        className="flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs font-medium text-primary hover:bg-muted"
+        className="flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs font-medium text-primary-emphasis hover:bg-muted"
       >
         {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
         {copied ? t("chat.copied") : t("chat.copyCrns")}
@@ -266,7 +277,7 @@ function MarkdownMessage({ content }: { content: string }) {
         rehypePlugins={[rehypeKatex]}
         components={{
           h2: ({ children }) => (
-            <h2 className="mt-5 border-t border-border pt-4 text-base font-semibold text-primary">
+            <h2 className="mt-5 border-t border-border pt-4 text-base font-semibold text-primary-emphasis">
               {children}
             </h2>
           ),
@@ -285,7 +296,7 @@ function MarkdownMessage({ content }: { content: string }) {
           th: ({ children }) => <th className="px-3 py-2 text-left font-semibold">{children}</th>,
           td: ({ children }) => <td className="border-t border-border px-3 py-2">{children}</td>,
           code: ({ children }) => (
-            <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] text-primary">
+            <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] text-primary-emphasis">
               {children}
             </code>
           ),

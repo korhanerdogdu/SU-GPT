@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import LanguageToggle from "@/components/LanguageToggle";
+import ThemeToggle from "@/components/ThemeToggle";
 import HelpButton from "@/components/HelpButton";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLocale } from "@/contexts/LocaleContext";
@@ -113,10 +114,11 @@ export default function CourseReviewPolicyPage() {
           <div className="flex items-center gap-2">
             <HelpButton />
             <LanguageToggle />
+            <ThemeToggle />
           </div>
         </div>
         {loading && <p role="status">{t("common.loading")}</p>}
-        {loadError && <p role="alert" className="rounded-md bg-destructive/10 p-3 text-destructive">{t("review.loadError")}</p>}
+        {loadError && <p role="alert" className="rounded-md bg-destructive/10 p-3 text-destructive-emphasis">{t("review.loadError")}</p>}
         {!loading && !loadError && !policy?.enabled && (
           <p className="rounded-md bg-warning/10 p-3 font-medium text-warning">{t("policy.status")}</p>
         )}
@@ -128,10 +130,10 @@ export default function CourseReviewPolicyPage() {
         {policy?.enabled && (
           <section className="mt-8 border-t border-border pt-7" aria-labelledby="review-form-title">
             <h2 id="review-form-title" className="text-xl font-bold text-foreground">{t("review.title")}</h2>
-            <p className="mt-2 rounded-md bg-primary/10 p-3 text-primary">{t("review.courseOnly")}</p>
-            <a href="#privacy" className="mt-2 inline-block text-sm text-primary underline">{t("review.privacyLink")}</a>
+            <p className="mt-2 rounded-md bg-primary/10 p-3 text-primary-emphasis">{t("review.courseOnly")}</p>
+            <a href="#privacy" className="mt-2 inline-block text-sm text-primary-emphasis underline">{t("review.privacyLink")}</a>
             {!isAuthenticated ? (
-              <p className="mt-5"><Link to="/login" className="text-primary underline">{t("review.signIn")}</Link></p>
+              <p className="mt-5"><Link to="/login" className="text-primary-emphasis underline">{t("review.signIn")}</Link></p>
             ) : (
               <form className="mt-5 space-y-5" onSubmit={onSubmit}>
                 <label className="block font-medium">
@@ -153,7 +155,7 @@ export default function CourseReviewPolicyPage() {
                       {[1, 2, 3, 4, 5].map((score) => (
                         <label
                           key={score}
-                          className="flex min-h-[2rem] min-w-[2rem] cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-border px-2.5 py-1 has-[:checked]:border-primary has-[:checked]:bg-primary/10 has-[:checked]:text-primary hover:bg-muted"
+                          className="flex min-h-[2rem] min-w-[2rem] cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-border px-2.5 py-1 has-[:checked]:border-primary-emphasis has-[:checked]:bg-primary/10 has-[:checked]:text-primary-emphasis hover:bg-muted"
                         >
                           <input
                             type="radio"
@@ -197,7 +199,7 @@ export default function CourseReviewPolicyPage() {
                       type="button"
                       disabled={deleting}
                       onClick={onDelete}
-                      className="rounded-lg border border-destructive/40 px-4 py-2 text-destructive disabled:opacity-50"
+                      className="rounded-lg border border-destructive/40 px-4 py-2 text-destructive-emphasis disabled:opacity-50"
                     >
                       {t(deleting ? "review.deleting" : "review.delete")}
                     </button>
@@ -234,7 +236,7 @@ export default function CourseReviewPolicyPage() {
             )}
           </section>
         )}
-        <Link to="/login" className="mt-7 inline-block font-medium text-primary underline">
+        <Link to="/login" className="mt-7 inline-block font-medium text-primary-emphasis underline">
           {t("policy.back")}
         </Link>
       </article>

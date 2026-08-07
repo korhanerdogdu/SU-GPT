@@ -347,15 +347,15 @@ export default function LoginPage() {
             <p className="font-ledger text-[0.66rem] uppercase tracking-[0.14em] text-muted-foreground">
               {t("login.demoHeading")}
             </p>
-            <dl className="mt-2.5 space-y-1.5 font-ledger text-[0.78rem]">
-              <div className="flex items-center gap-3">
+            <dl className="mt-2.5 space-y-2 font-ledger text-[0.78rem]">
+              <div className="flex items-center gap-3 rounded-xl border border-border bg-muted/40 px-3 py-2.5">
                 <dt className="flex w-[7.5rem] shrink-0 items-center gap-2 text-muted-foreground">
                   <UserRound className="h-3.5 w-3.5 shrink-0" />
                   {t("login.demoAccounts")}
                 </dt>
                 <dd className="border-l border-border pl-3">student / student</dd>
               </div>
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 rounded-xl border border-border bg-muted/40 px-3 py-2.5">
                 <dt className="flex w-[7.5rem] shrink-0 items-center gap-2 text-muted-foreground">
                   <KeyRound className="h-3.5 w-3.5 shrink-0" />
                   {t("login.adminAccount")}

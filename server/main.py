@@ -26,6 +26,7 @@ from modules.file_lifecycle import (
 from modules.intent_detector import get_intent
 from modules.llm import answer_without_context_with_telemetry, detect_language, get_llm_chain
 from modules.auth import AuthenticationError, Principal, bearer_token, issue_token, verify_token
+from modules.claim_coverage import claim_coverage_supported
 from modules.confidence import ConfidenceSignals, assess as assess_confidence
 from modules.guardrails import (
     assess_input,
@@ -85,15 +86,19 @@ from modules.course_reviews import DuplicateReviewError, ReviewValidationError
 from modules import retrieval_modes
 from modules.catalog_retriever import retrieve_documents
 from modules.mongodb import (
+    apply_transcript_courses,
+    compute_gpa,
     ensure_database,
     ensure_user,
     get_academic_profile,
     get_completed_course_codes,
+    get_latest_transcript_summary,
     get_user_course_context,
     get_user_courses,
     get_user_schedule,
     list_courses,
     mutate_user_courses_by_codes,
+    save_transcript,
     seed_courses_from_catalog,
     set_academic_profile,
     set_user_courses,
@@ -101,6 +106,8 @@ from modules.mongodb import (
     ScheduleRevisionConflict,
     course_reviews as course_review_collection,
 )
+from modules import transcript_parser
+from modules import gpa_planner
 from modules.course_commands import parse_course_history_command
 from modules.profile_commands import parse_academic_profile_command, resolve_profile_update
 from modules.export_utils import audit_rows, course_rows, rows_to_csv, rows_to_xlsx
@@ -161,6 +168,9 @@ class CourseSelectionPayload(BaseModel):
         str,
         Literal["completed", "enrolled", "failed", "withdrawn", "transfer", "exempted"],
     ] = Field(default_factory=dict)
+    # optional per-course letter/administrative grade (course_id -> "A-", "B+", "S", ...);
+    # validated server-side against the transcript's own grading vocabulary.
+    grades: dict[str, str] = Field(default_factory=dict)
 
 
 class AcademicProfilePayload(BaseModel):
@@ -168,7 +178,7 @@ class AcademicProfilePayload(BaseModel):
     degree_code: str | None = None
     admission_term: str | None = None
     curriculum_term: str | None = None
-    academic_year: int | None = Field(default=None, ge=1, le=6)
+    academic_year: int | None = Field(default=None, ge=1, le=8)
     minor_codes: list[str] | None = None
 
 
@@ -248,6 +258,7 @@ class ScheduleSavePayload(BaseModel):
 GRADUATION_INTENT_RE = re.compile(
     r"\b("
     r"mezuniyet|mezun|kredi|credit|credits|degree evaluation|degree audit|audit|"
+    r"degree progress|academic progress|graduation progress|"
     r"kalan ders|kalan kredi|requirements?|requirement|kategori|dağılım|dagilim|"
     r"hangi derslerim sayıldı|hangi derslerim sayildi"
     r")",
@@ -294,12 +305,25 @@ SCHEDULE_INTENT_RE = re.compile(
 # existing prerequisite-aware course-plan flow.
 CURRENT_TERM_SCHEDULE_RE = re.compile(
     r"\b(?:bu|içinde bulunduğum|icinde bulundugum)\s+dönem\s+hangi\s+dersleri?\s+"
-    r"(?:alayım|alayim|almalıyım|almaliyim)\b|\bwhat\s+courses?\s+should\s+i\s+take\s+this\s+term\b",
+    r"(?:alayım|alayim|almalıyım|almaliyim)\b|"
+    r"\b(?:what|which)\s+courses?\s+should\s+i\s+take\s+this\s+term\b",
     re.IGNORECASE,
 )
 UNTIL_GRAD_RECOMMENDATION_RE = re.compile(
     r"\bmezun\s+olana\s+kadar\s+hangi\s+dersleri?\s+(?:alayım|alayim|almalıyım|almaliyim)\b|"
-    r"\bwhat\s+courses?\s+should\s+i\s+take\s+until\s+i\s+graduate\b",
+    r"\bwhat\s+(?:courses?\s+)?should\s+i\s+take\s+until\s+(?:i\s+graduate|graduation)\b",
+    re.IGNORECASE,
+)
+
+# A reply that edits an already-shown schedule/recommendation rather than asking a new question.
+# Deliberately about the *action* (complete/swap/add to an existing plan), not about credits or
+# course codes in the abstract, so it never fires on a genuinely new "how many credits do I have
+# left" question asked cold (no previous_intent gate needed there -- the caller already requires
+# previous_intent to be WEEKLY_SCHEDULE/COURSE_RECOMMENDATION before using this).
+SCHEDULE_FOLLOWUP_RE = re.compile(
+    r"\b(?:tamamla|tamamlar\s*mısın|ekle|ekler\s*misin|çıkar|cikar|yerine|değiştir|degistir|"
+    r"yerleştir|yerlestir|yaz(?:abilirsin)?|dahil\s+et|"
+    r"add|swap|replace|instead|complete\s+(?:it|the\s+schedule|to)|fill\s+(?:it|the\s+rest))\b",
     re.IGNORECASE,
 )
 
@@ -516,6 +540,13 @@ def _interest_label(question: str) -> str | None:
     return INTEREST_ALIASES[key][0]
 
 
+def _resolve_interest_key(question: str, working_context: dict | None) -> str | None:
+    """A stated interest area must survive longer than conversation_memory's own 5-turn rolling
+    window: once named, a later turn in the same session that doesn't repeat it should still use
+    it rather than silently falling back to a generic plan."""
+    return _extract_interest_key(question) or (working_context or {}).get("last_interest_key")
+
+
 def _is_short_interest_phrase(question: str) -> bool:
     normalized = re.sub(r"\s+", " ", (question or "").strip().lower())
     if len(normalized) > 120 or not _extract_interest_key(normalized):
@@ -569,6 +600,16 @@ def _resolve_intent(
         r"\b(?:sonraki|gelecek)\s+dönem\b|\bnext semester\b", normalized
     ):
         return intents.GRADUATION_PLAN
+    # A short "complete/swap/add" reply to an already-shown schedule or recommendation must keep
+    # editing that same plan, not get reclassified by a bare keyword match elsewhere in this
+    # chain -- "15 krediye tamamla" contains "kredi", which GRADUATION_INTENT_RE also matches
+    # (Turkish inflection makes a trailing \b useless here: "krediye" always contains "kredi" as
+    # a substring), so without this guard a scheduling follow-up silently became a graduation
+    # audit request instead of continuing the plan.
+    if previous_intent in {intents.WEEKLY_SCHEDULE, intents.COURSE_RECOMMENDATION} and SCHEDULE_FOLLOWUP_RE.search(
+        normalized
+    ):
+        return previous_intent
     if MINOR_INTENT_RE.search(question or ""):
         return intents.MINOR
     if CURRENT_TERM_SCHEDULE_RE.search(question or ""):
@@ -1672,7 +1713,61 @@ async def get_selected_courses(username: str, request: Request):
 @app.put("/users/{username}/courses")
 async def save_selected_courses(username: str, payload: CourseSelectionPayload, request: Request):
     _authorize_user(request, username)
-    return {"courses": await set_user_courses(username, payload.course_ids, payload.statuses)}
+    try:
+        courses = await set_user_courses(username, payload.course_ids, payload.statuses, payload.grades)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"courses": courses}
+
+
+@app.post("/users/{username}/transcript")
+async def upload_transcript(username: str, request: Request, file: UploadFile = File(...)):
+    """Parse an official Sabanci transcript PDF and immediately apply its completed courses +
+    grades to the student's course history -- no separate "add" step. The upload itself and a
+    parse summary are stored for provenance; the courses are the source of truth from then on.
+    """
+    _authorize_user(request, username)
+    if (file.content_type or "").lower() not in ("application/pdf", "application/x-pdf", "binary/octet-stream"):
+        raise HTTPException(status_code=400, detail="Only PDF transcripts are supported")
+    pdf_bytes = await file.read()
+    max_bytes = 15 * 1024 * 1024
+    if len(pdf_bytes) > max_bytes:
+        raise HTTPException(status_code=400, detail="Transcript file is too large")
+    try:
+        parsed = transcript_parser.parse_transcript(pdf_bytes)
+    except Exception as exc:  # pypdf raises assorted, undocumented exceptions on malformed PDFs
+        logger.warning("Transcript parse failed for %s: %s", username, exc)
+        raise HTTPException(status_code=422, detail="Could not read this PDF as a Sabanci transcript") from exc
+    if not parsed.courses:
+        raise HTTPException(status_code=422, detail="No courses were recognised in this transcript")
+
+    summary = await save_transcript(
+        username,
+        filename=file.filename or "transcript.pdf",
+        content_type=file.content_type or "application/pdf",
+        pdf_bytes=pdf_bytes,
+        parsed=parsed,
+    )
+    applied = await apply_transcript_courses(username, parsed.courses)
+    return {
+        "summary": summary,
+        "matched_course_codes": applied["matched"],
+        "unmatched_course_codes": applied["unmatched"],
+        "courses": applied["courses"],
+    }
+
+
+@app.get("/users/{username}/transcript")
+async def get_transcript_summary(username: str, request: Request):
+    _authorize_user(request, username)
+    summary = await get_latest_transcript_summary(username)
+    return {"transcript": summary}
+
+
+@app.get("/users/{username}/gpa")
+async def get_user_gpa(username: str, request: Request):
+    _authorize_user(request, username)
+    return await compute_gpa(username)
 
 
 @app.get("/users/{username}/schedule")
@@ -1877,25 +1972,33 @@ async def ask_question(
         # otherwise a bearer-less caller could append to or later claim a guessed session ID.
         session_id = None
 
-    try:
-        admission = resource_controller.begin(
-            username=username,
-            client_address=request.client.host if request.client else None,
-            reservation=UsageReservation(
-                provider_requests=1,
-                # Character counts intentionally overestimate tokens.  The bounded retrieval
-                # context and retry ceiling prevent in-flight requests from crossing the daily
-                # token budget before provider telemetry can be reconciled.
-                tokens=(
-                    min(len(original_question), MAX_INPUT_CHARS)
-                    + context_top_k * 1_600
-                    + MAX_OUTPUT_TOKENS
-                ) * (LLM_MAX_RETRIES + 1),
-                cost_microusd=PROVIDER_REQUEST_COST_RESERVATION_MICROUSD,
-            ),
-        )
-    except ResourceLimitError as exc:
-        raise _resource_limit_http_exception(exc, language=language) from exc
+    # The operator account is exempt from the daily/per-minute admission gate entirely -- it is
+    # used for testing and demoing the product itself, not by an anonymous or student caller the
+    # quota exists to protect against. finish() below still records its usage for observability;
+    # only the *enforcing* admission check is skipped.
+    is_admin_caller = username is not None and username == ADMIN_USERNAME
+    if is_admin_caller:
+        admission = None
+    else:
+        try:
+            admission = resource_controller.begin(
+                username=username,
+                client_address=request.client.host if request.client else None,
+                reservation=UsageReservation(
+                    provider_requests=1,
+                    # Character counts intentionally overestimate tokens.  The bounded retrieval
+                    # context and retry ceiling prevent in-flight requests from crossing the daily
+                    # token budget before provider telemetry can be reconciled.
+                    tokens=(
+                        min(len(original_question), MAX_INPUT_CHARS)
+                        + context_top_k * 1_600
+                        + MAX_OUTPUT_TOKENS
+                    ) * (LLM_MAX_RETRIES + 1),
+                    cost_microusd=PROVIDER_REQUEST_COST_RESERVATION_MICROUSD,
+                ),
+            )
+        except ResourceLimitError as exc:
+            raise _resource_limit_http_exception(exc, language=language) from exc
 
     try:
         logger.info("user query received (mode=%s, top_k=%s)", retrieval_mode, context_top_k)
@@ -2168,11 +2271,14 @@ async def ask_question(
                 "confidence": _confidence_public("profile_required"),
             })
         if intent == "review":
-            # Legacy instructor-review/chat-group data is outside the consent and product boundary.
-            # Until the course-only review feature is explicitly released, do not retrieve or
-            # summarize that corpus.
+            # Legacy instructor-review/chat-group data is outside the consent and product boundary,
+            # and this also catches gossip/rumor-flavored questions about an instructor (opinion
+            # words like "nasıl biri"/"zor mu" or a named instructor). Either way, no instructor
+            # opinion corpus is retrieved or summarized -- but the redirect is a warm, human
+            # sentence rather than an internal-sounding "feature is disabled" message, since a
+            # student asking this is not the audience for that detail.
             return _stamp({
-                "response": localized_message("course_reviews.disabled", language),
+                "response": localized_message("chat.instructor_opinion_redirect", language),
                 "sources": [],
                 "source_chunk_ids": [],
                 "intent": "review_disabled",
@@ -2200,9 +2306,20 @@ async def ask_question(
         # already abstained at the fail-closed profile gate above and never reach the LLM.
         if recommendation_intent and program and profile.get("curriculum_term") and username:
             completed = await get_completed_course_codes(username)
-            interest_key = _extract_interest_key(question)
+            interest_key = _resolve_interest_key(question, wc)
             interest_codes = list(INTEREST_COURSE_HINTS.get(interest_key or "", []))
-            target_courses, minimum_su, strict_count = _recommendation_preferences(question)
+            # "Mezun olana kadar hangi dersleri almalıyım" is a different question from "what
+            # should I take next term": it wants the full remaining roadmap across every
+            # category, not one 15-SU-floored, registration-ready term. Detected from either the
+            # current message or a same-topic follow-up (last_interest_key/active_topic already
+            # carry the rest of the context forward the same way interest does).
+            until_graduation_mode = bool(
+                UNTIL_GRAD_RECOMMENDATION_RE.search(original_question)
+            ) or wc.get("active_topic") == "graduation_roadmap"
+            if until_graduation_mode:
+                target_courses, minimum_su, strict_count = 20, 0, False
+            else:
+                target_courses, minimum_su, strict_count = _recommendation_preferences(question)
             plan = course_planner.build_plan(
                 program,
                 profile["curriculum_term"],
@@ -2211,12 +2328,18 @@ async def ask_question(
                 target=target_courses,
                 minimum_su_credits=minimum_su,
                 exact_course_count=strict_count,
+                max_courses=20 if until_graduation_mode else 8,
+                balance_by_subject=not until_graduation_mode,
                 academic_year=profile.get("academic_year"),
             )
             plan_errors = course_planner.validate_proposed_plan(
                 [{"code": item.code} for item in plan.recommended],
                 completed_codes=completed,
                 stage=plan.stage,
+                # The default 18-SU ceiling is a single-term sanity check; a full until-graduation
+                # roadmap is expected to exceed it (that is the whole point of asking for it), so
+                # it must not be validated against a per-term limit it was never trying to meet.
+                maximum_su_credits=999 if until_graduation_mode else 18,
             )
             if not plan.has_official_data:
                 return _stamp({
@@ -2235,22 +2358,42 @@ async def ask_question(
                     "intent": intents.COURSE_RECOMMENDATION,
                     "confidence": _confidence_public("cannot_verify"),
                 })
+            # Derive the display label from the already-resolved interest_key (current question
+            # or the persisted fallback), not by re-parsing only the current question -- a later
+            # turn using the carried-over interest must still show which area it applied.
+            interest_display_label = INTEREST_ALIASES[interest_key][0] if interest_key in INTEREST_ALIASES else None
             body, summary = course_planner.render_plan(
-                plan, language=language, interest_label=_interest_label(question)
+                plan,
+                language=language,
+                interest_label=interest_display_label,
+                until_graduation=until_graduation_mode,
             )
             rec_result = _stamp({
                 "response": body,
                 "summary": summary,
-                "structured_content": course_planner.plan_structured_content(plan, language=language),
-                "sources": ["Deterministic academic-stage planner"],
+                # The full-roadmap answer is a plain list by request -- a per-term registration
+                # table (CRN-shaped columns) doesn't fit "what's left until graduation."
+                "structured_content": (
+                    None if until_graduation_mode
+                    else course_planner.plan_structured_content(plan, language=language)
+                ),
+                "sources": [
+                    "Deterministic academic-stage planner",
+                    f"degree_requirements/{program}/{profile['curriculum_term']}.jsonl",
+                ],
                 "source_chunk_ids": [],
                 "intent": intents.COURSE_RECOMMENDATION,
                 "confidence": _confidence_public("verified"),
             })
+            context_updates = {
+                "active_topic": "graduation_roadmap" if until_graduation_mode else "course_recommendation",
+            }
+            if interest_key:
+                context_updates["last_interest_key"] = interest_key
             await conversation_memory.append_turn(
                 session_id, username=username, question=original_question, answer=body,
                 intent=intents.COURSE_RECOMMENDATION, term_code=profile.get("curriculum_term"),
-                working_context_updates={"active_topic": "course_recommendation"},
+                working_context_updates=context_updates,
             )
             return rec_result
 
@@ -2272,21 +2415,33 @@ async def ask_question(
             # Build a bounded candidate pool, then let the timetable solver choose the smallest
             # conflict-free subset that still satisfies the requested 15/18-SU load. This avoids
             # silently losing credits when one otherwise-good course combination has no compatible
-            # section assignment.
+            # section assignment. The pool itself is deliberately wide and not subject-balanced:
+            # the final schedule is still shaped by target_courses/minimum_su below, but a
+            # pre-filtered "max 2 per subject" candidate list was starving the conflict solver of
+            # real alternatives whenever a couple of those two had a time clash with each other,
+            # reporting an unmet 15-SU floor even when a wider, still-eligible pool would clear it.
             plan = course_planner.build_plan(
                 program,
                 profile["curriculum_term"],
                 completed,
                 interest_codes,
-                target=max(target_courses, 8),
+                target=max(target_courses, 15),
                 minimum_su_credits=minimum_su,
                 exact_course_count=False,
+                max_courses=20,
+                balance_by_subject=False,
                 academic_year=profile.get("academic_year"),
             )
             plan_errors = course_planner.validate_proposed_plan(
                 [{"code": item.code} for item in plan.recommended],
                 completed_codes=completed,
                 stage=plan.stage,
+                # This validates the raw, deliberately-wide candidate *pool* the conflict solver
+                # chooses from (up to 20 courses), not the final timetable -- that is still bounded
+                # to target_courses/minimum_su_credits by build_timetable_for_load below. Checking
+                # the pool itself against a single-term 18-SU ceiling rejected the whole pool
+                # outright as soon as it was widened past a handful of courses.
+                maximum_su_credits=999,
             )
             if not plan.has_official_data:
                 return _stamp({
@@ -2334,7 +2489,10 @@ async def ask_question(
                 "structured_content": schedule_planner.timetable_structured_content(
                     timetable, language=language
                 ),
-                "sources": ["Sabancı SUIS course schedule (official)"],
+                "sources": [
+                    "Sabancı SUIS course schedule (official)",
+                    f"degree_requirements/{program}/{profile['curriculum_term']}.jsonl",
+                ],
                 "source_chunk_ids": [],
                 "intent": intents.WEEKLY_SCHEDULE,
                 "confidence": _confidence_public("verified"),
@@ -2382,6 +2540,61 @@ async def ask_question(
                 term_code=profile.get("curriculum_term"),
             )
             return uni_result
+
+        # "What would my GPA become" is deterministic credit-weighted arithmetic over the
+        # student's own course-history grades (modules.mongodb.compute_gpa), never a model guess.
+        # Only needs course history, not a curriculum profile, so it runs before the
+        # program/curriculum_term-gated graduation branch below.
+        if gpa_planner.is_gpa_projection_query(original_question) and username:
+            gpa_data = await compute_gpa(username)
+            gpa_courses_by_code = {c["code"]: c for c in gpa_data["courses"]}
+            current_points = sum(
+                transcript_parser.GRADE_POINTS[c["grade"]] * (c.get("su_credits") or 0)
+                for c in gpa_data["courses"]
+            )
+            current_credit = float(gpa_data["gpa_eligible_su_credits"])
+            display_credit = current_credit  # the student's real total, shown regardless of any
+                                              # re-grade adjustment made to current_credit below
+
+            specific_pairs = gpa_planner.parse_specific_scenarios(original_question)
+            bulk = gpa_planner.parse_bulk_scenario(original_question) if not specific_pairs else None
+            specific = [
+                (code, grade, gpa_planner.course_su_credits(code, course_planner.resolve))
+                for code, grade in specific_pairs
+            ]
+            # A course already on the transcript is being re-graded, not taken a second time:
+            # pull its existing grade back out of the current totals first, so a hypothetical for
+            # an already-completed course replaces that grade instead of stacking a duplicate
+            # attempt at the same credit on top of it.
+            for code, _grade, su in specific:
+                existing = gpa_courses_by_code.get(code)
+                if existing:
+                    current_points -= transcript_parser.GRADE_POINTS[existing["grade"]] * (existing.get("su_credits") or 0)
+                    current_credit -= float(existing.get("su_credits") or 0)
+
+            body = gpa_planner.render_projection(
+                current_gpa=gpa_data["gpa"],
+                current_points=current_points,
+                current_credit=current_credit,
+                specific=specific,
+                bulk=bulk,
+                default_scenarios=not specific and not bulk,
+                language=language,
+                display_credit=display_credit,
+            )
+            gpa_result = _stamp({
+                "response": body,
+                "sources": ["Deterministic GPA projection (student's own course-history grades)"],
+                "source_chunk_ids": [],
+                "intent": intents.GPA_PROJECTION,
+                "confidence": _confidence_public("verified"),
+            })
+            await conversation_memory.append_turn(
+                session_id, username=username, question=original_question,
+                answer=body, intent=intents.GPA_PROJECTION,
+                term_code=profile.get("curriculum_term"),
+            )
+            return gpa_result
 
         # Graduation arithmetic and its immediate follow-ups are deterministic. This keeps
         # context stable and prevents implementation narration from leaking into the answer.
@@ -2628,6 +2841,13 @@ async def ask_question(
             for doc in safe_evidence_docs
             if isinstance(doc.metadata.get("_score"), (int, float))
         ]
+        # Deterministic lexical grounding check (modules/claim_coverage.py): an authorized
+        # citation label only proves a document was retrieved, not that its content backs every
+        # sentence the model wrote, so this actually checks the raw answer against the evidence
+        # text rather than leaving claim_coverage_checked permanently False.
+        claims_supported = claim_coverage_supported(
+            raw_answer, [doc.page_content for doc in safe_evidence_docs]
+        )
         confidence = assess_confidence(
             ConfidenceSignals(
                 intent=intent,
@@ -2639,7 +2859,8 @@ async def ask_question(
                 citations_required=True,
                 citations_present=bool(result.get("sources") or result.get("source_chunk_ids")),
                 citations_authorized=output_validation.safe and returned_sources_authorized,
-                claim_coverage_checked=False,
+                claim_coverage_checked=True,
+                claims_supported=claims_supported,
                 output_schema_valid=bool(raw_answer.strip()),
                 output_language_match=_output_language_matches(raw_answer, language),
                 guardrail_passed=guardrail_passed,
@@ -2647,6 +2868,13 @@ async def ask_question(
                 fallback_used=bool((provider_telemetry or {}).get("fallback_used")),
             )
         )
+        if confidence.status not in {"verified"}:
+            # Structured reason codes only (e.g. "citations_missing", "unsupported_claims") --
+            # never the raw answer or provider text -- so a non-"verified" outcome is
+            # diagnosable from logs alone instead of only being visible as an opaque status.
+            logger.info(
+                "confidence status=%s reasons=%s", confidence.status, confidence.reason_codes,
+            )
         if confidence.answer_allowed:
             if recommendation_intent:
                 result = _clean_recommendation_response(result)

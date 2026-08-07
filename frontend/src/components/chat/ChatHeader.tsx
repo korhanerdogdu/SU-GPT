@@ -19,7 +19,8 @@ export default function ChatHeader({ profileReady, onOpenMenu, usage }: ChatHead
   return (
     <header className="border-b border-border bg-card/90 backdrop-blur-xl">
       <div className="flex items-center gap-3 px-4 py-3 md:px-6">
-        <UsageMeter usage={usage} />
+        {/* Sidebar toggle sits at the leading edge — the one place every chat UI convention
+            (and Fitts's law) says an edge-anchored menu control belongs. */}
         <button
           type="button"
           onClick={onOpenMenu}
@@ -36,6 +37,7 @@ export default function ChatHeader({ profileReady, onOpenMenu, usage }: ChatHead
             {t("chat.subtitle")}
           </p>
         </div>
+        <UsageMeter usage={usage} />
         <button
           type="button"
           onClick={cycleTheme}

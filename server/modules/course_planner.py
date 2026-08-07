@@ -393,12 +393,18 @@ def analyze(
 def build_plan(program: str, term: str | None, completed_codes: list[str],
                interest_codes: list[str] | None = None, target: int = 5,
                minimum_su_credits: int = 15, exact_course_count: bool = False,
-               max_courses: int = 8, academic_year: int | None = None) -> PlanResult:
+               max_courses: int = 8, academic_year: int | None = None,
+               balance_by_subject: bool = True) -> PlanResult:
     """The balanced, prerequisite-checked next-semester plan (deterministic).
 
     ``target`` is a soft course-count target unless the student explicitly supplied a hard
     four-or-fewer-course limit. A normal plan continues until it reaches at least 15 SU; a heavy
     plan passes 18 here. This makes the credit rule executable rather than prompt-only guidance.
+
+    ``balance_by_subject`` caps any one subject prefix at two courses -- the right call for a
+    single term (three MATH courses in one term is an unrealistic schedule), but wrong for a
+    full until-graduation roadmap, where most of what is left is legitimately in the student's
+    own major prefix. Callers building a multi-term roadmap should pass ``False``.
     """
     program = (program or "").strip().upper()
     a = analyze(program, completed_codes, term, academic_year)
@@ -503,7 +509,7 @@ def build_plan(program: str, term: str | None, completed_codes: list[str],
         if len(selected) >= hard_limit or target_reached() or item.code in seen or item.code in completed:
             return False
         subj = subject(item.code)
-        if cap_subject and subject_count.get(subj, 0) >= 2:
+        if cap_subject and balance_by_subject and subject_count.get(subj, 0) >= 2:
             return False
         selected.append(item)
         seen.add(item.code)
@@ -646,8 +652,22 @@ def plan_structured_content(plan: PlanResult, *, language: str = "tr") -> dict |
     }
 
 
-def render_plan(plan: PlanResult, *, language: str = "tr", interest_label: str | None = None) -> tuple[str, str]:
-    """Deterministic (body, summary). The LLM never sees or rewrites this."""
+def render_plan(
+    plan: PlanResult,
+    *,
+    language: str = "tr",
+    interest_label: str | None = None,
+    until_graduation: bool = False,
+) -> tuple[str, str]:
+    """Deterministic (body, summary). The LLM never sees or rewrites this.
+
+    ``until_graduation`` switches the framing from "next term's balanced schedule" (a small,
+    15-SU-floored set meant to actually be registered for) to "the full remaining roadmap" (every
+    still-eligible requirement across categories, with no term-sized credit ceiling) -- the two
+    are different questions ("what do I take next term" vs "what's left until I graduate") and
+    conflating them under one plan size was the reason "mezun olana kadar" answers looked like an
+    ordinary single-term suggestion instead of a roadmap.
+    """
     tr = language == "tr"
     lines: list[str] = []
 
@@ -661,11 +681,19 @@ def render_plan(plan: PlanResult, *, language: str = "tr", interest_label: str |
         )
         return msg, msg
 
-    intro = (
-        "Gelecek dönem için önerilen, önkoşulları uygun ve zorluk açısından dengeli ders programın:"
-        if tr else
-        "Your recommended, prerequisite-eligible and difficulty-balanced plan for next term:"
-    )
+    if until_graduation:
+        intro = (
+            "Mezun olana kadar almanı önerdiğim, önkoşulları uygun dersler (tüm kalan kategoriler):"
+            if tr else
+            "The prerequisite-eligible courses I'd recommend taking until you graduate (across all "
+            "remaining categories):"
+        )
+    else:
+        intro = (
+            "Gelecek dönem için önerilen, önkoşulları uygun ve zorluk açısından dengeli ders programın:"
+            if tr else
+            "Your recommended, prerequisite-eligible and difficulty-balanced plan for next term:"
+        )
     lines.append(intro)
     lines.append("")
     for i, item in enumerate(plan.recommended, 1):
@@ -719,13 +747,20 @@ def render_plan(plan: PlanResult, *, language: str = "tr", interest_label: str |
     su_total = sum(it.su for it in plan.recommended)
     first = ", ".join(resolve(it.code)["display_code"] if resolve(it.code) else display_code(it.code)
                       for it in plan.recommended)
-    summary = (
-        f"Gelecek dönem için {len(plan.recommended)} derslik dengeli bir program öneriyorum: {first} "
-        f"(~{su_total} SU)."
-        if tr else
-        f"I recommend a balanced {len(plan.recommended)}-course plan for next term: {first} "
-        f"(~{su_total} SU)."
-    )
+    if until_graduation:
+        summary = (
+            f"Mezun olana kadar {len(plan.recommended)} ders almanı öneriyorum: {first} (~{su_total} SU)."
+            if tr else
+            f"I recommend {len(plan.recommended)} courses until you graduate: {first} (~{su_total} SU)."
+        )
+    else:
+        summary = (
+            f"Gelecek dönem için {len(plan.recommended)} derslik dengeli bir program öneriyorum: {first} "
+            f"(~{su_total} SU)."
+            if tr else
+            f"I recommend a balanced {len(plan.recommended)}-course plan for next term: {first} "
+            f"(~{su_total} SU)."
+        )
     return "\n".join(lines).strip(), summary
 
 

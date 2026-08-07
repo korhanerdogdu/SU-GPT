@@ -37,14 +37,14 @@ COPY --chown=advisu:advisu data/ /app/data/
 COPY --chown=advisu:advisu server/docker-entrypoint.sh /usr/local/bin/advisu-entrypoint
 
 RUN chmod 0755 /usr/local/bin/advisu-entrypoint \
-    && mkdir -p /app/chroma_store /app/uploaded_documents /app/sources /app/.cache/huggingface \
+    && mkdir -p /app/chroma_store /app/uploaded_documents /app/sources /app/.cache/huggingface /app/outputs/retrieval_cache \
     && chown -R advisu:advisu /app
 
 USER advisu
 
 EXPOSE 8000 10000
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=5 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=900s --retries=5 \
     CMD python -c "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/test' % os.getenv('PORT', '8000'), timeout=3)" || exit 1
 
 ENTRYPOINT ["advisu-entrypoint"]

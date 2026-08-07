@@ -15,14 +15,23 @@ single corpus fingerprint identifies every experiment run against it.
 
 import hashlib
 import json
+import os
 from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
 from typing import Any, Iterable
 
+# A production container build (server/Dockerfile) COPYs the contents of server/ directly to
+# /app, flattening the local-checkout layout this parents[1] climb assumes: locally
+# server/retrieval_lab/corpus.py -> parents[1] is the repo's "server" dir, one more level up is
+# the real project root; in the image server/retrieval_lab/corpus.py -> parents[1] is already
+# "/app" (there is no further "server" to climb past), so blindly taking .parent lands on "/" and
+# DATA_DIR silently becomes "/data" -- present nowhere, so every request falls back to a much
+# weaker retriever with no error surfaced to the user. modules/config.py already guards this the
+# same way; DEGREE_DATA_DIR (set explicitly in docker-compose.yml) takes priority over either.
 SERVER_ROOT = Path(__file__).resolve().parents[1]
-PROJECT_ROOT = SERVER_ROOT.parent
-DATA_DIR = PROJECT_ROOT / "data"
+PROJECT_ROOT = SERVER_ROOT.parent if SERVER_ROOT.name == "server" else SERVER_ROOT
+DATA_DIR = Path(os.getenv("DEGREE_DATA_DIR", str(PROJECT_ROOT / "data")))
 
 
 @dataclass(slots=True)
