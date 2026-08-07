@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useLocale } from "@/contexts/LocaleContext";
 import LanguageToggle from "@/components/LanguageToggle";
+import HelpButton from "@/components/HelpButton";
 import UsageMeter from "./UsageMeter";
 import type { UsageStatus } from "@/lib/api";
 
@@ -18,7 +19,8 @@ export default function ChatHeader({ profileReady, onOpenMenu, usage }: ChatHead
   return (
     <header className="border-b border-border bg-card/90 backdrop-blur-xl">
       <div className="flex items-center gap-3 px-4 py-3 md:px-6">
-        <UsageMeter usage={usage} />
+        {/* Sidebar toggle sits at the leading edge — the one place every chat UI convention
+            (and Fitts's law) says an edge-anchored menu control belongs. */}
         <button
           type="button"
           onClick={onOpenMenu}
@@ -35,6 +37,7 @@ export default function ChatHeader({ profileReady, onOpenMenu, usage }: ChatHead
             {t("chat.subtitle")}
           </p>
         </div>
+        <UsageMeter usage={usage} />
         <button
           type="button"
           onClick={cycleTheme}
@@ -48,18 +51,19 @@ export default function ChatHeader({ profileReady, onOpenMenu, usage }: ChatHead
             <Sun className="h-4 w-4" />
           )}
         </button>
+        <HelpButton />
         <LanguageToggle />
       </div>
 
       {!profileReady && (
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-amber-400/30 bg-amber-400/10 px-4 py-2.5 md:px-6">
-          <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-600" />
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-warning/30 bg-warning/10 px-4 py-2.5 md:px-6">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-warning" />
           <p className="text-xs leading-relaxed text-foreground">
             {t("chat.profileNotice")}
           </p>
           <Link
             to="/profile"
-            className="rounded-md border border-amber-500/40 px-2 py-0.5 text-xs font-medium text-foreground hover:bg-amber-400/15"
+            className="rounded-md border border-warning/40 px-2 py-0.5 text-xs font-medium text-foreground hover:bg-warning/15"
           >
             {t("chat.openProfile")}
           </Link>

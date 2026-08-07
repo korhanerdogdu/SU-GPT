@@ -768,6 +768,23 @@ def render_timetable(result: TimetableResult, *, language: str = "tr") -> tuple[
             f"Could not auto-place without a clash (pick an alternative section): {names}."
         )
 
+    # The 15/18-SU floor is a product invariant (see course_planner.build_plan's docstring), but
+    # a section-level timetable conflict can still make it unreachable even when enough eligible
+    # *courses* exist. Say so explicitly rather than silently handing back a lighter load — the
+    # same shortfall the deterministic plan itself would report if the timetable step weren't
+    # involved at all.
+    if result.credit_shortfall:
+        lines.append("")
+        lines.append(
+            f"Çakışmasız yerleştirebildiğim toplam {result.placed_su_credits} SU — hedeflenen "
+            f"{result.minimum_su_credits} SU'nun {result.credit_shortfall} SU altında. Bu dönem uygun "
+            f"ve çakışmasız başka bir aday bulunamadı; danışmanınla ek seçenekleri değerlendir."
+            if tr else
+            f"I could only place a conflict-free {result.placed_su_credits} SU — {result.credit_shortfall} "
+            f"SU short of the {result.minimum_su_credits} SU target. No other eligible, conflict-free "
+            f"candidate was available this term; check additional options with your advisor."
+        )
+
     summary = (
         f"{result.term_label} için {len(result.placed)} derslik çakışmasız program hazırladım "
         f"({len(crns)} CRN)."

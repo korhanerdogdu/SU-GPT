@@ -2,8 +2,8 @@ import {
   ArrowUpRight,
   CalendarRange,
   GraduationCap,
-  LibraryBig,
   ListChecks,
+  TrendingUp,
 } from "lucide-react";
 import ChatInput from "./ChatInput";
 import { useLocale } from "@/contexts/LocaleContext";
@@ -13,18 +13,20 @@ interface Props {
   name?: string;
   onSend: (text: string) => void;
   disabled?: boolean;
+  onFileSelect?: (file: File) => void;
+  fileBusy?: boolean;
 }
 
 /** The visible wording is also a real router-recognised prompt, so clicking a starter keeps the
  * chat transcript natural while preserving the intended deterministic response type. */
-const STARTER_ICONS = [GraduationCap, CalendarRange, LibraryBig, ListChecks];
+const STARTER_ICONS = [GraduationCap, CalendarRange, ListChecks, TrendingUp];
 
 function displayName(name?: string): string {
   if (!name) return "";
   return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
-export default function EmptyState({ name, onSend, disabled }: Props) {
+export default function EmptyState({ name, onSend, disabled, onFileSelect, fileBusy }: Props) {
   const who = displayName(name);
   const { locale, t } = useLocale();
   const starters = localizedContent.starters(locale).map(([label, prompt], index) => ({
@@ -53,7 +55,14 @@ export default function EmptyState({ name, onSend, disabled }: Props) {
         </p>
 
         <div className="mt-8 w-full">
-          <ChatInput variant="hero" onSend={onSend} disabled={disabled} autoFocus />
+          <ChatInput
+            variant="hero"
+            onSend={onSend}
+            disabled={disabled}
+            autoFocus
+            onFileSelect={onFileSelect}
+            fileBusy={fileBusy}
+          />
         </div>
 
         {/* Starters as a clean vertical list (ChatGPT-style): icon chip · label · hover arrow. */}
@@ -66,7 +75,7 @@ export default function EmptyState({ name, onSend, disabled }: Props) {
               disabled={disabled}
               className="group flex w-full items-center gap-3 rounded-2xl border border-border/70 bg-card/50 px-4 py-3 text-sm text-foreground backdrop-blur-sm transition-all hover:border-primary/30 hover:bg-card hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50"
             >
-              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary transition-colors group-hover:bg-primary/15">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary-emphasis transition-colors group-hover:bg-primary/15">
                 <Icon className="h-[1.05rem] w-[1.05rem]" />
               </span>
               <span className="flex-1 font-medium">{label}</span>

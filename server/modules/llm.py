@@ -66,7 +66,11 @@ def answer_without_context_with_telemetry(question: str) -> tuple[str, dict | No
 
 
 _PROMPT_STRATEGIES = {
+    # "Zero-shot" in the standard prompting taxonomy: task instruction only, no worked examples,
+    # no explicit reasoning scaffold.
     "basic": "Use the supplied context conservatively and answer the question directly.",
+    # "Guided prompting": an explicit numbered procedure to follow, distinct from "algorithmic"
+    # below in that it is a checklist a human advisor would follow, not a data-transform pass.
     "lookup": (
         "Before composing the answer, privately locate the exact context records that match "
         "the requested course, program, term, or requirement. Cross-check identifiers and "
@@ -83,6 +87,72 @@ _PROMPT_STRATEGIES = {
         "the answer has repeated fields such as courses, credits, requirements, schedules, or "
         "status. Do not expose private chain-of-thought; show only inputs, results, and concise "
         "checkable arithmetic."
+    ),
+    # "Few-shot": worked input -> output exemplars, no explicit reasoning shown in the examples
+    # themselves (contrast with few_shot_cot below, where the exemplars also show the reasoning).
+    "few_shot": (
+        "Follow the pattern in these two worked examples before answering the real question.\n"
+        "Example 1 -- Input: student has completed CS 201, CS 204, MATH 101, MATH 102; asks for "
+        "a course recommendation; candidate pool contains CS 300, CS 301, CS 303, ENS 211, "
+        "MATH 201. Output: recommend from the candidate pool only, in the fixed numbered format "
+        "the rest of this prompt specifies, never re-listing CS 201/204/101/102.\n"
+        "Example 2 -- Input: student already answered a course-recommendation question and now "
+        "writes only 'NLP'. Output: treat this as the interest-area answer to the prior "
+        "question, not a new unrelated request; narrow the same recommendation to NLP-aligned "
+        "candidates from the pool.\n"
+        "Now answer the actual question the same way. Do not expose private chain-of-thought."
+    ),
+    # "Chain-of-Thought" in its standard form: an explicit instruction to reason through
+    # intermediate steps before the final answer, without exemplars and without framing it as a
+    # "lookup" or "algorithm" the way the two strategies above do.
+    "cot": (
+        "Reason through this step by step before answering: first identify what the question is "
+        "actually asking, then identify which facts from the context are relevant, then apply "
+        "the applicable rules in order, then check the result is internally consistent, and only "
+        "then write the final answer. Keep these steps private; the user only sees the final "
+        "answer, never the reasoning trace."
+    ),
+    # "Zero-shot CoT": the specific, minimal "let's think step by step" trigger phrase, without
+    # the more elaborate multi-step scaffold "cot" above spells out.
+    "zero_shot_cot": (
+        "Let's think step by step before answering. Do not expose private chain-of-thought in "
+        "the final answer -- think it through internally, then state only the conclusion."
+    ),
+    # "Few-shot CoT": exemplars that show the reasoning steps themselves, not just the final
+    # answer -- this is what distinguishes it from plain "few_shot" above.
+    "few_shot_cot": (
+        "Follow the reasoning pattern in this worked example before answering.\n"
+        "Example -- Question: 'What should I take next term?' Reasoning (kept private in the "
+        "real answer): (1) the student's completed courses are CS 201, CS 204, MATH 101, MATH "
+        "102 -> foundations are done; (2) the candidate pool marks CS 300, CS 301, ENS 211 as "
+        "eligible and not yet taken; (3) no interest area was stated yet, so recommend a general "
+        "next-stage set and ask for one at the end; (4) exclude anything already completed. "
+        "Final answer shown to the student: the numbered recommendation list plus the interest "
+        "question, with no visible trace of steps 1-4.\n"
+        "Apply the same private reasoning pattern to the real question, then show only the final "
+        "answer in the format the rest of this prompt specifies."
+    ),
+    # "Tree-of-Thoughts", bounded to a single model call for cost: instead of committing to the
+    # first draft, generate a few internally, check each against the rules, and keep the best.
+    "tree_of_thought": (
+        "Before answering, privately draft two or three candidate answers that satisfy the "
+        "context and rules differently (e.g. different course orderings, different framings of "
+        "the same eligible set). For each draft, privately check it against every rule in this "
+        "prompt (no already-taken course, correct category, correct language, correct format). "
+        "Discard any draft that fails a check. From the drafts that pass, output only the single "
+        "best one. Never show the discarded drafts or the evaluation itself to the user."
+    ),
+    # "Graph-of-Thoughts", also bounded to a single call: reason about sub-aspects of the
+    # question as separate "nodes", then explicitly merge them into one coherent answer, rather
+    # than reasoning linearly top-to-bottom the way "cot" does.
+    "graph_of_thoughts": (
+        "Before answering, privately reason about these aspects as separate, independent notes: "
+        "(a) what the context's official records actually say, (b) what rule or category applies, "
+        "(c) what the student has already completed and must not be re-shown, (d) any interest "
+        "area, difficulty preference, or prior override already stated in this conversation. "
+        "Then merge these notes into one single, internally consistent final answer -- resolve "
+        "any conflict between notes explicitly (e.g. a stated override always wins over a "
+        "default). Never show the separate notes or the merge step to the user."
     ),
 }
 

@@ -1,13 +1,13 @@
-import { MessageCircle } from "lucide-react";
 import { useLocale } from "@/contexts/LocaleContext";
 import type { UsageStatus } from "@/lib/api";
 
 /**
- * "N of M questions left today".
+ * Daily allowance as a fill bar — the "Limit" pattern from Claude's own usage indicator, so the
+ * number reads as a level (how close to the wall) rather than a bare fraction.
  *
- * Shown in the chat header so the number is visible before the student runs out, not as a
- * surprise afterwards. Admins are exempt from the quota and see nothing — a counter that never
- * moves is noise.
+ * Shown in the chat header so the level is visible before the student runs out, not as a
+ * surprise afterwards. Admins are exempt from the quota and see nothing — a bar that never moves
+ * is noise.
  */
 export default function UsageMeter({ usage }: { usage: UsageStatus | null }) {
   const { t } = useLocale();
@@ -15,20 +15,34 @@ export default function UsageMeter({ usage }: { usage: UsageStatus | null }) {
 
   const { limit, remaining } = usage;
   const ratio = limit > 0 ? remaining / limit : 0;
-  const tone =
-    remaining === 0
-      ? "border-destructive/40 bg-destructive/10 text-destructive"
-      : ratio <= 0.25
-        ? "border-amber-500/40 bg-amber-400/10 text-amber-700 dark:text-amber-300"
-        : "border-border bg-background text-muted-foreground";
+  const usedPct = limit > 0 ? Math.min(100, Math.round(((limit - remaining) / limit) * 100)) : 0;
+
+  const level: "ok" | "warn" | "critical" =
+    remaining === 0 ? "critical" : ratio <= 0.25 ? "warn" : "ok";
+  const barCls = { ok: "bg-primary-emphasis", warn: "bg-warning", critical: "bg-destructive" }[level];
+  const textCls = { ok: "text-muted-foreground", warn: "text-warning", critical: "text-destructive-emphasis" }[level];
+  const borderCls = { ok: "border-border", warn: "border-warning/40", critical: "border-destructive/40" }[level];
 
   return (
-    <span
+    <div
       title={t("usage.tooltip", { limit })}
-      className={`hidden items-center gap-1.5 whitespace-nowrap rounded-lg border px-2.5 py-2 text-xs font-medium sm:inline-flex ${tone}`}
+      // Fixed h-9 to match the p-2/h-4-icon height of ThemeToggle/HelpButton/LanguageToggle
+      // exactly, rather than letting two stacked text rows grow the chip taller than its
+      // neighbours in the same header row.
+      className={`hidden h-9 w-28 shrink-0 flex-col justify-center gap-0.5 rounded-lg border bg-background px-2.5 shadow-sm sm:flex ${borderCls}`}
     >
-      <MessageCircle className="h-3.5 w-3.5 shrink-0" />
-      {remaining === 0 ? t("usage.none") : t("usage.remaining", { remaining, limit })}
-    </span>
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+          {t("usage.label")}
+        </span>
+        <span className={`text-[11px] font-bold tabular-nums ${textCls}`}>{usedPct}%</span>
+      </div>
+      <div className="h-1 w-full overflow-hidden rounded-full bg-muted">
+        <div
+          className={`h-full rounded-full transition-[width] duration-300 ${barCls}`}
+          style={{ width: `${usedPct}%` }}
+        />
+      </div>
+    </div>
   );
 }

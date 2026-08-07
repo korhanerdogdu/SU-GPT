@@ -56,6 +56,46 @@ def test_llm_only_raw_secret_output_is_filtered_before_persistence(monkeypatch):
     assert captured and all(synthetic_secret not in answer for answer in captured)
 
 
+def test_admin_account_is_exempt_from_the_daily_provider_quota(monkeypatch):
+    # The operator (ADMIN_USERNAME) account is used for testing/demoing the product itself, not
+    # by a caller the daily quota exists to protect against -- it must never be blocked by it,
+    # even once a regular account has exhausted the exact same shared quota.
+    main_module.resource_controller.reset_for_tests()
+    monkeypatch.setattr(main_module, "answer_without_context_with_telemetry", lambda _q: ("ok", None))
+
+    # Exhaust the quota for an ordinary account.
+    exhausted = False
+    for _ in range(500):
+        try:
+            main_module.resource_controller.begin(
+                username="student",
+                client_address="test-client",
+                provider_requests=1,
+            )
+        except main_module.ResourceLimitError:
+            exhausted = True
+            break
+    assert exhausted, "expected the daily provider quota to be exhaustible in this test"
+
+    client = TestClient(main_module.app)
+    student_token, _ = issue_token("student", "student")
+    admin_token, _ = issue_token(main_module.ADMIN_USERNAME, "admin")
+
+    blocked = client.post(
+        "/ask/",
+        data={"question": "What is CS 201?", "mode": "llm_only", "username": "student"},
+        headers={"Authorization": f"Bearer {student_token}"},
+    )
+    assert blocked.status_code == 429
+
+    allowed = client.post(
+        "/ask/",
+        data={"question": "What is CS 201?", "mode": "llm_only", "username": main_module.ADMIN_USERNAME},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert allowed.status_code == 200
+
+
 def test_crisis_gate_runs_before_prompt_guardrail_and_provider(monkeypatch):
     main_module.resource_controller.reset_for_tests()
 

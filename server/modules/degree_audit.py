@@ -24,7 +24,7 @@ from modules.config import DEGREE_DATA_DIR
 
 @lru_cache(maxsize=4)
 def _course_credit_catalog(data_dir: str) -> dict:
-    """course_id -> {engineering_ects, basic_science_ects} from course_catalog/current.jsonl."""
+    """course_id -> {engineering_ects, basic_science_ects, su_credits} from course_catalog/current.jsonl."""
     path = Path(data_dir) / "course_catalog" / "current.jsonl"
     catalog: dict[str, dict] = {}
     if path.exists():
@@ -36,6 +36,7 @@ def _course_credit_catalog(data_dir: str) -> dict:
             catalog[_norm(row.get("course_id", ""))] = {
                 "engineering_ects": row.get("engineering_ects"),
                 "basic_science_ects": row.get("basic_science_ects"),
+                "su_credits": row.get("su_credits"),
             }
     return catalog
 
@@ -143,8 +144,19 @@ def audit(program: str, curriculum_term: str, completed_codes: list[str],
     required_pool = pool_set("required_courses")
     core_pool, area_pool, free_pool = (pool_set(c) for c in _ELECTIVE_CHAIN)
 
+    catalog = _course_credit_catalog(str(data_dir or DEGREE_DATA_DIR))
+
     def su(code: str) -> int:
-        return int(su_of.get(code, 3))  # default 3 SU when a completed course isn't in the file
+        if code in su_of:
+            return int(su_of[code])
+        # Not in this curriculum term's pool file (e.g. an elective offered outside the scraped
+        # pools). Fall back to the general course catalog before guessing, so a course with a
+        # real (possibly zero) credit value — like a 0-SU civic-involvement course — never gets
+        # counted as a generic 3 SU by default.
+        catalog_credits = catalog.get(code, {}).get("su_credits")
+        if catalog_credits is not None:
+            return int(catalog_credits)
+        return 3
 
     warnings: list[str] = []
     used: set[str] = set()
@@ -206,7 +218,13 @@ def audit(program: str, curriculum_term: str, completed_codes: list[str],
             continue
         for cat in _ELECTIVE_CHAIN:
             need = elective_result[cat]["required_su_credits"]
-            if c in chain_pools[cat] and (need is None or elective_result[cat]["completed_su_credits"] < need):
+            # Free electives are the true catch-all: any completed course not claimed by a more
+            # specific category counts here, not just ones the scraped free-electives pool happens
+            # to enumerate. A closed list under-counts real courses (e.g. an overflow course that
+            # only appears in the area-electives pool once that pool is already full) and produces
+            # exactly the "extra credits with no home" mismatch this fixes.
+            eligible = c in chain_pools[cat] or cat == "free_electives"
+            if eligible and (need is None or elective_result[cat]["completed_su_credits"] < need):
                 elective_result[cat]["completed_su_credits"] += su(c)
                 elective_result[cat]["completed_courses"].append(c)
                 used.add(c)
@@ -225,7 +243,6 @@ def audit(program: str, curriculum_term: str, completed_codes: list[str],
         warnings.append("Some completed courses did not map to a requirement category: " + ", ".join(unused))
 
     # Engineering / Basic-Science ECTS requirements, from the course catalog (roadmap section 14).
-    catalog = _course_credit_catalog(str(data_dir or DEGREE_DATA_DIR))
     catalog_has_credits = any(v.get("engineering_ects") is not None for v in catalog.values())
     ects_requirements = []
     if catalog_has_credits:

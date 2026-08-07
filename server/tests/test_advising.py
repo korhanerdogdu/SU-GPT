@@ -97,6 +97,64 @@ def test_audit_missing_required_detected():
         assert code in a["missing_required_courses"]
 
 
+def test_audit_unmapped_course_falls_back_to_catalog_credit_not_default_three():
+    # CIP 101 is 0 SU in the course catalog and isn't in any CS curriculum pool; it must not be
+    # silently guessed as 3 SU. That exact guess is what inflated a real graduate's total by +3
+    # (128 instead of 125) -- see test_audit_matches_official_evaluation_cs_202401 below.
+    a = degree_audit.audit("CS", "202401", ["CIP 101"])
+    assert a["completed_su_credits"] == 0
+
+
+def test_audit_free_electives_catch_all_for_overflow_beyond_area_cap():
+    # OPIM 390 only appears in the area_electives pool. Once area_electives is already full
+    # (CS 414 + CS 415 + CS 455 = 9 SU, the 202401 minimum), a further area-pool-only course must
+    # overflow into free electives rather than silently disappearing from every category -- the
+    # second half of the same real-world bug.
+    a = degree_audit.audit("CS", "202401", ["CS 414", "CS 415", "CS 455", "OPIM 390"])
+    cats = {c["category"]: c for c in a["categories"]}
+    assert cats["area_electives"]["completed_su_credits"] == 9
+    assert "OPIM 390" in cats["free_electives"]["completed_courses"]
+    assert a["warnings"] == []
+
+
+def test_audit_matches_official_evaluation_cs_202401():
+    """Regression-pins a real, verified Sabanci "Degree Evaluation" printout: a CS student
+    (Fall 2021-2022 admit cohort, evaluated under the 202401 curriculum) whose 45 completed
+    courses the official system reports as exactly 125/125 SU credits, split 41/29/31/9/15
+    across university/required/core/area/free, with 116/90 engineering and 60/60 basic-science
+    ECTS -- "Degree requirements are met." This is the exact case that caught the CS 210
+    curriculum-pool gap, the elective-overflow bug, and the ECTS-split gap fixed alongside this
+    test; every number below is ground truth from that printout, not a guess.
+    """
+    completed = [
+        "CIP 101N", "HIST 191", "HIST 192", "MATH 102", "NS 101", "NS 102", "SPS 101", "SPS 102",
+        "SPS 303", "TLL 101", "TLL 102", "HUM 202", "MATH 101", "AL 102", "IF 100", "PROJ 201",
+        "CS 306", "CS 308", "CS 404", "ENS 211", "MATH 306", "CS 412", "CS 310", "CS 210", "CS 445", "CS 449",
+        "ENS 491", "ENS 492", "CS 204", "CS 201", "CS 300", "CS 301", "MATH 204", "MATH 201", "MATH 203",
+        "CS 395", "CS 303",
+        "CS 414", "CS 415", "CS 455",
+        "ECON 204", "ECON 201", "ECON 350", "OPIM 390", "IE 303",
+    ]
+    a = degree_audit.audit("CS", "202401", completed)
+    assert a["status"] == "complete"
+    assert a["reliability"] == "authoritative"
+    assert a["completed_su_credits"] == 125
+    assert a["total_min_su_credits"] == 125
+    assert a["warnings"] == []
+    assert a["missing_required_courses"] == []
+
+    cats = {c["category"]: c for c in a["categories"]}
+    assert cats["university_courses"]["completed_su_credits"] == 41
+    assert cats["required_courses"]["completed_su_credits"] == 29
+    assert cats["core_electives"]["completed_su_credits"] == 31
+    assert cats["area_electives"]["completed_su_credits"] == 9
+    assert cats["free_electives"]["completed_su_credits"] == 15
+
+    ects = {e["category"]: e for e in a["ects_requirements"]}
+    assert ects["engineering"]["completed_ects"] == 116
+    assert ects["basic_science"]["completed_ects"] == 60
+
+
 # ---- BM25 tokenization --------------------------------------------------------------
 def test_bm25_merges_course_code_token():
     toks = _tokenize("is CS 455 an area elective")
@@ -169,10 +227,24 @@ def test_course_export_contains_totals():
 
 def test_summary_is_always_available_for_long_answers():
     answer, summary = ensure_summary_section(
-        "İlk önemli sonuç budur. İkinci önemli sonuç budur.", language="tr"
+        "İlk önemli sonuç budur. İkinci önemli sonuç budur. Üçüncü ve son olarak, bu üç "
+        "cümlenin tamamı özet bölümüne sığmayacak kadar uzun bir gövde oluşturuyor.",
+        language="tr",
     )
     assert summary
     assert "Kısa Özet" in answer
+
+
+def test_short_fixed_message_does_not_duplicate_itself_as_a_summary():
+    # Regression: a one- or two-sentence body (a fixed abstention/refusal message, e.g. "Bu
+    # yanıtı mevcut resmi kanıtlarla doğrulayamıyorum.") has nothing left to summarize --
+    # compact_summary's extractive fallback reproduces the whole body verbatim, and appending
+    # that under a "Kısa Özet" heading showed the identical sentence twice in one response.
+    body = "Bu yanıtı mevcut resmi kanıtlarla doğrulayamıyorum."
+    answer, summary = ensure_summary_section(body, language="tr")
+    assert answer == body
+    assert summary == ""
+    assert "Kısa Özet" not in answer
 
 
 def test_audit_summary_contains_total_remaining_and_status():
@@ -309,6 +381,48 @@ def test_planner_course_level():
     assert course_planner.course_level("CS 445") == 400
     assert course_planner.course_level("CS 201") == 200
     assert course_planner.course_level("IF 100") == 100
+
+
+def test_until_graduation_roadmap_is_not_capped_at_two_courses_per_subject():
+    # Regression: "mezun olana kadar hangi dersleri almalıyım" was reusing the single-term
+    # balance rule (max 2 courses per subject prefix, meant to stop a *registration-ready* term
+    # from being three MATH courses), which for a CS major's full remaining roadmap meant "at
+    # most 2 more CS courses ever" -- a user reported a 3-course, 9-SU result covering only a
+    # sliver of their real 28-SU remaining requirement, and a follow-up asking to fill it out
+    # to 15 SU still couldn't include a third CS course. balance_by_subject=False is what a
+    # full-roadmap caller must pass instead of the single-term default.
+    completed = [
+        "AL 102", "CIP 101", "CIP 101N", "HIST 191", "HIST 192", "HUM 202", "IF 100",
+        "MATH 101", "MATH 102", "NS 101", "NS 102", "PROJ 201", "SPS 101", "SPS 102",
+        "SPS 303", "TLL 101", "TLL 102", "CS 201", "CS 204", "CS 300", "CS 301",
+        "MATH 201", "MATH 203",
+    ]
+    plan = course_planner.build_plan(
+        "CS", "202401", completed, [],
+        target=20, minimum_su_credits=0, exact_course_count=False,
+        max_courses=20, balance_by_subject=False, academic_year=3,
+    )
+    assert len(plan.recommended) >= 10
+    cs_courses = [item for item in plan.recommended if item.code.startswith("CS")]
+    assert len(cs_courses) > 2
+
+    body, _summary = course_planner.render_plan(plan, language="tr", until_graduation=True)
+    assert "mezun olana kadar" in body.lower() or "mezuniyet" in body.lower()
+
+    # Regression: validate_proposed_plan()'s default 18-SU ceiling is a single-term sanity
+    # check. Applied unconditionally to a roadmap this size (~45+ SU across 10+ courses), it
+    # rejected the entire, otherwise-valid plan with "credit_limit_exceeded" -- an until-graduation
+    # caller must pass a ceiling that actually matches what it asked the planner to build.
+    errors_at_term_ceiling = course_planner.validate_proposed_plan(
+        [{"code": item.code} for item in plan.recommended],
+        completed_codes=completed, stage=plan.stage, maximum_su_credits=18,
+    )
+    assert "credit_limit_exceeded" in errors_at_term_ceiling
+    errors_at_roadmap_ceiling = course_planner.validate_proposed_plan(
+        [{"code": item.code} for item in plan.recommended],
+        completed_codes=completed, stage=plan.stage, maximum_su_credits=999,
+    )
+    assert "credit_limit_exceeded" not in errors_at_roadmap_ceiling
 
 
 def test_planner_sophomore_gets_no_4xx_in_current_pool():
@@ -509,6 +623,12 @@ def test_heavy_weekly_timetable_surfaces_unavoidable_credit_shortfall():
     assert timetable.credit_shortfall == 18 - placed_su
     assert timetable.credit_shortfall > 0
     assert timetable.unplaced or timetable.not_offered
+
+    # The shortfall must reach the student's own screen, not just the internal result object --
+    # this was previously computed but silently dropped by render_timetable.
+    body, _summary = schedule_planner.render_timetable(timetable, language="tr")
+    assert str(timetable.credit_shortfall) in body
+    assert "SU altında" in body
 
 
 # ---- major-selection mini-test --------------------------------------------------------------

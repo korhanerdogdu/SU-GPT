@@ -11,6 +11,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import ASCENDING, UpdateOne
 
 from logger import logger
+from modules import transcript_parser
 from modules.config import (
     ADMIN_USERNAME,
     CATALOG_DATA_DIR,
@@ -35,6 +36,7 @@ course_reviews = db["courseReviews"]
 exams = db["exams"]
 embedding_cache = db["embeddingCache"]
 conversations = db["conversations"]
+transcripts = db["transcripts"]
 
 
 class ScheduleRevisionConflict(RuntimeError):
@@ -179,17 +181,30 @@ def _norm_status(value: Any) -> str:
     return status
 
 
+def _norm_grade(value: Any) -> str | None:
+    """None/blank means "no grade recorded" (e.g. a manually ticked box, not a parsed
+    transcript row) -- that is valid and distinct from an invalid grade string."""
+    text = str(value or "").strip().upper()
+    if not text:
+        return None
+    if text not in transcript_parser.ALL_GRADES:
+        raise ValueError(f"Unsupported grade: {text}")
+    return text
+
+
 async def get_user_courses(username: str) -> list[dict[str, Any]]:
     user = await ensure_user(username)
     links = [link async for link in user_courses.find({"user_id": user["_id"]})]
     if not links:
         return []
     status_by_id = {link["course_id"]: _norm_status(link.get("status")) for link in links}
+    grade_by_id = {link["course_id"]: _norm_grade(link.get("grade")) for link in links}
     cursor = courses.find({"_id": {"$in": list(status_by_id)}}).sort([("subject", ASCENDING), ("number", ASCENDING)])
     result = []
     async for doc in cursor:
         serialized = _serialize_course(doc)
         serialized["status"] = status_by_id.get(doc["_id"], "completed")
+        serialized["grade"] = grade_by_id.get(doc["_id"])
         result.append(serialized)
     return result
 
@@ -198,15 +213,17 @@ async def set_user_courses(
     username: str,
     course_ids: list[str],
     statuses: dict[str, str] | None = None,
+    grades: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     user = await ensure_user(username)
     statuses = statuses or {}
-    # map requested ids -> status, preserving order and dropping invalid/duplicate ids
-    requested: dict[Any, str] = {}
+    grades = grades or {}
+    # map requested ids -> (status, grade), preserving order and dropping invalid/duplicate ids
+    requested: dict[Any, tuple[str, str | None]] = {}
     for value in course_ids:
         oid = _to_object_id(value)
         if oid is not None and oid not in requested:
-            requested[oid] = _norm_status(statuses.get(value))
+            requested[oid] = (_norm_status(statuses.get(value)), _norm_grade(grades.get(value)))
 
     valid_ids = {
         doc["_id"]
@@ -215,8 +232,8 @@ async def set_user_courses(
 
     await user_courses.delete_many({"user_id": user["_id"]})
     docs = [
-        {"user_id": user["_id"], "course_id": oid, "status": status}
-        for oid, status in requested.items()
+        {"user_id": user["_id"], "course_id": oid, "status": status, "grade": grade}
+        for oid, (status, grade) in requested.items()
         if oid in valid_ids
     ]
     if docs:
@@ -320,6 +337,126 @@ async def get_completed_course_codes(username: str) -> list[str]:
     """Course codes with a credit-eligible status (completed/transfer/exempted)."""
     selected = await get_user_courses(username)
     return [c["code"] for c in selected if c.get("status", "completed") in ELIGIBLE_FOR_CREDIT and c.get("code")]
+
+
+async def apply_transcript_courses(
+    username: str, parsed_courses: list[transcript_parser.TranscriptCourse]
+) -> dict[str, Any]:
+    """Upsert every parsed-transcript course as completed + its grade, without touching any
+    course already on the student's list that the transcript didn't mention (chat-command
+    semantics -- see mutate_user_courses_by_codes -- not the full-replacement PUT semantics of
+    set_user_courses, since a transcript import should only ever add or correct, never delete).
+    """
+    user = await ensure_user(username)
+    normalized = {course.course_code: course for course in parsed_courses}
+    found = [
+        doc
+        async for doc in courses.find({"code": {"$in": list(normalized)}}, {"_id": 1, "code": 1, "title": 1})
+    ]
+    by_code = {str(doc.get("code", "")).upper(): doc for doc in found}
+
+    if found:
+        operations = [
+            UpdateOne(
+                {"user_id": user["_id"], "course_id": doc["_id"]},
+                {
+                    "$set": {"status": "completed", "grade": normalized[code].grade},
+                    "$setOnInsert": {"user_id": user["_id"], "course_id": doc["_id"]},
+                },
+                upsert=True,
+            )
+            for code, doc in by_code.items()
+        ]
+        await user_courses.bulk_write(operations, ordered=False)
+
+    return {
+        "matched": sorted(by_code),
+        "unmatched": sorted(code for code in normalized if code not in by_code),
+        "courses": await get_user_courses(username),
+    }
+
+
+async def save_transcript(
+    username: str,
+    *,
+    filename: str,
+    content_type: str,
+    pdf_bytes: bytes,
+    parsed: transcript_parser.ParsedTranscript,
+) -> dict[str, Any]:
+    """Store the uploaded PDF and a parse summary for provenance (what was uploaded, when, and
+    what the parser made of it) -- the per-course grades themselves live on ``user_courses``,
+    which stays the single source of truth so later manual grade edits are never shadowed by a
+    stale cached copy here."""
+    from bson import Binary
+
+    user = await ensure_user(username)
+    doc = {
+        "user_id": user["_id"],
+        "filename": _clean(filename)[:200],
+        "content_type": _clean(content_type)[:100] or "application/pdf",
+        "pdf_data": Binary(pdf_bytes),
+        "uploaded_at": datetime.now(timezone.utc),
+        "course_count": len(parsed.courses),
+        "gpa": parsed.gpa,
+        "total_su_credits": parsed.total_su_credits,
+        "total_ects": parsed.total_ects,
+        "warnings": list(parsed.warnings),
+    }
+    result = await transcripts.insert_one(doc)
+    return {
+        "id": str(result.inserted_id),
+        "filename": doc["filename"],
+        "uploaded_at": doc["uploaded_at"].isoformat(),
+        "course_count": doc["course_count"],
+        "gpa": doc["gpa"],
+        "total_su_credits": doc["total_su_credits"],
+        "total_ects": doc["total_ects"],
+        "warnings": doc["warnings"],
+    }
+
+
+async def get_latest_transcript_summary(username: str) -> dict[str, Any] | None:
+    user = await ensure_user(username)
+    doc = await transcripts.find_one({"user_id": user["_id"]}, sort=[("uploaded_at", -1)])
+    if not doc:
+        return None
+    return {
+        "id": str(doc["_id"]),
+        "filename": doc.get("filename"),
+        "uploaded_at": doc["uploaded_at"].isoformat() if doc.get("uploaded_at") else None,
+        "course_count": doc.get("course_count"),
+        "gpa": doc.get("gpa"),
+        "total_su_credits": doc.get("total_su_credits"),
+        "total_ects": doc.get("total_ects"),
+        "warnings": doc.get("warnings") or [],
+    }
+
+
+async def compute_gpa(username: str) -> dict[str, Any]:
+    """Credit-weighted GPA over the student's current course-history grades -- recomputed from
+    ``user_courses`` on every call (never a cached number) so it always reflects the latest manual
+    grade edits, not just the most recent transcript import."""
+    selected = await get_user_courses(username)
+    gpa_courses = [
+        c for c in selected
+        if c.get("grade") in transcript_parser.GRADE_POINTS and c.get("status", "completed") in ELIGIBLE_FOR_CREDIT
+    ]
+    total_credit = sum(_su_credit_value(c.get("su_credits")) for c in gpa_courses)
+    total_points = sum(
+        transcript_parser.GRADE_POINTS[c["grade"]] * _su_credit_value(c.get("su_credits"))
+        for c in gpa_courses
+    )
+    gpa = round(total_points / total_credit, 2) if total_credit else None
+    return {
+        "gpa": gpa,
+        "gpa_eligible_course_count": len(gpa_courses),
+        "gpa_eligible_su_credits": total_credit,
+        "courses": [
+            {"code": c["code"], "title": c["title"], "grade": c["grade"], "su_credits": c.get("su_credits")}
+            for c in gpa_courses
+        ],
+    }
 
 
 # `current_term` was removed 2026-07-22: it was collected but never read. Retrieval scoping and

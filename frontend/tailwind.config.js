@@ -20,6 +20,7 @@ export default {
         primary: {
           DEFAULT: "hsl(var(--primary))",
           foreground: "hsl(var(--primary-foreground))",
+          emphasis: "hsl(var(--primary-emphasis))",
         },
         secondary: {
           DEFAULT: "hsl(var(--secondary))",
@@ -28,10 +29,19 @@ export default {
         destructive: {
           DEFAULT: "hsl(var(--destructive))",
           foreground: "hsl(var(--destructive-foreground))",
+          emphasis: "hsl(var(--destructive-emphasis))",
         },
         muted: {
           DEFAULT: "hsl(var(--muted))",
           foreground: "hsl(var(--muted-foreground))",
+        },
+        success: {
+          DEFAULT: "hsl(var(--success))",
+          foreground: "hsl(var(--success-foreground))",
+        },
+        warning: {
+          DEFAULT: "hsl(var(--warning))",
+          foreground: "hsl(var(--warning-foreground))",
         },
         accent: {
           DEFAULT: "hsl(var(--accent))",
@@ -47,6 +57,9 @@ export default {
           navy: "#003B73",
           gold: "#D6A13A",
           light: "#D8E6F3",
+          // Same navy as the logo's own backdrop chip (`.theme-logo`) — used for utility-page
+          // top bars so they read as one brand mark with the logo, not a separate blue.
+          header: "#082447",
         },
         // Sign-in surface. A deeper, colder ink than the app chrome so the entry screen reads
         // as its own place; `teal` is lifted straight off the logo's book mark.

@@ -19,6 +19,7 @@ Similarity is cosine throughout (vectors are L2-normalized at encode time), so s
 comparable across models and safe to feed to rank fusion.
 """
 
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,7 +30,14 @@ import numpy as np
 from .corpus import Corpus
 from .sparse import contextual_text
 
-CACHE_DIR = Path(__file__).resolve().parents[2] / "outputs" / "retrieval_cache"
+# See corpus.py's SERVER_ROOT/DATA_DIR comment: a production container build (server/Dockerfile)
+# flattens server/ directly into /app, so a hardcoded parents[2] climb lands on "/" in the image
+# instead of the project root, and writing the cache there fails with a permission error that
+# silently degrades every request to BM25F-only retrieval. RETRIEVAL_CACHE_DIR lets it be pinned
+# explicitly (e.g. in docker-compose.yml) the same way DEGREE_DATA_DIR pins the corpus dir.
+_SERVER_ROOT = Path(__file__).resolve().parents[1]
+_PROJECT_ROOT = _SERVER_ROOT.parent if _SERVER_ROOT.name == "server" else _SERVER_ROOT
+CACHE_DIR = Path(os.getenv("RETRIEVAL_CACHE_DIR", str(_PROJECT_ROOT / "outputs" / "retrieval_cache")))
 
 # Query-side instruction for the E5 instruct family.
 E5_INSTRUCT_TASK = (

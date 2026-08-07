@@ -9,6 +9,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLocale } from "@/contexts/LocaleContext";
 import LanguageToggle from "@/components/LanguageToggle";
+import ThemeToggle from "@/components/ThemeToggle";
+import HelpButton from "@/components/HelpButton";
 
 export default function SignupPage() {
   const navigate = useNavigate();
@@ -39,6 +41,11 @@ export default function SignupPage() {
   }
 
   return (
+    // The campus photo is a deliberate, one-time hero treatment for this screen (distinct from
+    // the token-driven chrome everywhere else), so it stays a fixed dark scrim in both themes —
+    // that's a considered choice, not a missed dark-mode case. Sign-in controls (theme, language,
+    // help) still work here exactly as they do everywhere else, so the choice never costs the
+    // student any control.
     <div
       className="h-screen w-screen overflow-hidden bg-cover bg-center bg-fixed"
       style={{
@@ -62,8 +69,12 @@ export default function SignupPage() {
           </p>
         </div>
 
-        <div className="w-full max-w-sm shrink-0 rounded-2xl border border-white/10 bg-card/70 p-6 shadow-2xl backdrop-blur-md">
-          <LanguageToggle className="mb-4 ml-auto flex" />
+        <div className="w-full max-w-sm shrink-0 rounded-2xl border border-border bg-card/95 p-6 shadow-2xl backdrop-blur-md">
+          <div className="mb-4 flex items-center justify-end gap-2">
+            <HelpButton />
+            <LanguageToggle />
+            <ThemeToggle />
+          </div>
           <div className="mb-5">
             <h1 className="text-2xl font-bold tracking-tight">
               {t("signup.title")}
@@ -122,7 +133,7 @@ export default function SignupPage() {
                   type="button"
                   onClick={() => setShowPassword((s) => !s)}
                   aria-label={showPassword ? t("login.hidePassword") : t("login.showPassword")}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  className="absolute right-2 top-1/2 grid h-7 w-7 -translate-y-1/2 place-items-center rounded-md text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   {showPassword ? (
                     <EyeOff className="h-4 w-4" />

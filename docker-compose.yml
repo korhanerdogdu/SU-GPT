@@ -37,6 +37,7 @@ services:
       - chroma_data:/app/chroma_store
       - uploads_data:/app/uploaded_documents
       - huggingface_cache:/app/.cache/huggingface
+      - retrieval_cache:/app/outputs/retrieval_cache
       - ./sources:/app/sources:ro
     ports:
       - "${BACKEND_PORT:-8000}:8000"
@@ -52,7 +53,12 @@ services:
       interval: 10s
       timeout: 5s
       retries: 30
-      start_period: 120s
+      # The dense retrieval cache warm-up in docker-entrypoint.sh runs before uvicorn starts
+      # listening; it is a one-time cost per persisted retrieval_cache volume (later restarts
+      # find the cache already on disk and skip straight to uvicorn), but on a fresh volume it
+      # can take several minutes to embed the full corpus. Give it comfortable room so this
+      # first start-up is never flagged unhealthy mid-warm-up.
+      start_period: 900s
     stop_grace_period: 30s
 
   frontend:
@@ -75,3 +81,4 @@ volumes:
   chroma_data:
   uploads_data:
   huggingface_cache:
+  retrieval_cache:

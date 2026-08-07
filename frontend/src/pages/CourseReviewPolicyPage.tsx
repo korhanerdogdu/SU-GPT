@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import LanguageToggle from "@/components/LanguageToggle";
+import ThemeToggle from "@/components/ThemeToggle";
+import HelpButton from "@/components/HelpButton";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLocale } from "@/contexts/LocaleContext";
 import type { TranslationKey } from "@/localization/resources";
@@ -105,16 +107,20 @@ export default function CourseReviewPolicyPage() {
     t(`policy.point${number}` as TranslationKey)
   );
   return (
-    <main className="min-h-screen bg-[#F5F8FC] px-5 py-12 text-[#1a2b45]">
-      <article id="privacy" className="mx-auto max-w-2xl rounded-2xl border border-[#D8E6F3] bg-white p-7 shadow-sm">
+    <main className="min-h-screen bg-background px-5 py-12 text-foreground">
+      <article id="privacy" className="mx-auto max-w-2xl rounded-2xl border border-border bg-card p-7 shadow-sm">
         <div className="mb-6 flex items-center justify-between gap-3">
-          <h1 className="text-2xl font-bold text-[#003B73]">{t("policy.title")}</h1>
-          <LanguageToggle />
+          <h1 className="text-2xl font-bold text-foreground">{t("policy.title")}</h1>
+          <div className="flex items-center gap-2">
+            <HelpButton />
+            <LanguageToggle />
+            <ThemeToggle />
+          </div>
         </div>
         {loading && <p role="status">{t("common.loading")}</p>}
-        {loadError && <p role="alert" className="rounded-md bg-red-50 p-3 text-red-800">{t("review.loadError")}</p>}
+        {loadError && <p role="alert" className="rounded-md bg-destructive/10 p-3 text-destructive-emphasis">{t("review.loadError")}</p>}
         {!loading && !loadError && !policy?.enabled && (
-          <p className="rounded-md bg-amber-50 p-3 font-medium text-amber-900">{t("policy.status")}</p>
+          <p className="rounded-md bg-warning/10 p-3 font-medium text-warning">{t("policy.status")}</p>
         )}
         <p className="mt-5">{t("policy.body")}</p>
         <ul className="mt-5 list-disc space-y-2 pl-6">
@@ -122,12 +128,12 @@ export default function CourseReviewPolicyPage() {
         </ul>
 
         {policy?.enabled && (
-          <section className="mt-8 border-t border-[#D8E6F3] pt-7" aria-labelledby="review-form-title">
-            <h2 id="review-form-title" className="text-xl font-bold text-[#003B73]">{t("review.title")}</h2>
-            <p className="mt-2 rounded-md bg-blue-50 p-3 text-blue-900">{t("review.courseOnly")}</p>
-            <a href="#privacy" className="mt-2 inline-block text-sm text-[#004B93] underline">{t("review.privacyLink")}</a>
+          <section className="mt-8 border-t border-border pt-7" aria-labelledby="review-form-title">
+            <h2 id="review-form-title" className="text-xl font-bold text-foreground">{t("review.title")}</h2>
+            <p className="mt-2 rounded-md bg-primary/10 p-3 text-primary-emphasis">{t("review.courseOnly")}</p>
+            <a href="#privacy" className="mt-2 inline-block text-sm text-primary-emphasis underline">{t("review.privacyLink")}</a>
             {!isAuthenticated ? (
-              <p className="mt-5"><Link to="/login" className="text-[#004B93] underline">{t("review.signIn")}</Link></p>
+              <p className="mt-5"><Link to="/login" className="text-primary-emphasis underline">{t("review.signIn")}</Link></p>
             ) : (
               <form className="mt-5 space-y-5" onSubmit={onSubmit}>
                 <label className="block font-medium">
@@ -139,15 +145,18 @@ export default function CourseReviewPolicyPage() {
                     placeholder={t("review.courseCodePlaceholder")}
                     maxLength={16}
                     pattern="[A-Za-z]{2,6}[ -]?[0-9]{3,5}[A-Za-z]?"
-                    className="mt-1 block w-full rounded-lg border border-[#AFC9DF] px-3 py-2"
+                    className="mt-1 block w-full rounded-lg border border-input bg-background px-3 py-2 text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
                   />
                 </label>
                 {COURSE_REVIEW_DIMENSIONS.map((dimension) => (
-                  <fieldset key={dimension} className="rounded-lg border border-[#D8E6F3] p-3">
+                  <fieldset key={dimension} className="rounded-lg border border-border p-3">
                     <legend className="px-1 font-medium">{t(DIMENSION_KEYS[dimension])}</legend>
-                    <div className="flex flex-wrap gap-4">
+                    <div className="flex flex-wrap gap-3">
                       {[1, 2, 3, 4, 5].map((score) => (
-                        <label key={score} className="flex items-center gap-1">
+                        <label
+                          key={score}
+                          className="flex min-h-[2rem] min-w-[2rem] cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-border px-2.5 py-1 has-[:checked]:border-primary-emphasis has-[:checked]:bg-primary/10 has-[:checked]:text-primary-emphasis hover:bg-muted"
+                        >
                           <input
                             type="radio"
                             name={dimension}
@@ -170,7 +179,7 @@ export default function CourseReviewPolicyPage() {
                     placeholder={t("review.commentPlaceholder")}
                     maxLength={1000}
                     rows={4}
-                    className="mt-1 block w-full rounded-lg border border-[#AFC9DF] px-3 py-2"
+                    className="mt-1 block w-full rounded-lg border border-input bg-background px-3 py-2 text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
                   />
                 </label>
                 <label className="flex items-start gap-2">
@@ -181,7 +190,7 @@ export default function CourseReviewPolicyPage() {
                   <button
                     type="submit"
                     disabled={submitting || !consent}
-                    className="rounded-lg bg-[#004B93] px-4 py-2 font-medium text-white disabled:opacity-50"
+                    className="rounded-lg bg-primary px-4 py-2 font-medium text-primary-foreground disabled:opacity-50"
                   >
                     {t(submitting ? "review.submitting" : "review.submit")}
                   </button>
@@ -190,7 +199,7 @@ export default function CourseReviewPolicyPage() {
                       type="button"
                       disabled={deleting}
                       onClick={onDelete}
-                      className="rounded-lg border border-red-300 px-4 py-2 text-red-800 disabled:opacity-50"
+                      className="rounded-lg border border-destructive/40 px-4 py-2 text-destructive-emphasis disabled:opacity-50"
                     >
                       {t(deleting ? "review.deleting" : "review.delete")}
                     </button>
@@ -206,7 +215,7 @@ export default function CourseReviewPolicyPage() {
               </p>
             )}
             {isAuthenticated && aggregateState === "idle" && aggregate && (
-              <section className="mt-5 rounded-lg bg-[#F5F8FC] p-4" aria-labelledby="aggregate-title">
+              <section className="mt-5 rounded-lg bg-muted/40 p-4" aria-labelledby="aggregate-title">
                 <h3 id="aggregate-title" className="font-bold">{t("review.aggregateTitle")}</h3>
                 {!aggregate.available ? (
                   <p className="mt-2">{t("review.aggregateSuppressed")}</p>
@@ -227,7 +236,7 @@ export default function CourseReviewPolicyPage() {
             )}
           </section>
         )}
-        <Link to="/login" className="mt-7 inline-block font-medium text-[#004B93] underline">
+        <Link to="/login" className="mt-7 inline-block font-medium text-primary-emphasis underline">
           {t("policy.back")}
         </Link>
       </article>

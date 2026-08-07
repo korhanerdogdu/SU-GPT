@@ -3,7 +3,6 @@ import { Link } from "react-router-dom";
 import {
   AlertTriangle,
   ArrowLeft,
-  CalendarDays,
   Check,
   ChevronDown,
   ChevronRight,
@@ -19,7 +18,9 @@ import {
 import { toast } from "sonner";
 import LanguageToggle from "@/components/LanguageToggle";
 import ThemeToggle from "@/components/ThemeToggle";
+import HelpButton from "@/components/HelpButton";
 import { Button } from "@/components/ui/button";
+import ConfirmDialog from "@/components/ui/confirm-dialog";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLocale } from "@/contexts/LocaleContext";
 import { localizedWeekDays } from "@/localization/resources";
@@ -36,6 +37,7 @@ import {
   createScheduleDocument,
   findScheduleConflicts,
   formatMeeting,
+  humanizeScheduleTerm,
   loadLocalSchedule,
   scheduleBundleId,
   scheduleComponentKind,
@@ -55,13 +57,17 @@ const GRID_START = 8 * 60 + 40;
 const GRID_END = 19 * 60 + 40;
 const GRID_DURATION = GRID_END - GRID_START;
 
+// Note: index.html pins `class="dark"` permanently (the app's actual light/dark switch is the
+// `data-theme` attribute + CSS custom properties, not Tailwind's class strategy), so a `dark:`
+// variant here would always win regardless of the resolved theme. Each entry is a single value
+// that reads well on both a light and a dark grid — no dark: pair to keep.
 const COURSE_COLOURS = [
-  "border-sky-700 bg-sky-600 text-white dark:border-sky-500 dark:bg-sky-700",
-  "border-indigo-700 bg-indigo-600 text-white dark:border-indigo-500 dark:bg-indigo-700",
-  "border-teal-700 bg-teal-600 text-white dark:border-teal-500 dark:bg-teal-700",
-  "border-violet-700 bg-violet-600 text-white dark:border-violet-500 dark:bg-violet-700",
-  "border-fuchsia-700 bg-fuchsia-600 text-white dark:border-fuchsia-500 dark:bg-fuchsia-700",
-  "border-amber-600 bg-amber-400 text-slate-950 dark:border-amber-400 dark:bg-amber-500",
+  "border-sky-500 bg-sky-700 text-white",
+  "border-indigo-500 bg-indigo-700 text-white",
+  "border-teal-500 bg-teal-700 text-white",
+  "border-violet-500 bg-violet-700 text-white",
+  "border-fuchsia-500 bg-fuchsia-700 text-white",
+  "border-amber-400 bg-amber-500 text-slate-950",
 ] as const;
 
 type SyncState = "idle" | "saving" | "saved" | "offline";
@@ -179,6 +185,7 @@ export default function SchedulePage() {
   const [focusedCourse, setFocusedCourse] = useState<string | null>(null);
   const [dayFilters, setDayFilters] = useState<ScheduleDay[]>([]);
   const [copied, setCopied] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
   const hydrated = useRef(false);
   const focusRequest = useRef(0);
   const courseRefs = useRef(new Map<string, HTMLLIElement>());
@@ -400,8 +407,7 @@ export default function SchedulePage() {
   }
 
   function clearSchedule() {
-    if (!window.confirm(t("schedule.clearConfirm"))) return;
-    replaceItems([], t("schedule.cleared"));
+    setConfirmClear(true);
   }
 
   function updateQuery(value: string) {
@@ -413,7 +419,7 @@ export default function SchedulePage() {
 
   return (
     <div className="flex min-h-dvh flex-col overflow-x-hidden bg-muted/30 text-foreground lg:h-dvh lg:overflow-hidden">
-      <header className="z-30 shrink-0 border-b border-white/10 bg-primary text-primary-foreground shadow-md shadow-primary/10">
+      <header className="z-30 shrink-0 border-b border-white/10 bg-sabanci-header text-primary-foreground shadow-md shadow-black/20">
         <div className="mx-auto flex h-14 max-w-[1920px] items-center gap-2.5 px-3 sm:px-4">
           <Link to="/" aria-label={t("common.backToChat")} className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-white/80 transition hover:bg-white/10 hover:text-white">
             <ArrowLeft className="h-4 w-4" />
@@ -446,6 +452,7 @@ export default function SchedulePage() {
               <RotateCcw className="mr-1.5 h-3.5 w-3.5" /> {t("common.clear")}
             </Button>
           </div>
+          <HelpButton />
           <LanguageToggle />
           <ThemeToggle />
         </div>
@@ -458,11 +465,10 @@ export default function SchedulePage() {
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <h2 className="text-sm font-bold text-foreground">{t("schedule.pick")}</h2>
-                  <p className="mt-0.5 text-[11px] text-muted-foreground">{t("schedule.official")}</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {humanizeScheduleTerm(schedule.term, locale)}
+                  </p>
                 </div>
-                <span className="rounded-full border border-primary/15 bg-primary/10 px-2 py-1 text-[10px] font-bold text-primary">
-                  {t("schedule.courseCount", { count: uniqueCourseCount(schedule.items) })}
-                </span>
               </div>
               <label className="relative mt-2.5 block">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -480,7 +486,7 @@ export default function SchedulePage() {
                 )}
               </label>
               <div className="mt-2.5 flex items-center gap-1" aria-label={t("schedule.filterDay")}>
-                <span className="mr-auto text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">{t("schedule.byDay")}</span>
+                <span className="mr-auto text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">{t("schedule.byDay")}</span>
                 {weekDays.map((day) => {
                   const active = dayFilters.includes(day.code);
                   return (
@@ -489,7 +495,7 @@ export default function SchedulePage() {
                       type="button"
                       aria-pressed={active}
                       onClick={() => setDayFilters((current) => active ? current.filter((code) => code !== day.code) : [...current, day.code])}
-                      className={`rounded-lg px-2 py-1 text-[10px] font-bold transition ${active ? "bg-primary text-primary-foreground shadow-sm" : "border border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground"}`}
+                      className={`rounded-lg px-2.5 py-1.5 text-xs font-bold transition ${active ? "bg-primary text-primary-foreground shadow-sm" : "border border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground"}`}
                     >
                       {day.short.toLocaleUpperCase(locale === "tr" ? "tr-TR" : "en-US")}
                     </button>
@@ -529,9 +535,9 @@ export default function SchedulePage() {
                         <button type="button" onClick={() => setExpandedCourse(open ? null : group.courseId)} className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left transition hover:bg-muted/70">
                           <span className="min-w-0 flex-1">
                             <span className="block text-sm font-extrabold text-foreground">{group.courseId}</span>
-                            <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">{group.title}</span>
+                            <span className="mt-0.5 block truncate text-xs text-muted-foreground">{group.title}</span>
                           </span>
-                          {selectedCount > 0 && <span className="rounded-full bg-emerald-500/12 px-2 py-0.5 text-[10px] font-bold text-emerald-700 dark:text-emerald-300">{t("schedule.selected", { count: selectedCount })}</span>}
+                          {selectedCount > 0 && <span className="rounded-full bg-success/15 px-2 py-0.5 text-xs font-bold text-success">{t("schedule.selected", { count: selectedCount })}</span>}
                           {open ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
                         </button>
                         {open && (
@@ -548,15 +554,15 @@ export default function SchedulePage() {
                                 >
                                   <span className="flex items-start gap-2">
                                     <span className="min-w-0 flex-1">
-                                      <span className="flex flex-wrap items-center gap-1 text-[10px]">
+                                      <span className="flex flex-wrap items-center gap-1 text-[11px]">
                                         <span className="rounded-md bg-muted px-1.5 py-0.5 font-mono font-semibold">CRN {section.crn}</span>
                                         <span className="rounded-md bg-muted px-1.5 py-0.5 font-semibold">{t("common.section")} {section.section}</span>
                                         <span className="rounded-md bg-muted px-1.5 py-0.5 font-semibold">{section.component_label || section.component || t("schedule.defaultComponent")}</span>
                                       </span>
-                                      <span className="mt-1.5 block text-[11px] font-semibold leading-relaxed text-foreground">{catalogSchedule(section, locale, t("schedule.noTime"))}</span>
-                                      {section.instructors && <span className="mt-1 block truncate text-[10px] text-muted-foreground">{section.instructors}</span>}
+                                      <span className="mt-1.5 block text-xs font-semibold leading-relaxed text-foreground">{catalogSchedule(section, locale, t("schedule.noTime"))}</span>
+                                      {section.instructors && <span className="mt-1 block truncate text-[11px] text-muted-foreground">{section.instructors}</span>}
                                     </span>
-                                    {selected ? <Check className="h-4 w-4 shrink-0 text-primary" /> : <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-primary/10 text-sm font-bold text-primary transition group-hover:bg-primary group-hover:text-primary-foreground">+</span>}
+                                    {selected ? <Check className="h-4 w-4 shrink-0 text-primary-emphasis" /> : <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-primary/10 text-sm font-bold text-primary-emphasis transition group-hover:bg-primary group-hover:text-primary-foreground">+</span>}
                                   </span>
                                 </button>
                               );
@@ -568,7 +574,7 @@ export default function SchedulePage() {
                   })}
                 </ul>
               )}
-              {hasMore && !searching && <p className="px-2 py-3 text-center text-[11px] text-muted-foreground">{t("schedule.moreHint")}</p>}
+              {hasMore && !searching && <p className="px-2 py-3 text-center text-xs text-muted-foreground">{t("schedule.moreHint")}</p>}
             </div>
           </aside>
 
@@ -576,7 +582,7 @@ export default function SchedulePage() {
             <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2 sm:px-4">
               <div className="mr-auto min-w-0">
                 <h2 className="truncate text-sm font-bold">{t("schedule.week")}</h2>
-                <p className="truncate text-[11px] text-muted-foreground">{t("schedule.weekHint")}</p>
+                <p className="truncate text-xs text-muted-foreground">{t("schedule.weekHint")}</p>
               </div>
               <div className="hidden items-center gap-1 xl:flex">
                 <QuickStat label={t("common.course")} value={uniqueCourseCount(schedule.items)} />
@@ -591,26 +597,38 @@ export default function SchedulePage() {
 
             {tbaItems.length > 0 && (
               <div className="flex shrink-0 items-center gap-2 border-b border-border bg-muted/35 px-3 py-1.5">
-                <Clock3 className="h-3.5 w-3.5 shrink-0 text-primary" />
-                <span className="shrink-0 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">TBA</span>
+                <Clock3 className="h-3.5 w-3.5 shrink-0 text-primary-emphasis" />
+                <span className="shrink-0 text-[11px] font-bold uppercase tracking-wide text-muted-foreground">TBA</span>
                 <div className="flex min-w-0 flex-1 gap-1.5 overflow-x-auto scrollbar-thin">
                   {tbaItems.map((item) => (
-                    <span key={item.id} className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-border bg-card py-1 pl-2 pr-1 text-[11px] font-semibold">
-                      <button type="button" onClick={() => void focusCourse(item)} className="hover:text-primary">{item.courseCode} · {item.section || item.component}</button>
-                      <button type="button" onClick={() => removeBundle(item)} aria-label={t("schedule.removeBundle", { course: item.courseCode })} className="grid h-5 w-5 place-items-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"><X className="h-3 w-3" /></button>
+                    <span key={item.id} className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-border bg-card py-1 pl-2 pr-1 text-xs font-semibold">
+                      <button type="button" onClick={() => void focusCourse(item)} className="hover:text-primary-emphasis">{item.courseCode} · {item.section || item.component}</button>
+                      <button type="button" onClick={() => removeBundle(item)} aria-label={t("schedule.removeBundle", { course: item.courseCode })} className="grid h-6 w-6 place-items-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive-emphasis"><X className="h-3.5 w-3.5" /></button>
                     </span>
                   ))}
                 </div>
               </div>
             )}
 
-            <div className="min-h-0 flex-1 overflow-y-auto p-2 md:overflow-hidden">
-              <DesktopWeekGrid items={schedule.items} conflicts={conflicts} onFocus={focusCourse} onRemove={removeBundle} />
-              <MobileWeekList items={schedule.items} conflicts={conflicts} onFocus={focusCourse} onRemove={removeBundle} />
+            <div className="min-h-0 flex-1 overflow-hidden p-2">
+              <WeekGrid items={schedule.items} conflicts={conflicts} onFocus={focusCourse} onRemove={removeBundle} />
             </div>
           </section>
         </div>
       </main>
+
+      <ConfirmDialog
+        open={confirmClear}
+        title={t("schedule.clearConfirmTitle")}
+        description={t("schedule.clearConfirm")}
+        confirmLabel={t("common.clear")}
+        destructive
+        onConfirm={() => {
+          replaceItems([], t("schedule.cleared"));
+          setConfirmClear(false);
+        }}
+        onCancel={() => setConfirmClear(false)}
+      />
     </div>
   );
 }
@@ -629,7 +647,7 @@ function SyncIndicator({ state }: { state: SyncState }) {
 
 function QuickStat({ label, value }: { label: string; value: number }) {
   return (
-    <span className="inline-flex items-center gap-1 rounded-lg border border-border bg-muted/50 px-2 py-1 text-[10px] font-semibold text-muted-foreground">
+    <span className="inline-flex items-center gap-1 rounded-lg border border-border bg-muted/50 px-2 py-1 text-[11px] font-semibold text-muted-foreground">
       {label}<strong className="text-xs tabular-nums text-foreground">{value}</strong>
     </span>
   );
@@ -641,13 +659,13 @@ function ConflictStat({ conflicts }: { conflicts: ScheduleConflict[] }) {
   const first = conflicts[0];
   const day = weekDays.find((candidate) => candidate.code === first.day)?.label ?? first.day;
   return (
-    <span title={`${day} ${first.start}-${first.end}`} className="inline-flex items-center gap-1 rounded-lg border border-rose-400/60 bg-rose-500/10 px-2 py-1 text-[10px] font-bold text-rose-700 dark:text-rose-300">
+    <span title={`${day} ${first.start}-${first.end}`} className="inline-flex items-center gap-1 rounded-lg border border-destructive/50 bg-destructive/10 px-2 py-1 text-xs font-bold text-destructive-emphasis">
       <AlertTriangle className="h-3 w-3" /> {t("schedule.conflicts", { count: conflicts.length })}
     </span>
   );
 }
 
-function DesktopWeekGrid({
+function WeekGrid({
   items,
   conflicts,
   onFocus,
@@ -661,15 +679,17 @@ function DesktopWeekGrid({
   const { locale, t } = useLocale();
   const weekDays = localizedWeekDays(locale);
   const times = Array.from({ length: 12 }, (_, index) => GRID_START + index * 60);
-  const scheduledCount = items.reduce((count, item) => count + item.meetings.length, 0);
+  // Below ~640px the five day columns can't stay readable at any width, so the grid keeps a
+  // realistic minimum and scrolls horizontally instead of collapsing into a different (list)
+  // view — the weekly grid shape stays intact at every viewport, including phones.
   return (
-    <div className="hidden h-full min-h-0 overflow-hidden rounded-xl border border-border bg-card md:flex md:flex-col">
-      <div className="grid h-10 shrink-0 grid-cols-[72px_repeat(5,minmax(0,1fr))] border-b border-primary/20 bg-primary text-primary-foreground">
-        <div className="grid place-items-center border-r border-white/15 text-[10px] font-bold uppercase tracking-[0.14em] text-white/75">{t("schedule.time")}</div>
+    <div className="flex h-full min-h-0 flex-col overflow-x-auto overflow-y-hidden rounded-xl border border-border bg-card scrollbar-thin">
+      <div className="grid h-10 w-full min-w-[640px] shrink-0 grid-cols-[64px_repeat(5,minmax(112px,1fr))] border-b border-primary/20 bg-primary text-primary-foreground">
+        <div className="sticky left-0 z-20 grid place-items-center border-r border-white/15 bg-primary text-[10px] font-bold uppercase tracking-[0.14em] text-white/75">{t("schedule.time")}</div>
         {weekDays.map((day) => <div key={day.code} className="grid place-items-center border-r border-white/15 px-2 text-center text-xs font-extrabold last:border-r-0">{day.label}</div>)}
       </div>
-      <div className="grid min-h-0 flex-1 grid-cols-[72px_repeat(5,minmax(0,1fr))]">
-        <div className="relative border-r border-border bg-muted/35">
+      <div className="grid min-h-0 w-full min-w-[640px] flex-1 grid-cols-[64px_repeat(5,minmax(112px,1fr))]">
+        <div className="sticky left-0 z-20 border-r border-border bg-muted/60 backdrop-blur-sm">
           {times.map((time, index) => {
             const top = ((time - GRID_START) / GRID_DURATION) * 100;
             const transform = index === 0 ? "translateY(6px)" : index === times.length - 1 ? "translateY(calc(-100% - 6px))" : "translateY(-50%)";
@@ -723,20 +743,13 @@ function DesktopWeekGrid({
                         onRemove(event.item);
                       }}
                       aria-label={t("schedule.removeBundle", { course: event.item.courseCode })}
-                      className="absolute right-1 top-1 grid h-6 w-6 place-items-center rounded-md bg-black/15 text-white/90 backdrop-blur-sm transition hover:bg-white hover:text-slate-950 focus-visible:bg-white focus-visible:text-slate-950"
+                      className="absolute right-1 top-1 grid h-7 w-7 place-items-center rounded-md bg-black/15 text-white/90 backdrop-blur-sm transition hover:bg-white hover:text-slate-950 focus-visible:bg-white focus-visible:text-slate-950"
                     >
                       <X className="h-3.5 w-3.5" />
                     </button>
                   </div>
                 );
               })}
-              {scheduledCount === 0 && day.code === "W" && (
-                <div className="pointer-events-none absolute left-1/2 top-1/2 z-20 w-[min(300px,85vw)] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-primary/15 bg-card/95 p-5 text-center shadow-xl backdrop-blur">
-                  <span className="mx-auto grid h-11 w-11 place-items-center rounded-xl bg-primary/10 text-primary"><CalendarDays className="h-5 w-5" /></span>
-                  <p className="mt-3 text-sm font-bold">{t("schedule.emptyTitle")}</p>
-                  <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">{t("schedule.emptyBody")}</p>
-                </div>
-              )}
             </div>
           );
         })}
@@ -745,49 +758,3 @@ function DesktopWeekGrid({
   );
 }
 
-function MobileWeekList({
-  items,
-  conflicts,
-  onFocus,
-  onRemove,
-}: {
-  items: ScheduleItem[];
-  conflicts: ScheduleConflict[];
-  onFocus: (item: ScheduleItem) => void;
-  onRemove: (item: ScheduleItem) => void;
-}) {
-  const { locale, t } = useLocale();
-  const weekDays = localizedWeekDays(locale);
-  return (
-    <div className="space-y-3 md:hidden">
-      {weekDays.map((day) => {
-        const dayItems = items
-          .flatMap((item) => item.meetings.filter((meeting) => meeting.day === day.code).map((meeting) => ({ item, meeting })))
-          .sort((first, second) => first.meeting.start.localeCompare(second.meeting.start));
-        return (
-          <section key={day.code} className="rounded-2xl border border-border bg-card p-3 shadow-sm">
-            <h3 className="mb-2 px-1 text-xs font-bold uppercase tracking-wider text-muted-foreground">{day.label}</h3>
-            {dayItems.length === 0 ? <p className="rounded-xl bg-muted/50 px-3 py-4 text-center text-xs text-muted-foreground">{t("schedule.noClass")}</p> : (
-              <div className="space-y-2">
-                {dayItems.map(({ item, meeting }) => {
-                  const conflict = meetingHasConflict(item, meeting, conflicts);
-                  return (
-                    <div key={`${item.id}-${meeting.start}`} className={`relative flex items-center rounded-xl border ${conflict ? "border-rose-500 bg-rose-500/10" : "border-border bg-background"}`}>
-                      <button type="button" onClick={() => void onFocus(item)} className="flex min-w-0 flex-1 items-center gap-3 p-3 pr-10 text-left">
-                        <span className={`h-10 w-1 shrink-0 rounded-full ${conflict ? "bg-rose-500" : colourFor(item.courseCode).split(" ")[1]}`} />
-                        <span className="w-24 shrink-0 font-mono text-xs font-bold tabular-nums">{meeting.start}–{meeting.end}</span>
-                        <span className="min-w-0 flex-1"><span className="block truncate text-sm font-extrabold">{item.courseCode} · {item.title}</span><span className="block truncate text-[11px] text-muted-foreground">{item.section || item.component} · {item.location}</span></span>
-                        {conflict && <AlertTriangle className="h-4 w-4 shrink-0 text-rose-600" />}
-                      </button>
-                      <button type="button" onClick={() => onRemove(item)} aria-label={t("schedule.removeBundle", { course: item.courseCode })} className="absolute right-2 top-1/2 grid h-7 w-7 -translate-y-1/2 place-items-center rounded-lg text-muted-foreground hover:bg-destructive/10 hover:text-destructive"><X className="h-4 w-4" /></button>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </section>
-        );
-      })}
-    </div>
-  );
-}
