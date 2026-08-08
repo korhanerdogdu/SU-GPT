@@ -271,7 +271,11 @@ RECOMMENDATION_INTENT_RE = re.compile(
     r"ders öner|ders oner|öner|oner|recommend|recommendation|"
     r"gelecek dönem|gelecek donem|next semester|ders programı|ders programi|"
     r"program öner|program oner|program oluştur|program olustur|schedule|"
-    r"kolay|rahat|zor|ağır|agir|yoğun|yogun"
+    r"kolay|rahat|zor|ağır|agir|yoğun|yogun|"
+    # The Turkish easy/light/hard difficulty cues (kolay/rahat/zor/ağır/yoğun) had no English
+    # counterpart at all, so "I want easy courses this term" (no "recommend"/"schedule" word
+    # either) had nothing here to catch it and depended entirely on the ML classifier's guess.
+    r"easy\s+courses?|light\s+(?:course\s+)?load|easy\s+(?:course\s+)?load"
     r")",
     re.IGNORECASE,
 )
@@ -332,8 +336,15 @@ HEAVY_LOAD_RE = re.compile(
     re.IGNORECASE,
 )
 HEAVY_NEGATION_RE = re.compile(
-    r"\b(?:yoğun|yogun|ağır|agir|heavy|intensive)\s+(?:olmasın|olmasin|istemiyorum|değil|degil|not)\b|"
-    r"\b(?:not|don't|do\s+not)\s+(?:heavy|intensive)\b",
+    # Regression: required the heavy-word and its negation to be *immediately* adjacent, but
+    # natural phrasing almost always has a noun phrase between them -- "ağır BİR PROGRAM
+    # istemiyorum" (Turkish, heavy-word before negation) and "I do not want A HEAVY LOAD"
+    # (English, negation before heavy-word) both failed to match, so a student explicitly asking
+    # for a *lighter* load was read as requesting a heavier one. Small bounded gap instead of a
+    # direct \s+ join, in each language's dominant word order.
+    r"\b(?:yoğun|yogun|ağır|agir)\b[^.,;\n]{0,25}?\b(?:olmasın|olmasin|istemiyorum|değil|degil)\b|"
+    r"\b(?:olmasın|olmasin|istemiyorum)\b[^.,;\n]{0,25}?\b(?:yoğun|yogun|ağır|agir)\b|"
+    r"\b(?:not|don'?t|do\s+not)\b[^.,;\n]{0,25}?\b(?:heavy|intensive)\b",
     re.IGNORECASE,
 )
 COURSE_COUNT_RE = re.compile(r"\b([1-8])\s*(?:tane\s*)?(?:ders|courses?)\b", re.IGNORECASE)
@@ -382,7 +393,13 @@ STUDY_PLAN_INTENT_RE = re.compile(
     r"\b("
     r"nasıl çalış|nasil calis|çalışma planı|calisma plani|çalışma plan|calisma plan|"
     r"sınavlarına nasıl|sinavlarina nasil|hazırlanılır|hazirlanilir|"
-    r"A ile geç|a ile gec|geçmek için|gecmek icin|study plan"
+    r"A ile geç|a ile gec|geçmek için|gecmek icin|study plan|"
+    # Previously the only English coverage was the literal phrase "study plan" -- a natural
+    # English question like "how should I study for the final?" fell through to the generic
+    # "other" RAG/LLM path instead of this deterministic intent, an asymmetry with Turkish's
+    # much broader coverage above.
+    r"how\s+(?:should|do|can|would)\s+i\s+study|study\s+for\s+(?:the\s+)?(?:exam|final|midterm|test)|"
+    r"prepare\s+for\s+(?:the\s+)?(?:exam|final|midterm|test)"
     r")",
     re.IGNORECASE,
 )
@@ -390,7 +407,10 @@ STUDY_PLAN_INTENT_RE = re.compile(
 MAJOR_SELECTION_INTENT_RE = re.compile(
     r"\b("
     r"hangi bölüm|hangi bolum|bölümü seç|bolumu sec|major seç|major sec|"
-    r"ana dal|anadal|cs mi|bilgisayar bilimleri seçmek|endüstri mi|endustri mi"
+    r"ana dal|anadal|cs mi|bilgisayar bilimleri seçmek|endüstri mi|endustri mi|"
+    # See STUDY_PLAN_INTENT_RE's comment: only "major seç"-style literal English fragments
+    # existed, no coverage for how an English speaker would actually phrase this.
+    r"which\s+major|choose\s+(?:a|my)\s+major|pick\s+(?:a|my)\s+major|major\s+selection"
     r")",
     re.IGNORECASE,
 )
@@ -398,13 +418,19 @@ MAJOR_SELECTION_INTENT_RE = re.compile(
 SPECIALIZATION_INTENT_RE = re.compile(
     r"\b("
     r"özelleş|ozelles|uzmanlaş|uzmanlas|alt dal|yönel|yonel|"
-    r"nlp mi|security mi|data alanında|data alaninda|yapay zeka alanında|yapay zeka alaninda"
+    r"nlp mi|security mi|data alanında|data alaninda|yapay zeka alanında|yapay zeka alaninda|"
+    r"which\s+specialization|choose\s+(?:a|my)\s+specialization|pick\s+(?:a|my)\s+specialization|"
+    r"specializ(?:e|ation)\s+in"
     r")",
     re.IGNORECASE,
 )
 
 MINOR_INTENT_RE = re.compile(
-    r"\b(minor|yandal|yan dal|yan-dal)\b",
+    # No trailing \b: Turkish possessive/case suffixes attach directly to "yandal" with no word
+    # break ("yandalımı seçmek istiyorum" -- "I want to choose my minor" -- never matched here,
+    # since \b requires an immediate boundary right after the stem and there never is one before
+    # an inflection). "minor" keeps only a leading boundary for the same reason.
+    r"\b(minor|yandal|yan dal|yan-dal)",
     re.IGNORECASE,
 )
 
@@ -427,7 +453,12 @@ COURSE_DETAIL_INTENT_RE = re.compile(
     r"\b("
     r"kim veriyor|hoca|hocanın|hocanin|syllabus|içeriği|icerigi|"
     r"dersin içeriği|dersin icerigi|notlandırması|notlandirmasi|"
-    r"prerequisite|önkoşul|onkosul|workload|zor mu"
+    r"prerequisite|önkoşul|onkosul|workload|zor mu|"
+    # "kim veriyor" ("who teaches it") had no English counterpart -- masked for a course-code
+    # question ("who teaches CS 306?", caught by the COURSE_CODE_RE fallback in
+    # _is_course_detail_like below) but a live gap for a course named without its code
+    # ("who teaches Database Systems?").
+    r"who\s+(?:teaches|is\s+teaching)|instructor|taught\s+by"
     r")",
     re.IGNORECASE,
 )

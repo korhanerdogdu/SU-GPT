@@ -54,7 +54,16 @@ esac
 case "${ADVISU_LAB_DENSE:-true}" in
   1|true|TRUE|yes|YES|on|ON)
     echo "adviSU: warming the dense retrieval cache (one-time cost per persisted volume)..."
-    python -c "
+    # The image pins OMP_NUM_THREADS=MKL_NUM_THREADS=1 (Dockerfile) so concurrent live requests
+    # never oversubscribe the CPU against each other. That same limit applied to this one-time,
+    # single-process warm-up just makes an otherwise-parallelizable embedding pass take far
+    # longer than it needs to. Override it for this subprocess only -- uvicorn, started below via
+    # exec, still inherits the image's single-thread default from its own environment.
+    # `nproc` itself is unreliable in this image (observed reporting 1 on an 8-core host with no
+    # cgroup CPU limit set) -- /proc/cpuinfo's own processor count is what Python's
+    # os.cpu_count()/sched_getaffinity() actually agree with here, so read it directly instead.
+    warm_threads="$(grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 4)"
+    OMP_NUM_THREADS="$warm_threads" MKL_NUM_THREADS="$warm_threads" python -c "
 from retrieval_lab.corpus import load_corpus
 from retrieval_lab.dense import DENSE_CONFIGS, DenseIndex
 corpus = load_corpus()

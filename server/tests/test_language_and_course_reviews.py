@@ -56,6 +56,16 @@ def test_language_detection_is_course_code_and_acronym_resistant():
     assert detect_language("WHAT COURSE SHOULD I TAKE CS 412?") == "en"
 
 
+def test_language_detection_recognises_common_academic_advising_verbs():
+    # Regression: "Mezuniyet durumumu hesapla" -- a literal main-menu starter chip -- scored zero
+    # Turkish signal (none of "mezuniyet"/"durumumu"/"hesapla" were in the word lexicon, and none
+    # contain a diacritic or the checked inflection suffixes) and silently defaulted to English,
+    # so a Turkish question about the student's own graduation status came back in English.
+    assert detect_language("Mezuniyet durumumu hesapla") == "tr"
+    assert detect_language("15 krediye tamamla") == "tr"
+    assert detect_language("Bu dönem GPA'mı ne kadar yükseltebilirim?") == "tr"
+
+
 def test_language_analysis_exposes_mixed_without_breaking_response_contract():
     result = analyze_language("Can you recommend bir ders for my program?")
     assert result.classification == "mixed"

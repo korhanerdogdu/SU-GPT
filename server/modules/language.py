@@ -33,10 +33,19 @@ _TR_WORDS = frozenset(
     {
         "acaba", "aldım", "aldim", "almalıyım", "almaliyim", "bana", "ben", "benim",
         "bir", "bu", "çok", "cok", "ders", "dersi", "dersler", "dönem", "donem", "durum",
-        "gerekiyor", "gerekli", "gibi", "hangi", "için", "icin", "ile", "kaç", "kac",
-        "kaldı", "kaldi", "kredi", "kim", "mı", "mi", "mu", "mü", "mufredat", "müfredat",
-        "nasıl", "nasil", "ne", "nedir", "öner", "önerir", "oner", "program", "sayılır",
-        "sayilir", "seçmeli", "secmeli", "şu", "su", "ve", "veya", "zorunlu",
+        "durumu", "durumum", "durumumu", "gerekiyor", "gerekli", "gibi", "hangi", "için",
+        "icin", "ile", "kaç", "kac", "kaldı", "kaldi", "kredi", "kim", "mı", "mi", "mu",
+        "mü", "mufredat", "müfredat", "nasıl", "nasil", "ne", "nedir", "öner", "önerir",
+        "oner", "program", "sayılır", "sayilir", "seçmeli", "secmeli", "şu", "su", "ve",
+        "veya", "zorunlu",
+        # High-frequency academic-advising verbs/nouns this app's own starters and follow-up
+        # flows use, none of which were caught by the inflection-suffix heuristic below (their
+        # possessive/case suffixes don't end in those exact strings) -- "Mezuniyet durumumu
+        # hesapla" (a literal main-menu starter) scored zero Turkish signal without these and
+        # silently defaulted to English.
+        "mezuniyet", "mezun", "hesapla", "hesap", "kalan", "tamamla", "tamamlar",
+        "yükselt", "yukselt", "değiştir", "degistir", "ekle", "çıkar", "cikar",
+        "yerine", "yaz", "seç", "sec",
     }
 )
 _EN_WORDS = frozenset(

@@ -73,6 +73,28 @@ def test_turkish_no_information_hedge_is_not_penalized():
     assert claim_coverage_supported(answer, evidence)
 
 
+def test_KNOWN_LIMITATION_a_wrong_number_surrounded_by_correct_vocabulary_is_not_caught():
+    # Documents a real gap, not a bug to fix here: this is lexical-overlap grounding, not
+    # semantic entailment (see the module docstring). A single wrong digit inside an otherwise
+    # evidence-matching sentence only costs that one token out of ~8-9 significant tokens in the
+    # sentence, comfortably clearing _MIN_OVERLAP. Catching this needs an actual entailment
+    # check (e.g. comparing extracted numeric claims against the evidence's own numbers
+    # per-field, or an NLI model) -- out of scope for a deterministic lexical checker.
+    evidence = [
+        "For Computer Science and Engineering Undergraduate Program (BSCS), CS 303 is a "
+        "required course. A minimum of 29 SU credits of required courses is required."
+    ]
+    wrong_number_answer = (
+        "CS 303 is a required course for the Computer Science and Engineering Undergraduate "
+        "Program (BSCS). A minimum of 92 SU credits of required courses is required."
+    )
+    # Asserting True here documents the limitation (this SHOULD be False in an ideal system,
+    # i.e. 92 SU is fabricated) -- if this ever starts failing, claim_coverage_supported has
+    # gained real numeric-entailment ability and this test (and its comment) should be updated,
+    # not treated as a regression.
+    assert claim_coverage_supported(wrong_number_answer, evidence)
+
+
 def test_one_fabricated_sentence_among_grounded_ones_fails_the_whole_answer():
     evidence = ["CS 306 Database Systems is a 3 SU core elective course."]
     answer = (
