@@ -21,7 +21,11 @@ services:
     env_file:
       - .env
     environment:
-      MONGO_URI: mongodb://mongo:27017
+      # Previously hardcoded to the local container regardless of .env, so a real MONGO_URI
+      # (e.g. an Atlas connection string) set there was silently ignored by the Docker backend --
+      # env_file values never win over an inline `environment:` entry for the same key. This
+      # still defaults to the local `mongo` service when .env leaves MONGO_URI unset.
+      MONGO_URI: ${MONGO_URI:-mongodb://mongo:27017}
       MONGO_DB_NAME: ${MONGO_DB_NAME:-advisu}
       CHROMA_PERSIST_DIR: /app/chroma_store
       DEGREE_DATA_DIR: /app/data

@@ -114,6 +114,67 @@ def test_schedule_edit_followup_stays_in_context_instead_of_becoming_graduation_
     ) == intents.GRADUATION_STATUS
 
 
+def test_minor_intent_matches_turkish_possessive_inflection():
+    # Regression: MINOR_INTENT_RE's trailing \b required an immediate word boundary right after
+    # "yandal", which a Turkish possessive suffix never leaves -- "yandalımı seçmek istiyorum"
+    # ("I want to choose my minor") never matched at all.
+    assert main_module.MINOR_INTENT_RE.search("Yandalımı seçmek istiyorum")
+    assert main_module.MINOR_INTENT_RE.search("yandal başvurusu ne zaman?")
+    assert main_module.MINOR_INTENT_RE.search("minor requirements?")
+
+
+def test_heavy_negation_matches_natural_word_order_not_only_direct_adjacency():
+    # Regression: HEAVY_NEGATION_RE required the heavy-word and its negation to sit immediately
+    # next to each other. Natural phrasing almost always has a noun phrase between them --
+    # "ağır bir program istemiyorum" (heavy-word before negation) and "I do not want a heavy
+    # load" (negation before heavy-word) both failed to match, so a student explicitly asking
+    # for a *lighter* term was read as requesting a heavier one (the opposite of what they said).
+    negated = (
+        "ağır bir program istemiyorum",
+        "yoğun bir dönem istemiyorum",
+        "I do not want a heavy load",
+        "not a heavy term please",
+        "don't give me an intensive schedule",
+    )
+    for text in negated:
+        assert main_module.HEAVY_LOAD_RE.search(text), text
+        assert main_module.HEAVY_NEGATION_RE.search(text), text
+
+    not_negated = ("bu dönem yoğun bir program istiyorum", "I want a heavy course load")
+    for text in not_negated:
+        assert main_module.HEAVY_LOAD_RE.search(text), text
+        assert not main_module.HEAVY_NEGATION_RE.search(text), text
+
+
+def test_study_plan_major_selection_specialization_have_real_english_coverage():
+    # Regression: these three previously had only literal Turkish phrasing plus one or two
+    # hardcoded English fragments ("study plan", "major seç") -- an ordinary English question
+    # fell through to the generic "other" RAG/LLM path instead of the deterministic intent,
+    # an asymmetry with Turkish's much broader coverage (CLAUDE.md requires TR/EN symmetry).
+    assert main_module.STUDY_PLAN_INTENT_RE.search("How should I study for the final?")
+    assert main_module.STUDY_PLAN_INTENT_RE.search("I need to prepare for the midterm")
+    assert main_module.MAJOR_SELECTION_INTENT_RE.search("Which major should I pick?")
+    assert main_module.MAJOR_SELECTION_INTENT_RE.search("I want to choose my major")
+    assert main_module.SPECIALIZATION_INTENT_RE.search(
+        "which specialization should I pick, NLP or CV?"
+    )
+    assert main_module.SPECIALIZATION_INTENT_RE.search("I want to specialize in AI")
+
+
+def test_course_detail_recognises_who_teaches_in_english():
+    # "kim veriyor" ("who teaches it") had no English counterpart. Masked when a course code is
+    # present (COURSE_CODE_RE's fallback in _is_course_detail_like already catches "who teaches
+    # CS 306?"), but a real gap for a course referenced by name only.
+    assert main_module.COURSE_DETAIL_INTENT_RE.search("Who teaches Database Systems?")
+    assert main_module.COURSE_DETAIL_INTENT_RE.search("Who is the instructor for CS 306?")
+
+
+def test_recommendation_intent_recognises_english_difficulty_cues():
+    # kolay/rahat/zor/ağır/yoğun (easy/light/hard/heavy/intense) had no English counterpart.
+    assert main_module.RECOMMENDATION_INTENT_RE.search("I want easy courses this term")
+    assert main_module.RECOMMENDATION_INTENT_RE.search("give me a light course load")
+
+
 def test_instructor_opinion_question_gets_a_warm_redirect_not_a_dry_disabled_message():
     # Regression (section 1.6 of the course-advising spec): a gossip/opinion question about an
     # instructor used to surface "Course reviews are not enabled." -- an internal, feature-flag

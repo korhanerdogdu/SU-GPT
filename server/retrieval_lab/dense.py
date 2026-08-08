@@ -19,6 +19,7 @@ Similarity is cosine throughout (vectors are L2-normalized at encode time), so s
 comparable across models and safe to feed to rank fusion.
 """
 
+import json
 import os
 import time
 from dataclasses import dataclass
@@ -161,15 +162,41 @@ class DenseIndex:
             contextual_text(c) if self.cfg.contextual else c.text
             for c in corpus.chunks
         ]
-        started = time.perf_counter()
-        out = np.empty((len(texts), 0), dtype=np.float32)
-        chunks: list[np.ndarray] = []
         step = max(self.cfg.batch_size * 16, 256)
-        for i in range(0, len(texts), step):
+
+        # A cold build over the full corpus can take tens of minutes; previously the only
+        # np.save() happened after the entire loop finished, so any interruption (container
+        # restart, OOM, deploy) lost 100% of the work and the next attempt started at batch 0
+        # again. This makes the build resumable: progress is checkpointed to disk after every
+        # batch, and a restart picks up from the last completed batch instead of from scratch.
+        checkpoint_path = self.cache_path.with_suffix(".partial.npy")
+        checkpoint_meta_path = self.cache_path.with_suffix(".partial.json")
+        start_index = 0
+        chunks: list[np.ndarray] = []
+        if checkpoint_path.exists() and checkpoint_meta_path.exists():
+            try:
+                meta = json.loads(checkpoint_meta_path.read_text(encoding="utf-8"))
+                if meta.get("total") == len(texts) and meta.get("model") == self.cfg.name:
+                    chunks = [np.load(checkpoint_path)]
+                    start_index = int(meta["completed"])
+            except (OSError, ValueError, json.JSONDecodeError, KeyError):
+                start_index = 0
+                chunks = []
+
+        started = time.perf_counter()
+        for i in range(start_index, len(texts), step):
             chunks.append(self._encode(texts[i:i + step], self.cfg.passage_prefix))
-        out = np.vstack(chunks)
+            completed = min(i + step, len(texts))
+            np.save(checkpoint_path, np.vstack(chunks))
+            checkpoint_meta_path.write_text(
+                json.dumps({"total": len(texts), "completed": completed, "model": self.cfg.name}),
+                encoding="utf-8",
+            )
+        out = np.vstack(chunks) if chunks else np.empty((0, 0), dtype=np.float32)
         self.build_seconds = time.perf_counter() - started
         np.save(self.cache_path, out)
+        checkpoint_path.unlink(missing_ok=True)
+        checkpoint_meta_path.unlink(missing_ok=True)
         return out
 
     # --- search -------------------------------------------------------------------------

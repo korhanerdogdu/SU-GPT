@@ -167,8 +167,12 @@ def assess(signals: ConfidenceSignals, *, threshold: float | None = None) -> Con
     if not signals.citations_authorized:
         verification_failures.append("citations_unauthorized")
     # A source label proves only that a document was retrieved; it does not prove that the
-    # document supports every model-authored factual claim.  Until an independently calibrated
-    # claim/evidence verifier has actually run, evidence-bound answers must fail closed instead of
+    # document supports every model-authored factual claim. modules/claim_coverage.py is the
+    # checker the main `/ask/` path now runs before setting claim_coverage_checked=True -- but it
+    # is deterministic lexical-overlap grounding, not semantic entailment, so it catches an
+    # answer built from vocabulary absent from the evidence entirely without confirming that a
+    # specific number or claim is *correct*. Any caller that has not run a real check at all
+    # (claim_coverage_checked left at its False default) must still fail closed here instead of
     # presenting an unsupported answer under the weaker ``limited_evidence`` label.
     if evidence_required and not signals.claim_coverage_checked:
         verification_failures.append("claim_coverage_unverified")
