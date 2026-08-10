@@ -57,6 +57,9 @@ Thumbs.db
 # regenerable from the corpus (keyed by corpus fingerprint). Never commit them.
 outputs/retrieval_cache/
 outputs/retrieval_lab/*/rankings/
+
+# Render/parser scratch artifacts (PDF/DOCX skills and corpus tests).
+tmp/
 # Provider pilot dumps are local by default. The explicitly re-included development runs contain
 # only the redacted row schema (no prompts, response text, reasoning, headers, or raw errors) and
 # are committed so reviewers can recompute the rejected exploratory aggregates.

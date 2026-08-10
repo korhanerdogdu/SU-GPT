@@ -114,6 +114,20 @@ UNIVERSITY_FRESHMAN = UNIVERSITY_SEM1 + UNIVERSITY_SEM2
 UNIVERSITY_LATER = ["PROJ201", "SPS303"]
 HUM_MAJOR_WORKS = ["HUM201", "HUM202", "HUM207", "HUM311", "HUM312", "HUM317", "HUM321", "HUM322", "HUM371"]
 
+# When a core/area/free elective slot is filled from a large official pool, real students
+# gravitate toward a small set of broadly-accessible, no-heavy-prerequisite courses (an intro
+# economics/business elective) rather than a niche, technically-required course that belongs to a
+# DIFFERENT major's own curriculum (e.g. IE's ENS 208) -- unless the student has actually
+# expressed interest in that area. This is a curated preference, the same kind of product
+# judgment call as UNIVERSITY_LATER above, not something derivable from the requirement pool
+# itself. ECON 201 (Game Theory) also happens to be the one course this set names that is
+# independently corroborated by the suggested-program corpus: it is the only course named as a
+# real (non-placeholder) elective in more than one different major's own official plan
+# (PSIR's and DSA's), evidence that it is genuinely broad-appeal rather than one department's own
+# requirement leaking into "electives". Used ONLY to order otherwise equally-eligible candidates
+# within the same official pool; it can never make an ineligible course eligible.
+POPULAR_LIGHT_ELECTIVES = ["ECON201", "ACC201", "FIN301", "IE303", "OPIM390"]
+
 # Prerequisites for the courses this planner reasons about.  This map is intentionally
 # fail-closed: absence from both this map and ``KNOWN_NO_PREREQUISITES`` means that the
 # prerequisite data is unavailable, never that the course has no prerequisites.
@@ -140,15 +154,36 @@ PREREQS: dict[str, list[str]] = {
 # explicit so a valid alternative does not get rejected or, worse, interpreted as no rule.
 ALTERNATIVE_PREREQUISITE_PATHS: dict[str, list[list[str]]] = {
     "CS306": [["CS204"], ["DSA201"]],
+    # OPIM 390 (verified against its SUIS course-detail page): "Undergraduate level MGMT 203
+    # Minimum Grade of D or Undergraduate level MATH 306 Minimum Grade of D".
+    "OPIM390": [["MGMT203"], ["MATH306"]],
 }
 
 # Only courses whose eligibility is part of the planner's curated University-course model
 # belong here.  Arbitrary electives are deliberately excluded until their official
-# registration rules are ingested. PROJ 201 and SPS 303 are mandatory later-University
-# requirements and are stage-gated by when this filler stream becomes relevant.
+# registration rules are ingested. PROJ 201 is a mandatory later-University requirement and
+# is stage-gated by when this filler stream becomes relevant. SPS 303 is NOT prerequisite-free
+# -- see MINIMUM_CREDIT_PREREQS below -- and must never be listed here.
+# ACC 201, ECON 201, FIN 301, and IE 303 were each individually verified against their SUIS
+# course-detail page ("Must be enrolled in one of the following Levels: Undergraduate" is the
+# only restriction listed for each; no prerequisite section). They previously had no PREREQS/
+# KNOWN_NO_PREREQUISITES entry at all, which the fail-closed policy correctly reads as "data
+# unavailable" -- silently excluding them from every recommendation regardless of eligibility,
+# even though they are common, broadly-accessible electives real students take (see
+# POPULAR_LIGHT_ELECTIVES above).
 KNOWN_NO_PREREQUISITES = frozenset(
-    UNIVERSITY_SEM1 + ["AL102", "PROJ201", "SPS303"]
+    UNIVERSITY_SEM1 + ["AL102", "PROJ201", "ACC201", "ECON201", "FIN301", "IE303"]
 )
+
+# Courses whose official SUIS restriction is a minimum-completed-credit threshold rather than
+# a specific prior course (verified against https://suis.sabanciuniv.edu course-detail pages,
+# "General Requirements" section). SPS 303 (Law and Ethics) requires >= 58 completed SU
+# credits; it has no course-code prerequisite, so it cannot go in PREREQS, and it must not go
+# in KNOWN_NO_PREREQUISITES either -- both would incorrectly let a freshman with 6 completed SU
+# credits be recommended it.
+MINIMUM_CREDIT_PREREQS: dict[str, int] = {
+    "SPS303": 58,
+}
 
 # Highest academic level (in hundreds) a student at each stage should see in the CURRENT plan.
 # The hard product rule "no 4XX for a sophomore or below" lives here.
@@ -230,12 +265,17 @@ class StageAnalysis:
         return not (self.missing_university_sem1 or self.missing_university_sem2)
 
 
+def _completed_su_total(completed: set[str]) -> int:
+    return sum(_su(c, 0) for c in completed)
+
+
 def _prerequisite_data_known(code: str) -> bool:
     code = normalize_code(code)
     return (
         code in KNOWN_NO_PREREQUISITES
         or code in PREREQS
         or code in ALTERNATIVE_PREREQUISITE_PATHS
+        or code in MINIMUM_CREDIT_PREREQS
     )
 
 
@@ -243,6 +283,8 @@ def _prereqs_met(code: str, completed: set[str]) -> bool:
     code = normalize_code(code)
     if code in KNOWN_NO_PREREQUISITES:
         return True
+    if code in MINIMUM_CREDIT_PREREQS:
+        return _completed_su_total(completed) >= MINIMUM_CREDIT_PREREQS[code]
     alternatives = ALTERNATIVE_PREREQUISITE_PATHS.get(code)
     if alternatives is not None:
         return any(all(prereq in completed for prereq in path) for path in alternatives)
@@ -254,6 +296,12 @@ def _missing_prereqs(code: str, completed: set[str]) -> list[str]:
     code = normalize_code(code)
     if not _prerequisite_data_known(code):
         return ["official prerequisite data unavailable"]
+    if code in MINIMUM_CREDIT_PREREQS:
+        threshold = MINIMUM_CREDIT_PREREQS[code]
+        have = _completed_su_total(completed)
+        if have >= threshold:
+            return []
+        return [f"{threshold}+ completed SU credits ({have} so far)"]
     alternatives = ALTERNATIVE_PREREQUISITE_PATHS.get(code)
     if alternatives is not None and not _prereqs_met(code, completed):
         return [" or ".join(display_code(p) for p in path) for path in alternatives]
@@ -456,8 +504,13 @@ def build_plan(program: str, term: str | None, completed_codes: list[str],
             if hum and _prereqs_met(hum, completed):
                 filler_items.append(PlanItem(hum, "university", *_REASON["university"]))
             continue
-        if resolve(code) and _prereqs_met(code, completed):
+        if not resolve(code):
+            continue
+        if _prereqs_met(code, completed):
             filler_items.append(PlanItem(code, "university", *_REASON["university"]))
+        else:
+            missing = ", ".join(_missing_prereqs(code, completed))
+            result.future_targets.append((code, missing))
 
     # 5) Official, currently offered electives. These are a credit-floor fallback, not a way to
     # displace required foundations. Pool order follows the degree model's specificity:
@@ -465,12 +518,24 @@ def build_plan(program: str, term: str | None, completed_codes: list[str],
     # and previously caused misleading sophomore recommendations.
     elective_items: list[PlanItem] = []
     offered = _offered_course_codes(str(DEGREE_DATA_DIR))
+    model_pools = (model or {}).get("pools", {})
+    core_pool_names = sorted(
+        name for name in model_pools
+        if name == "core_electives" or name.startswith("core_electives_")
+    )
+    def _pool_order(raw_code: str) -> tuple[int, str]:
+        code = normalize_code(raw_code)
+        preference = POPULAR_LIGHT_ELECTIVES.index(code) if code in POPULAR_LIGHT_ELECTIVES else len(
+            POPULAR_LIGHT_ELECTIVES
+        )
+        return preference, code
+
     for pool_name, category in (
-        ("core_electives", "core"),
+        *((name, "core") for name in core_pool_names),
         ("area_electives", "area"),
         ("free_electives", "free"),
     ):
-        for raw_code in (model or {}).get("pools", {}).get(pool_name, []):
+        for raw_code in sorted(model_pools.get(pool_name, []), key=_pool_order):
             code = normalize_code(raw_code)
             if (
                 not code
@@ -683,10 +748,13 @@ def render_plan(
 
     if until_graduation:
         intro = (
-            "Mezun olana kadar almanı önerdiğim, önkoşulları uygun dersler (tüm kalan kategoriler):"
+            "Mezun olana kadar almanı önerdiğim, önkoşulları uygun dersler (tüm kalan kategoriler). "
+            "Bu liste TEK bir dönem için değil — dönem başına kayıt yükü sınırlı olduğundan "
+            "(genellikle ~18 SU) bu dersleri birden fazla döneme yaymalısın:"
             if tr else
             "The prerequisite-eligible courses I'd recommend taking until you graduate (across all "
-            "remaining categories):"
+            "remaining categories). This list is NOT for a single term — per-term registration load "
+            "is capped (typically ~18 SU), so you should spread these across multiple future terms:"
         )
     else:
         intro = (

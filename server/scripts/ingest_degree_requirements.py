@@ -4,7 +4,8 @@ from __future__ import annotations
 Ingest the pre-chunked degree-requirement corpus into ChromaDB.
 
 Unlike catalog_data_loader (which synthesizes prose from raw catalog rows), the files
-under data/degree_requirements/<PROGRAM>/<TERM>.jsonl and data/minors/<CODE>/<TERM>.jsonl
+under data/degree_requirements/<PROGRAM>/<TERM>.jsonl, data/minors/<CODE>/<TERM>.jsonl,
+and data/suggested_programs/<PROGRAM>/*.jsonl
 are ALREADY one-chunk-per-line: every row carries a ready-made `text`, a stable
 `chunk_id`, and flat metadata (data_role, program, curriculum_term, course_id, ...).
 
@@ -99,6 +100,7 @@ def upsert_documents(vectorstore: Chroma, documents: list[Document], ids: list[s
 _DOCUMENT_TYPE_ALIAS = {
     "curriculum_requirement": "course",
     "minor_requirement": "minor",
+    "suggested_program": "course",
 }
 _SCALAR = (str, int, float, bool)
 
@@ -117,8 +119,8 @@ def _scalarize(row: dict) -> dict:
 
 
 def _iter_rows(data_dir: Path):
-    """Yield (chunk_id, Document) for every JSONL row under degree_requirements/ and minors/."""
-    roots = [data_dir / "degree_requirements", data_dir / "minors"]
+    """Yield every pre-chunked curriculum, minor, and suggested-program JSONL row."""
+    roots = [data_dir / "degree_requirements", data_dir / "minors", data_dir / "suggested_programs"]
     files = sorted(p for root in roots if root.is_dir() for p in root.rglob("*.jsonl"))
     for path in files:
         with path.open("r", encoding="utf-8") as handle:
@@ -135,6 +137,8 @@ def _iter_rows(data_dir: Path):
                 meta = _scalarize(row)
                 # compatibility aliases for the existing retrieval stack
                 meta.setdefault("documentType", _DOCUMENT_TYPE_ALIAS.get(data_role, "course"))
+                if row.get("course_code") and not meta.get("course_id"):
+                    meta["course_id"] = row["course_code"]
                 if row.get("curriculum_term"):
                     meta.setdefault("term_code", row["curriculum_term"])
                 meta["source"] = row.get("source_document") or path.name
@@ -159,8 +163,10 @@ def main() -> None:
     if args.reset and vectorstore is not None:
         collection = getattr(vectorstore, "_collection", None)
         if collection is not None:
-            collection.delete(where={"data_role": {"$in": ["curriculum_requirement", "minor_requirement"]}})
-            print("Reset: removed existing degree/minor requirement vectors.")
+            collection.delete(where={"data_role": {"$in": [
+                "curriculum_requirement", "minor_requirement", "suggested_program",
+            ]}})
+            print("Reset: removed existing degree/minor/suggested-program vectors.")
 
     batch_docs: list[Document] = []
     batch_ids: list[str] = []

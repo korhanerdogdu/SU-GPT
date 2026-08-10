@@ -726,6 +726,11 @@ def _retrieval_query_for_intent(question: str, intent: str, program: str | None 
         return question
     if intent == intents.EXAM:
         return f"{question} exam final midterm quiz past questions solutions assessment"
+    if intent == "syllabus":
+        return (
+            f"{question} official course syllabus learning outcomes course objectives grading "
+            "assessment attendance weekly topics resources academic integrity"
+        )
     if intent == intents.MINOR:
         return f"{question} minor program required courses core electives area electives"
     if intent == intents.COURSE_RECOMMENDATION:
@@ -773,6 +778,14 @@ def _intent_context_document(intent: str, taken_codes: list[str] | None = None) 
             "[Source: Request intent]\n"
             "Detected intent: course_detail. Answer the requested course detail "
             "such as instructor, schedule, syllabus, prerequisite or workload. Do not produce graduation audit."
+        )
+    elif intent == "syllabus":
+        text = (
+            "[Source: Request intent]\n"
+            "Detected intent: syllabus / official course outline. Use only course_syllabus chunks, "
+            "preserve the requested term and section, cite the official page or attachment, and "
+            "say explicitly when a syllabus was not published. Never infer missing grading, policy, "
+            "instructor, or weekly-topic details."
         )
     elif intent == intents.REVIEW:
         text = (
@@ -1780,11 +1793,28 @@ async def upload_transcript(username: str, request: Request, file: UploadFile = 
         parsed=parsed,
     )
     applied = await apply_transcript_courses(username, parsed.courses)
+
+    # The transcript's own "Program :" line is official-source evidence of the student's current
+    # major -- more authoritative than a stale/never-set profile value. Only ever act on a
+    # confidently resolved code (fail-closed, per roadmap section 1: never guess); an unresolved
+    # hint or an already-matching major leaves the stored profile untouched.
+    profile_major_update: dict[str, str] | None = None
+    resolved_major = curriculum_registry.resolve_program_code(parsed.program_hint)
+    if resolved_major:
+        current_profile = await get_academic_profile(username)
+        if (current_profile.get("major") or "").strip().upper() != resolved_major:
+            await set_academic_profile(username, {"major": resolved_major})
+            profile_major_update = {
+                "from": current_profile.get("major"),
+                "to": resolved_major,
+            }
+
     return {
         "summary": summary,
         "matched_course_codes": applied["matched"],
         "unmatched_course_codes": applied["unmatched"],
         "courses": applied["courses"],
+        "profile_major_update": profile_major_update,
     }
 
 
@@ -2487,10 +2517,18 @@ async def ask_question(
                     "sources": [], "source_chunk_ids": [], "intent": intents.WEEKLY_SCHEDULE,
                     "confidence": _confidence_public("cannot_verify"),
                 })
+            # Mandatory first-year University-course debt (TLL 101/102, CIP 101N, AL 102, ...) and
+            # currently-eligible program-required courses must never be swapped out by the
+            # timetable solver's "smallest combination that reaches the SU floor" search just
+            # because a different, unrelated combination also clears the floor.
+            mandatory_codes = list(plan.university_debt) + [
+                item.code for item in plan.recommended if item.category == "required"
+            ]
             timetable = schedule_planner.build_timetable_for_load(
                 [i.code for i in plan.recommended],
                 target_courses=target_courses,
                 minimum_su_credits=minimum_su,
+                mandatory_codes=mandatory_codes,
             )
             body, summary = schedule_planner.render_timetable(timetable, language=language)
             schedule_payload = schedule_planner.timetable_payload(

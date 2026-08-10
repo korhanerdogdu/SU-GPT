@@ -1,0 +1,171 @@
+{
+  "benchmark": {
+    "dimensions": {
+      "credits": 8,
+      "degree_requirement": 8,
+      "program": 10,
+      "requirement_type": 8,
+      "semester": 10,
+      "source": 8,
+      "track": 8
+    },
+    "n_queries": 60,
+    "path": "data/benchmark/suggested_programs_v1.jsonl",
+    "sha256": "b4cd01569e9764052d9b5221ee1509603bcb707d3300b6126880942ef8879f8b"
+  },
+  "comparison": {
+    "aehr@5_absolute_delta": 0.55,
+    "target": 0.9,
+    "target_passed": true
+  },
+  "created_at": "2026-08-10T10:50:48.396704+00:00",
+  "metric": {
+    "definition": "Fraction of all benchmark questions with at least one accepted authoritative evidence chunk in the first 5 results. Missing corpus evidence is a miss.",
+    "name": "Authoritative Evidence Hit Rate@5",
+    "secondary_metrics": {
+      "conditional_hit_rate@5": "Hit rate restricted to questions whose accepted evidence exists in that corpus.",
+      "evidence_coverage_rate": "Fraction of questions with accepted evidence in the corpus."
+    },
+    "short_name": "AEHR@5"
+  },
+  "run_id": "20260810T105048Z",
+  "schema_version": 1,
+  "systems": {
+    "baseline_without_suggested_programs": {
+      "authoritative_evidence_hit_rate@5": 0.36666666666666664,
+      "by_dimension": {
+        "credits": {
+          "authoritative_evidence_hit_rate@5": 1.0,
+          "conditional_hit_rate@5": 1.0,
+          "covered": 8,
+          "evidence_coverage_rate": 1.0,
+          "hits": 8,
+          "n": 8
+        },
+        "degree_requirement": {
+          "authoritative_evidence_hit_rate@5": 0.875,
+          "conditional_hit_rate@5": 0.875,
+          "covered": 8,
+          "evidence_coverage_rate": 1.0,
+          "hits": 7,
+          "n": 8
+        },
+        "program": {
+          "authoritative_evidence_hit_rate@5": 0.0,
+          "conditional_hit_rate@5": 0.0,
+          "covered": 0,
+          "evidence_coverage_rate": 0.0,
+          "hits": 0,
+          "n": 10
+        },
+        "requirement_type": {
+          "authoritative_evidence_hit_rate@5": 0.875,
+          "conditional_hit_rate@5": 1.0,
+          "covered": 7,
+          "evidence_coverage_rate": 0.875,
+          "hits": 7,
+          "n": 8
+        },
+        "semester": {
+          "authoritative_evidence_hit_rate@5": 0.0,
+          "conditional_hit_rate@5": 0.0,
+          "covered": 0,
+          "evidence_coverage_rate": 0.0,
+          "hits": 0,
+          "n": 10
+        },
+        "source": {
+          "authoritative_evidence_hit_rate@5": 0.0,
+          "conditional_hit_rate@5": 0.0,
+          "covered": 0,
+          "evidence_coverage_rate": 0.0,
+          "hits": 0,
+          "n": 8
+        },
+        "track": {
+          "authoritative_evidence_hit_rate@5": 0.0,
+          "conditional_hit_rate@5": 0.0,
+          "covered": 0,
+          "evidence_coverage_rate": 0.0,
+          "hits": 0,
+          "n": 8
+        }
+      },
+      "conditional_hit_rate@5": 0.9565217391304348,
+      "corpus_fingerprint": "e0a0303620cb8344",
+      "corpus_size": 37249,
+      "covered": 23,
+      "evidence_coverage_rate": 0.38333333333333336,
+      "hits": 22,
+      "total": 60
+    },
+    "enhanced_with_suggested_programs": {
+      "authoritative_evidence_hit_rate@5": 0.9166666666666666,
+      "by_dimension": {
+        "credits": {
+          "authoritative_evidence_hit_rate@5": 1.0,
+          "conditional_hit_rate@5": 1.0,
+          "covered": 8,
+          "evidence_coverage_rate": 1.0,
+          "hits": 8,
+          "n": 8
+        },
+        "degree_requirement": {
+          "authoritative_evidence_hit_rate@5": 0.375,
+          "conditional_hit_rate@5": 0.375,
+          "covered": 8,
+          "evidence_coverage_rate": 1.0,
+          "hits": 3,
+          "n": 8
+        },
+        "program": {
+          "authoritative_evidence_hit_rate@5": 1.0,
+          "conditional_hit_rate@5": 1.0,
+          "covered": 10,
+          "evidence_coverage_rate": 1.0,
+          "hits": 10,
+          "n": 10
+        },
+        "requirement_type": {
+          "authoritative_evidence_hit_rate@5": 1.0,
+          "conditional_hit_rate@5": 1.0,
+          "covered": 8,
+          "evidence_coverage_rate": 1.0,
+          "hits": 8,
+          "n": 8
+        },
+        "semester": {
+          "authoritative_evidence_hit_rate@5": 1.0,
+          "conditional_hit_rate@5": 1.0,
+          "covered": 10,
+          "evidence_coverage_rate": 1.0,
+          "hits": 10,
+          "n": 10
+        },
+        "source": {
+          "authoritative_evidence_hit_rate@5": 1.0,
+          "conditional_hit_rate@5": 1.0,
+          "covered": 8,
+          "evidence_coverage_rate": 1.0,
+          "hits": 8,
+          "n": 8
+        },
+        "track": {
+          "authoritative_evidence_hit_rate@5": 1.0,
+          "conditional_hit_rate@5": 1.0,
+          "covered": 8,
+          "evidence_coverage_rate": 1.0,
+          "hits": 8,
+          "n": 8
+        }
+      },
+      "conditional_hit_rate@5": 0.9166666666666666,
+      "corpus_fingerprint": "2e87d3c187545176",
+      "corpus_size": 38216,
+      "covered": 60,
+      "evidence_coverage_rate": 1.0,
+      "hits": 55,
+      "total": 60
+    }
+  }
+}

@@ -46,7 +46,7 @@ services:
       - key: DEGREE_DATA_DIR
         value: /app/data
       - key: CATALOG_TERM_CODES
-        value: "202601"
+        value: "202601,202502"
       - key: CHROMA_PERSIST_DIR
         value: /app/chroma_store
       - key: DEFAULT_RETRIEVAL_MODE

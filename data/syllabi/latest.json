@@ -1,0 +1,12 @@
+{
+  "terms": [
+    "202601",
+    "202502"
+  ],
+  "latest_term": "202601",
+  "manifests": {
+    "202601": "202601.manifest.json",
+    "202502": "202502.manifest.json"
+  },
+  "scraped_at": "2026-08-10T12:20:44Z"
+}

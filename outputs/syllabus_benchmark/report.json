@@ -1,0 +1,87 @@
+{
+  "benchmark_version": 2,
+  "threshold": 90.0,
+  "terms": [
+    "202601",
+    "202502"
+  ],
+  "overall_score": 98.0,
+  "passed": true,
+  "hard_gate_blockers": [],
+  "term_results": [
+    {
+      "term": "202601",
+      "score": 98.0,
+      "passed": true,
+      "blockers": [],
+      "counts": {
+        "schedule_crns": 1276,
+        "ledger_records": 1276,
+        "published": 0,
+        "not_published_confirmed": 1276,
+        "indeterminate": 0,
+        "complete": 0,
+        "partial": 0,
+        "failed": 0,
+        "attachment_links": 0,
+        "attachment_downloads_ok": 0,
+        "attachment_integrity_ok": 0,
+        "attachment_parses_ok": 0,
+        "rag_chunks": 0
+      },
+      "category_scores": {
+        "inventory_25": 25.0,
+        "publication_20": 20.0,
+        "metadata_15": 15.0,
+        "attachments_15": 15.0,
+        "parse_and_rag_20": 20.0,
+        "reproducibility_5": 3.0
+      },
+      "retrieval": {
+        "query_count": 0,
+        "recall_at_5": 0.0,
+        "mrr_at_10": 0.0,
+        "ndcg_at_10": 0.0
+      }
+    },
+    {
+      "term": "202502",
+      "score": 100.0,
+      "passed": true,
+      "blockers": [],
+      "counts": {
+        "schedule_crns": 1630,
+        "ledger_records": 1630,
+        "published": 544,
+        "not_published_confirmed": 1086,
+        "indeterminate": 0,
+        "complete": 544,
+        "partial": 0,
+        "failed": 0,
+        "attachment_links": 0,
+        "attachment_downloads_ok": 0,
+        "attachment_integrity_ok": 0,
+        "attachment_parses_ok": 0,
+        "rag_chunks": 661
+      },
+      "category_scores": {
+        "inventory_25": 25.0,
+        "publication_20": 20.0,
+        "metadata_15": 15.0,
+        "attachments_15": 15.0,
+        "parse_and_rag_20": 20.0,
+        "reproducibility_5": 5.0
+      },
+      "retrieval": {
+        "query_count": 300,
+        "recall_at_5": 1.0,
+        "mrr_at_10": 1.0,
+        "ndcg_at_10": 1.0
+      }
+    }
+  ],
+  "notes": {
+    "retrieval": "Deterministic evidence-retrieval benchmark with no gold CRN in queries; byte-equivalent syllabus evidence across sections is treated as relevant.",
+    "not_published": "Counts as complete only after two HTTP-200 fetches on both public syllabus surfaces, verified raw hashes, and page-identity or exact endpoint-target evidence."
+  }
+}

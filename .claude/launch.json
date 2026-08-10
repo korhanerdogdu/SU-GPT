@@ -6,6 +6,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["--prefix", "frontend", "run", "dev", "--", "--host"],
       "port": 5173
+    },
+    {
+      "name": "backend",
+      "runtimeExecutable": "C:\\Users\\mehme\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\python\\python.exe",
+      "runtimeArgs": ["-m", "uvicorn", "--app-dir", "server", "main:app", "--host", "127.0.0.1", "--port", "8000"],
+      "port": 8000
     }
   ]
 }

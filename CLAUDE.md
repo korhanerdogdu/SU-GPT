@@ -171,11 +171,19 @@ Rejected parallel implementations must stay removed:
 ### Committed authoritative data
 
 - `data/degree_requirements/<PROGRAM>/<TERM>.jsonl`
+- `data/suggested_programs/<PROGRAM>/<PLAN>.jsonl`
+- `data/suggested_programs/sources/*.pdf`
 - `data/minors/<CODE>/<TERM>.jsonl`
 - `data/curricula/registry.jsonl`
 - `data/course_catalog/current.jsonl`
 - `data/schedule/*.jsonl`
 - `data/benchmark/*`
+
+`degree_requirements` is the binding source for graduation calculations. Suggested-program rows
+have `data_role=suggested_program`, `authority_level=official_advisory`, and a non-binding status;
+they may guide semester sequencing but must never override curriculum requirements. Retrieval
+queries that combine the two roles must keep degree requirements scoped by both program and
+curriculum term, while suggested programs are scoped by program and plan/track.
 
 ### MongoDB
 
@@ -231,6 +239,15 @@ Current accepted baseline:
 - 42-case layered input benchmark: recall 1.0, F1 1.0, false-refusal rate 0.0
 - Language benchmark: TR 100/100, EN 100/100, mixed 20/20
 - Bounded `/ask/` endpoint benchmark: 12/12
+- Suggested-program AEHR@5: 59/60 (98.33%); suggested-program dimensions: 52/52
+- Frozen metadata-BM25F retrieval regression: Recall@10 91.18%
+
+Suggested-program validation and benchmark:
+
+```bash
+.venv/bin/python server/scripts/validate_suggested_programs.py
+.venv/bin/python server/evaluation/benchmark_suggested_programs.py --build-dataset --run --assert-target 0.90
+```
 
 Safety benchmark:
 

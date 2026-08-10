@@ -63,12 +63,32 @@ def test_valid_cs_curriculum_passes_gate():
 
 
 # ---- registry -----------------------------------------------------------------------
-def test_registry_has_nine_majors():
+def test_registry_has_eleven_majors():
     progs = curriculum_registry.list_major_programs()
-    for p in ("CS", "IE", "EE", "ME", "BIO", "DSA", "ECON", "PSY", "MAT"):
+    for p in ("CS", "IE", "EE", "ME", "BIO", "DSA", "ECON", "PSY", "MAT", "PSIR", "MAN"):
         assert p in progs
+    assert len(progs) == 11
     assert curriculum_registry.has_major_curriculum("CS", "202401")
+    assert curriculum_registry.has_major_curriculum("PSIR", "202401")
+    assert curriculum_registry.has_major_curriculum("MAN", "202401")
     assert not curriculum_registry.has_major_curriculum("IE", "202101")
+
+
+def test_resolve_program_code_matches_transcript_style_program_lines():
+    # These are the exact "Program : X (FACULTY)" shapes a real Sabancı transcript prints.
+    assert curriculum_registry.resolve_program_code("Computer Science and Engineering (FENS)") == "CS"
+    assert curriculum_registry.resolve_program_code("Programs of Management (SBS)") == "MAN"
+    assert curriculum_registry.resolve_program_code(
+        "Political Science and International Relations (FASS)"
+    ) == "PSIR"
+    # A program's pre-rename name (registry's "(Previous Name: ...)") must also resolve.
+    assert curriculum_registry.resolve_program_code("Biological Sciences and Bioengineering (FENS)") == "BIO"
+
+
+def test_resolve_program_code_fails_closed_on_unknown_or_missing_hints():
+    assert curriculum_registry.resolve_program_code("Some Unrelated Program (XYZ)") is None
+    assert curriculum_registry.resolve_program_code(None) is None
+    assert curriculum_registry.resolve_program_code("") is None
 
 
 # ---- deterministic audit ------------------------------------------------------------
@@ -547,6 +567,44 @@ def test_plan_never_recommends_non_required_elective_phys113():
     assert not any(course_planner.course_level(c) >= 400 for c in codes)  # no 4XX for a sophomore
 
 
+def test_popular_light_electives_have_real_prerequisite_data_and_are_preferred():
+    # Regression: ACC 201, ECON 201, FIN 301, and IE 303 had no PREREQS/KNOWN_NO_PREREQUISITES
+    # entry at all, so the fail-closed prerequisite policy silently excluded them from every
+    # recommendation forever -- not because they were ineligible, but because we had never
+    # recorded that they have no prerequisite. Each was individually verified against its SUIS
+    # course-detail page (undergraduate-level restriction only, no prerequisite listed).
+    for code in ("ACC201", "ECON201", "FIN301", "IE303"):
+        assert course_planner._prerequisite_data_known(code), code
+        assert course_planner._prereqs_met(code, set()), code
+    # OPIM 390's real prerequisite ("MGMT 203 min D OR MATH 306 min D") must be modeled, not
+    # skipped: unmet without either, met with either alone.
+    assert not course_planner._prereqs_met("OPIM390", set())
+    assert course_planner._prereqs_met("OPIM390", {"MGMT203"})
+    assert course_planner._prereqs_met("OPIM390", {"MATH306"})
+
+    # End-to-end: a CS student who needs area/free electives should now see ECON 201 ahead of a
+    # different major's own required course (ENS 208 is IE's), and ACC 201/FIN 301/IE 303 ahead
+    # of other equally-eligible free electives -- a curated, broadly-accessible preference, not
+    # an arbitrary alphabetical accident.
+    completed = [
+        "AL 102", "CIP 101N", "CS 201", "CS 204", "CS 210", "CS 300", "CS 301", "CS 303", "CS 306",
+        "CS 308", "HIST 191", "HIST 192", "HUM 202", "IF 100", "MATH 101", "MATH 102", "MATH 201",
+        "MATH 203", "MATH 204", "NS 101", "NS 102", "PROJ 201", "SPS 101", "SPS 102", "SPS 303",
+        "TLL 101", "TLL 102",
+    ]
+    plan = course_planner.build_plan(
+        "CS", "202401", completed, [],
+        target=20, minimum_su_credits=0, exact_course_count=False, max_courses=20,
+        balance_by_subject=False, academic_year=4,
+    )
+    area_codes = [item.code for item in plan.recommended if item.category == "area"]
+    free_codes = [item.code for item in plan.recommended if item.category == "free"]
+    assert "ECON201" in area_codes
+    assert "ENS208" in area_codes  # still a legitimate, official option -- just not preferred
+    assert area_codes.index("ECON201") < area_codes.index("ENS208")
+    assert {"ACC201", "FIN301", "IE303"} <= set(free_codes)
+
+
 def test_plan_dedupes_math_choice_and_names_linear_algebra():
     # MATH 201 (Linear Algebra) OR MATH 212 is a choice pool: recommend exactly one, and never
     # both; and the linear-algebra course must be named from the catalog, not invented.
@@ -571,7 +629,11 @@ def test_plan_is_difficulty_balanced():
 def test_plan_excludes_unreachable_required_and_offers_light_fillers():
     # The reported "sonraki dönem" bug: unreachable 3XX (CS 300/301/303) must NOT be recommended;
     # lighter University-category courses balance the term instead.
-    plan = course_planner.build_plan("CS", "202401", _FRESHMAN_DONE + ["CS 201"], [])
+    # SPS 303's real SUIS restriction is >=58 completed SU credits, not "no prerequisite" (see
+    # MINIMUM_CREDIT_PREREQS), so this fixture needs enough completed credit to actually reach it
+    # -- plain _FRESHMAN_DONE + CS 201 is only 37 SU and would leave no University filler eligible.
+    padding = ["ACC 201", "ACC 301", "ACC 401", "ACC 402", "ACC 403", "ACC 404", "ACC 405"]
+    plan = course_planner.build_plan("CS", "202401", _FRESHMAN_DONE + ["CS 201"] + padding, [])
     codes = {i.code for i in plan.recommended}
     for blocked in ("CS300", "CS301", "CS303", "CS395"):
         assert blocked not in codes
@@ -582,6 +644,66 @@ def test_plan_excludes_unreachable_required_and_offers_light_fillers():
 def test_normal_plan_reaches_fifteen_su_credit_floor():
     plan = course_planner.build_plan("CS", "202401", _FRESHMAN_DONE + ["CS 201"], [])
     assert sum(item.su for item in plan.recommended) >= 15
+
+
+def test_sps303_requires_58_completed_su_credits_not_prerequisite_free():
+    # Regression: SPS 303's real SUIS restriction is a >=58-completed-SU-credit threshold
+    # ("General Requirements: 58.000 credits ... Minimum Grade of D"), not "no prerequisite".
+    # A low-credit student must never be recommended it, and it must show up as a future target
+    # with the real, honest reason -- not silently vanish or get falsely offered.
+    low_credit_completed = ["IR 201", "ECON 202"]  # 6 SU total, nowhere near 58
+    assert not course_planner._prereqs_met("SPS303", {"IR201", "ECON202"})
+    missing = course_planner._missing_prereqs("SPS303", {"IR201", "ECON202"})
+    assert missing and "58" in missing[0]
+
+    plan = course_planner.build_plan(
+        "PSIR", "202401", low_credit_completed, [],
+        target=20, minimum_su_credits=0, exact_course_count=False,
+        max_courses=20, balance_by_subject=False, academic_year=2,
+    )
+    codes = {i.code for i in plan.recommended}
+    assert "SPS303" not in codes
+    assert any(code == "SPS303" for code, _note in plan.future_targets)
+
+    errors = course_planner.validate_proposed_plan(
+        [{"code": item.code} for item in plan.recommended],
+        completed_codes=low_credit_completed, stage=plan.stage, maximum_su_credits=999,
+    )
+    assert errors == []
+
+    # A student who has genuinely earned 58+ SU credits IS eligible.
+    high_credit_completed = low_credit_completed + [
+        "ACC 201", "ACC 301", "ACC 401", "ACC 402", "ACC 403", "ACC 404", "ACC 405",
+        "ACC 406", "ACC 450", "ACC 451",
+        "FIN 301", "FIN 401", "FIN 402", "FIN 403", "FIN 404", "FIN 405", "FIN 406", "FIN 407",
+    ]
+    assert course_planner._completed_su_total(
+        {course_planner.normalize_code(c) for c in high_credit_completed}
+    ) >= 58
+    assert course_planner._prereqs_met(
+        "SPS303", {course_planner.normalize_code(c) for c in high_credit_completed}
+    )
+
+
+def test_until_graduation_roadmap_states_it_spans_multiple_terms():
+    # Regression: the full until-graduation roadmap (no per-term credit ceiling by design) read
+    # like a single-term registration list, which is unsafe -- Sabancı caps per-term registration
+    # load. The rendered text must make the multi-term framing explicit.
+    completed = [
+        "AL 102", "CIP 101N", "HIST 191", "HIST 192", "HUM 202", "IF 100",
+        "MATH 101", "MATH 102", "NS 101", "NS 102", "PROJ 201", "SPS 101", "SPS 102",
+        "TLL 101", "TLL 102", "CS 201", "CS 204", "CS 300", "CS 301",
+        "MATH 201", "MATH 203",
+    ]
+    plan = course_planner.build_plan(
+        "CS", "202401", completed, [],
+        target=20, minimum_su_credits=0, exact_course_count=False,
+        max_courses=20, balance_by_subject=False, academic_year=3,
+    )
+    body_tr, _ = course_planner.render_plan(plan, language="tr", until_graduation=True)
+    body_en, _ = course_planner.render_plan(plan, language="en", until_graduation=True)
+    assert "tek bir dönem" in body_tr.lower() or "birden fazla döneme" in body_tr.lower()
+    assert "not for a single term" in body_en.lower() or "multiple future terms" in body_en.lower()
     assert plan.credit_shortfall == 0
 
 
@@ -603,24 +725,123 @@ def test_explicit_four_course_limit_may_stay_below_credit_floor():
     assert sum(item.su for item in plan.recommended) < 15
 
 
+def test_weekly_timetable_never_drops_mandatory_university_debt_for_a_smaller_combo():
+    # Regression: "Which courses should I take this term?" for a brand-new freshman returned
+    # MATH 101, NS 101, HIST 191, SPS 101, IF 100 -- silently dropping CIP 101N and TLL 101, both
+    # mandatory first-semester University courses -- because the subset search only hunted for
+    # *any* 5-course combination that reached the 15-SU floor, and a combination excluding them
+    # happened to satisfy it. Mandatory debt must be forced into every candidate combination tried.
+    plan = course_planner.build_plan(
+        "CS", "202401", [], [],
+        target=15, minimum_su_credits=15, exact_course_count=False, max_courses=20,
+        balance_by_subject=False,
+    )
+    assert set(plan.university_debt) >= {"CIP101N", "TLL101"}
+    # Zero completed courses means semester-2 debt (MATH 102, ...) is correctly still prerequisite
+    # -blocked this term; only the currently-eligible university-category items in plan.recommended
+    # (semester 1, plus AL 102 which has no prerequisite) are what must never be dropped.
+    debt_set = set(plan.university_debt)
+    eligible_debt = {item.code for item in plan.recommended if item.code in debt_set}
+    assert {"CIP101N", "TLL101"} <= eligible_debt
+    timetable = schedule_planner.build_timetable_for_load(
+        [item.code for item in plan.recommended],
+        target_courses=5,
+        minimum_su_credits=15,
+        term="202601",
+        mandatory_codes=plan.university_debt,
+    )
+    placed_codes = {course_planner.normalize_code(lecture.course_id) for lecture, _ in timetable.placed}
+    assert {"CIP101N", "TLL101"} <= placed_codes
+    # Every currently-eligible University course must be attempted -- either placed, or honestly
+    # reported as unplaced/not-offered, never silently absent from all three.
+    accounted_for = placed_codes | set(timetable.unplaced) | set(timetable.not_offered)
+    assert eligible_debt <= accounted_for
+
+
+def test_weekly_timetable_includes_eligible_required_course_alongside_debt():
+    # Regression: CS 201 (eligible once IF 100 is done -- exactly the CS suggested-program plan's
+    # own semester-2 placement) must not be dropped from the schedule just because the mandatory
+    # University debt alone already clears the credit floor.
+    sem1_done = ["MATH 101", "NS 101", "CIP 101N", "HIST 191", "SPS 101", "TLL 101", "IF 100"]
+    plan = course_planner.build_plan(
+        "CS", "202401", sem1_done, [],
+        target=15, minimum_su_credits=15, exact_course_count=False, max_courses=20,
+        balance_by_subject=False,
+    )
+    mandatory = list(plan.university_debt) + [
+        item.code for item in plan.recommended if item.category == "required"
+    ]
+    assert "CS201" in mandatory
+    timetable = schedule_planner.build_timetable_for_load(
+        [item.code for item in plan.recommended],
+        target_courses=5,
+        minimum_su_credits=15,
+        term="202601",
+        mandatory_codes=mandatory,
+    )
+    placed_codes = {course_planner.normalize_code(lecture.course_id) for lecture, _ in timetable.placed}
+    accounted_for = placed_codes | set(timetable.unplaced) | set(timetable.not_offered)
+    assert "CS201" in accounted_for  # placed, or honestly reported as conflicting -- never silent
+
+
+def test_weekly_timetable_still_respects_elective_preference_when_a_mandatory_course_is_not_offered():
+    # Regression: ENS 491 (a senior's mandatory required course) is not offered every term. Before
+    # the fix, ANY combination containing ENS 491 registered as "not fully placed" (it is always
+    # not-offered, regardless of which optional courses joined it), so the search's early-return
+    # success check could never fire for ANY combination and fell through to exhausting every
+    # combination size, keeping only whichever maximized total placed SU/course count. That
+    # discarded the deliberate core -> area -> free / POPULAR_LIGHT_ELECTIVES ordering entirely:
+    # OPIM 390 (a verified, real, prerequisite-eligible popular elective) never appeared even
+    # though it was earlier in build_plan's own recommended order than the courses that won by
+    # scheduling luck. A mandatory course's own not-offered/unplaced status must not block early
+    # return for the surrounding optional pick.
+    completed = [
+        "AL 102", "CIP 101N", "CS 201", "CS 204", "CS 210", "CS 300", "CS 301", "CS 303", "CS 306",
+        "CS 308", "CS 404", "CS 412", "CS 445", "ECON 201", "ECON 204", "HIST 191", "HIST 192",
+        "HUM 202", "IE 303", "IF 100", "MATH 101", "MATH 102", "MATH 201", "MATH 203", "MATH 204",
+        "MATH 306", "NS 101", "NS 102", "PROJ 201", "SPS 101", "SPS 102", "SPS 303", "TLL 101",
+        "TLL 102",
+    ]
+    plan = course_planner.build_plan(
+        "CS", "202201", completed, [],
+        target=15, minimum_su_credits=15, exact_course_count=False, max_courses=20,
+        balance_by_subject=False, academic_year=7,
+    )
+    assert "ENS491" in [item.code for item in plan.recommended if item.category == "required"]
+    mandatory = list(plan.university_debt) + [
+        item.code for item in plan.recommended if item.category == "required"
+    ]
+    timetable = schedule_planner.build_timetable_for_load(
+        [item.code for item in plan.recommended],
+        target_courses=5,
+        minimum_su_credits=15,
+        term="202601",
+        mandatory_codes=mandatory,
+    )
+    assert "ENS491" in timetable.not_offered
+    placed_codes = {course_planner.normalize_code(lecture.course_id) for lecture, _ in timetable.placed}
+    assert "OPIM390" in placed_codes
+
+
 def test_heavy_weekly_timetable_surfaces_unavoidable_credit_shortfall():
     candidates = course_planner.build_plan(
         "CS", "202401", _FRESHMAN_DONE + ["CS 201"], [],
-        target=8, minimum_su_credits=18,
+        target=8, minimum_su_credits=21,
     )
     timetable = schedule_planner.build_timetable_for_load(
         [item.code for item in candidates.recommended],
         target_courses=6,
-        minimum_su_credits=18,
+        minimum_su_credits=21,
         term="202601",
     )
     placed_codes = [course_planner.normalize_code(lecture.course_id) for lecture, _ in timetable.placed]
     placed_su = sum(int((course_planner.resolve(code) or {}).get("su_credits") or 0) for code in placed_codes)
-    assert len(timetable.placed) >= 6
-    # The fail-closed prerequisite policy leaves no verified conflict-free 18-SU subset in this
-    # frozen schedule. The service must report that fact instead of adding an unverified elective.
+    # A real, frozen-schedule time conflict (not a fail-closed prerequisite gap -- ACC 201,
+    # ECON 201, and FIN 301 all have verified, real prerequisite data now) still leaves this
+    # particular 21-SU ask unreachable. The service must report that fact rather than silently
+    # dropping below the promised load.
     assert placed_su == timetable.placed_su_credits
-    assert timetable.credit_shortfall == 18 - placed_su
+    assert timetable.credit_shortfall == 21 - placed_su
     assert timetable.credit_shortfall > 0
     assert timetable.unplaced or timetable.not_offered
 

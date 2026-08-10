@@ -320,21 +320,37 @@ def build_timetable_for_load(
     target_courses: int = 5,
     minimum_su_credits: int = 15,
     term: str | None = None,
+    mandatory_codes: list[str] | None = None,
 ) -> TimetableResult:
     """Choose the smallest conflict-free candidate subset that satisfies the load target.
 
     A course-level plan can meet 18 SU while a particular six-course combination has no complete
     section assignment. Trying bounded subsets from the deterministic candidate pool prevents the
     weekly page from silently dropping below the credit promise after timetable placement.
+
+    ``mandatory_codes`` (e.g. a freshman's still-missing first-year University courses like
+    TLL 101/102, CIP 101N, AL 102) are never part of the subset search: a smaller combination
+    that merely reaches the SU floor without them is not an acceptable substitute for a course the
+    student is required to take regardless of load. They are always included in every candidate
+    combination tried; only the remaining, genuinely optional courses vary.
     """
     codes = list(dict.fromkeys(course_planner.normalize_code(code) for code in candidate_codes if code))
+    mandatory = [
+        code for code in dict.fromkeys(course_planner.normalize_code(c) for c in (mandatory_codes or []) if c)
+        if code in codes
+    ]
+    optional = [code for code in codes if code not in mandatory]
     if not codes:
         result = build_timetable([], term=term)
         result.minimum_su_credits = max(0, int(minimum_su_credits))
         return result
 
-    target_courses = min(max(1, int(target_courses)), len(codes))
+    target_courses = max(1, int(target_courses))
     minimum_su_credits = max(0, int(minimum_su_credits))
+    # target_courses is a floor on the TOTAL course count, but mandatory courses are never
+    # optional to drop -- the search below only needs to add enough further, genuinely optional
+    # courses to reach it.
+    optional_target = min(max(0, target_courses - len(mandatory)), len(optional))
 
     def course_su(code: str) -> int:
         record = course_planner.resolve(code) or {}
@@ -345,18 +361,31 @@ def build_timetable_for_load(
         placed_codes = [course_planner.normalize_code(lecture.course_id) for lecture, _ in result.placed]
         return sum(course_su(code) for code in placed_codes), len(placed_codes)
 
-    best = build_timetable(codes[:target_courses], term=term)
-    for size in range(target_courses, len(codes) + 1):
-        for chosen in combinations(codes, size):
-            if sum(course_su(code) for code in chosen) < minimum_su_credits:
+    # A mandatory course can be genuinely not offered this term (e.g. a capstone seminar run only
+    # in spring) or clash with another mandatory course -- neither is fixable by trying a
+    # different optional combination, so neither should count against a combination's success.
+    # Without this baseline, one such mandatory course made EVERY combination "fail" the
+    # not_offered/unplaced check, so the search never returned early on the first acceptable
+    # optional pick and instead exhausted every combination sized 4 upward, keeping only whichever
+    # happened to maximize total placed SU/count -- silently discarding the preferred elective
+    # ordering (POPULAR_LIGHT_ELECTIVES, core/area/free tiering) in favor of unrelated ones with
+    # merely luckier lecture times.
+    baseline = build_timetable(mandatory, term=term) if mandatory else None
+    baseline_not_offered = set(baseline.not_offered) if baseline else set()
+    baseline_unplaced = set(baseline.unplaced) if baseline else set()
+
+    best = build_timetable(mandatory + optional[:optional_target], term=term)
+    for size in range(optional_target, len(optional) + 1):
+        for chosen in combinations(optional, size):
+            combo = mandatory + list(chosen)
+            if sum(course_su(code) for code in combo) < minimum_su_credits:
                 continue
-            result = build_timetable(list(chosen), term=term)
+            result = build_timetable(combo, term=term)
             if placed_score(result) > placed_score(best):
                 best = result
             if (
-                len(result.placed) == size
-                and not result.not_offered
-                and not result.unplaced
+                not (set(result.not_offered) - baseline_not_offered)
+                and not (set(result.unplaced) - baseline_unplaced)
                 and placed_score(result)[0] >= minimum_su_credits
             ):
                 result.minimum_su_credits = minimum_su_credits

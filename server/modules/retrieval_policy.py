@@ -33,14 +33,23 @@ _POLICIES: dict[str, RetrievalPolicy] = {
         scope_program=True, scope_curriculum_term=True, authoritative=True,
     ),
     intents.COURSE_RECOMMENDATION: RetrievalPolicy(
-        intents.COURSE_RECOMMENDATION, ("curriculum_requirement",),
+        intents.COURSE_RECOMMENDATION, ("curriculum_requirement", "suggested_program"),
         required_profile_fields=("major", "curriculum_term"),
         scope_program=True, scope_curriculum_term=True,
     ),
-    intents.COURSE_DETAIL: RetrievalPolicy(intents.COURSE_DETAIL, ("curriculum_requirement",)),
-    intents.STUDY_PLAN: RetrievalPolicy(intents.STUDY_PLAN, ("curriculum_requirement",)),
+    intents.COURSE_DETAIL: RetrievalPolicy(
+        intents.COURSE_DETAIL, ("curriculum_requirement", "suggested_program"),
+    ),
+    "syllabus": RetrievalPolicy("syllabus", ("course_syllabus",)),
+    intents.STUDY_PLAN: RetrievalPolicy(
+        intents.STUDY_PLAN, ("curriculum_requirement", "suggested_program"),
+        scope_program=True,
+    ),
     intents.MAJOR_SELECTION: RetrievalPolicy(intents.MAJOR_SELECTION, ("curriculum_requirement",)),
-    intents.SPECIALIZATION: RetrievalPolicy(intents.SPECIALIZATION, ("curriculum_requirement",)),
+    intents.SPECIALIZATION: RetrievalPolicy(
+        intents.SPECIALIZATION, ("curriculum_requirement", "suggested_program"),
+        scope_program=True,
+    ),
     intents.MINOR: RetrievalPolicy(intents.MINOR, ("minor_requirement",)),
 }
 
@@ -64,6 +73,28 @@ def build_metadata_filter(intent: str, profile: dict | None) -> dict | None:
     if not policy:
         return None
     profile = profile or {}
+
+    # Suggested course plans are official advisory material, not admit-term-specific degree
+    # rules. Keep the student's exact curriculum term on the authoritative requirement branch,
+    # while allowing the same program's non-binding plan branch without falsely stamping the PDF
+    # with a curriculum term it never published.
+    if intent == intents.COURSE_RECOMMENDATION:
+        program = str(profile.get("major") or "").strip().upper()
+        term = str(profile.get("curriculum_term") or "").strip()
+        requirement_parts: list[dict] = [{"data_role": "curriculum_requirement"}]
+        suggested_parts: list[dict] = [{"data_role": "suggested_program"}]
+        if program:
+            requirement_parts.append({"program": program})
+            suggested_parts.append({"program": program})
+        if term:
+            requirement_parts.append({"curriculum_term": term})
+        return {
+            "$or": [
+                _and(requirement_parts),
+                _and(suggested_parts),
+            ]
+        }
+
     clauses: list[dict] = []
     if len(policy.data_roles) == 1:
         clauses.append({"data_role": policy.data_roles[0]})
