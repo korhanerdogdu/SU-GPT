@@ -247,6 +247,9 @@ export default function CoursesPage() {
       if (result.unmatched_course_codes.length > 0) {
         toast.warning(t("courses.transcriptUnmatched", { codes: result.unmatched_course_codes.join(", ") }));
       }
+      if (result.profile_major_update) {
+        toast.success(t("courses.transcriptProgramUpdated", { program: result.profile_major_update.to }));
+      }
       void refreshGpa();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t("courses.transcriptFailed"));

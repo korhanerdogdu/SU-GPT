@@ -27,7 +27,8 @@ from modules.config import DEGREE_DATA_DIR
 
 CONTROLLED_CATEGORIES = {
     "university_courses", "university_courses_mandatory", "university_courses_hum_pool",
-    "required_courses", "core_electives", "area_electives", "free_electives",
+    "required_courses", "core_electives", "core_electives_political_science",
+    "core_electives_international_relations", "area_electives", "free_electives",
     "faculty_courses", "faculty_courses_fens", "faculty_courses_fass", "faculty_courses_sbs",
     "engineering", "basic_science", "philosophy_requirement", "mathematics_requirement",
     "electives",

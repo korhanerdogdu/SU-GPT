@@ -193,6 +193,7 @@ export interface TranscriptUploadResult {
   matched_course_codes: string[];
   unmatched_course_codes: string[];
   courses: Course[];
+  profile_major_update: { from: string | null; to: string } | null;
 }
 
 export interface GpaResult {

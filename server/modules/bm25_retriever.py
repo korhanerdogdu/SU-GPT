@@ -68,9 +68,12 @@ class _BM25:
 def _is_narrowing(where: dict[str, Any] | None) -> bool:
     if not where:
         return False
-    for clause in (where.get("$and") or [where]):
-        if isinstance(clause, dict) and any(k in _NARROWING_KEYS for k in clause):
+    for key, value in where.items():
+        if key in _NARROWING_KEYS:
             return True
+        if key in {"$and", "$or"} and isinstance(value, list):
+            if any(_is_narrowing(clause) for clause in value if isinstance(clause, dict)):
+                return True
     return False
 
 

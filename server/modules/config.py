@@ -91,7 +91,7 @@ CATALOG_DATA_DIR = os.getenv("CATALOG_DATA_DIR", str(Path.home() / "data"))
 DEGREE_DATA_DIR = os.getenv("DEGREE_DATA_DIR", str(PROJECT_ROOT / "data"))
 CATALOG_TERM_CODES = [
     value.strip()
-    for value in os.getenv("CATALOG_TERM_CODES", "202502").split(",")
+    for value in os.getenv("CATALOG_TERM_CODES", "202601,202502").split(",")
     if value.strip()
 ]
 AUTO_INGEST_SOURCES = os.getenv("AUTO_INGEST_SOURCES", "false").lower() == "true"

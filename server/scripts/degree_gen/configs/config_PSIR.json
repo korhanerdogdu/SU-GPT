@@ -1,0 +1,70 @@
+{
+  "program": "PSIR",
+  "degree_code": "BAPSIR",
+  "p_program": "BAPSIR",
+  "program_name": "Political Science and International Relations Undergraduate Program",
+  "terms": ["202201", "202301", "202401", "202501"],
+  "university_anchor": "UC_FASS",
+  "hum_min_courses": 2,
+  "profile_categories": [
+    {"category": "university_courses", "official_labels": ["University Courses"], "min_courses_override": 17},
+    {"category": "required_courses", "official_labels": ["Required Courses"]},
+    {"category": "core_electives_political_science", "official_labels": ["Core Electives I (Political Science)"]},
+    {"category": "core_electives_international_relations", "official_labels": ["Core Electives II (International Relations)"]},
+    {"category": "area_electives", "official_labels": ["Area Electives"]},
+    {"category": "free_electives", "official_labels": ["Free Electives"]},
+    {"category": "faculty_courses", "official_labels": ["Faculty Courses"]}
+  ],
+  "pools": [
+    {"anchor": "BAPSIR_REQ", "official_name": "Required Courses", "category": "required_courses"},
+    {
+      "anchor": "BAPSIR_C1",
+      "official_name": "Core Electives I (Political Science)",
+      "category": "core_electives_political_science",
+      "overflow_to": "area_electives"
+    },
+    {
+      "anchor": "BAPSIR_C2",
+      "official_name": "Core Electives II (International Relations)",
+      "category": "core_electives_international_relations",
+      "overflow_to": "area_electives"
+    },
+    {"anchor": "BAPSIR_AEL", "official_name": "Area Electives", "category": "area_electives", "overflow_to": "free_electives"},
+    {"anchor": "BAPSIR_FEL", "official_name": "Free Electives", "category": "free_electives", "external_area": "BAPSIR_FEL"}
+  ],
+  "faculty_anchor": "FC_FASS",
+  "faculty_pools": [
+    {"category": "faculty_courses_fens", "area": "FC_FENS", "fac": "E", "name": "FENS Faculty Courses"},
+    {"category": "faculty_courses_fass", "area": "FC_FASS", "fac": "S", "name": "FASS Faculty Courses"},
+    {"category": "faculty_courses_sbs", "area": "FC_SOM", "fac": "M", "name": "SBS Faculty Courses"}
+  ],
+  "rules": [
+    {
+      "rule_id": "political_science_core_minimum",
+      "requirement_category": "core_electives_political_science",
+      "text": "Complete at least 12 SU credits from Core Electives I (Political Science).",
+      "min_su_credits": 12
+    },
+    {
+      "rule_id": "international_relations_core_minimum",
+      "requirement_category": "core_electives_international_relations",
+      "text": "Complete at least 12 SU credits from Core Electives II (International Relations).",
+      "min_su_credits": 12
+    },
+    {
+      "rule_id": "free_elective_language_limit",
+      "requirement_category": "free_electives",
+      "text": "At most two beginning/basic-level second-language courses may be used for the Free Elective requirement.",
+      "max_beginning_language_courses": 2
+    },
+    {
+      "rule_id": "faculty_courses_fass_distribution",
+      "requirement_category": "faculty_courses",
+      "text": "Complete at least five Faculty Courses, including at least three from FASS, distributed across at least three of eight areas (six FASS areas plus FENS and SBS).",
+      "min_courses": 5,
+      "min_fass_courses": 3,
+      "min_distinct_areas": 3,
+      "num_areas": 8
+    }
+  ]
+}

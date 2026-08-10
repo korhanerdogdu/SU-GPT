@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ.setdefault("MONGO_URI", "mongodb://localhost:27017")
 
 from modules.transcript_parser import (
+    _latest_program_hint,
     _parse_attempts,
     _term_blocks,
     parse_transcript_text,
@@ -163,4 +164,26 @@ def test_gpa_is_credit_weighted_average_of_only_gpa_eligible_courses():
     result = parse_transcript_text(pages)
     # (4.0*3 + 3.0*1) / (3+1) = 3.75; the 0-credit S course must not enter the average at all.
     assert result.gpa == 3.75
+
+
+def test_program_hint_is_the_last_program_line_not_the_first():
+    # Regression: an internal-transfer student's early terms show their OLD major first; only
+    # the most recently printed "Program :" line (terms are chronological) is the current one.
+    pages = _pages(
+        "Fall 2021-2022 Status : Active / Level : Foundation Development Year\n"
+        "Program : Programs of Management (SBS)\n"
+        "Standing: Satisfactory\n"
+        "Summer 2022-2023 Status : Active / Level : Undergraduate\n"
+        "Program : Computer Science and Engineering (FENS)\n"
+        "COURSE CODE COURSE TITLE LEVEL GRADE CREDIT ECTS STATUS\n"
+        "MATH 203 Introduction to Probability UG A 3.00 6.00\n"
+        "Standing: Satisfactory\n"
+    )
+    assert _latest_program_hint(pages) == "Computer Science and Engineering (FENS)"
+    result = parse_transcript_text(pages)
+    assert result.program_hint == "Computer Science and Engineering (FENS)"
+
+
+def test_program_hint_is_none_when_no_term_block_is_present():
+    assert _latest_program_hint(_pages("Just some unrelated preamble text.\n")) is None
 

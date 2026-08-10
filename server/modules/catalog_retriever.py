@@ -32,6 +32,12 @@ CATALOG_DOCUMENT_TYPES = {
     "program_requirement_list",
     "schedule_course_list",
     "schedule_section",
+    "suggested_program_profile",
+    "suggested_program_semester",
+    "suggested_program_course",
+    "suggested_program_track",
+    "syllabus_page_chunk",
+    "syllabus_attachment_chunk",
 }
 
 MAJOR_PROGRAMS = {
@@ -57,7 +63,7 @@ REQUIREMENT_TYPES = {
     "university": {"university", "universite", "common"},
 }
 
-COURSE_CODE_RE = re.compile(r"\b([A-Z]{2,5})\s*-?\s*(\d{3}[A-Z]?)\b")
+COURSE_CODE_RE = re.compile(r"\b([A-Z]{2,5})\s*-?\s*((?:\d{5}|\d{3}[A-Z]*))\b")
 TERM_CODE_RE = re.compile(r"\b(20\d{2})(0[123])\b")
 ACADEMIC_TERM_RE = re.compile(
     r"\b(fall|spring|summer|guz|bahar|yaz)\s+(20\d{2})\s*[-/]\s*(20\d{2})\b",
@@ -120,7 +126,7 @@ def structured_metadata_score(query: str, metadata: dict[str, Any]) -> float:
     requirement_types = set(_extract_requirement_types(query))
 
     value = 0.0
-    if metadata.get("course_id") in course_ids:
+    if (metadata.get("course_id") or metadata.get("course_code")) in course_ids:
         value += 20
     if metadata.get("term_code") in term_codes:
         value += 8
@@ -136,6 +142,8 @@ def structured_metadata_score(query: str, metadata: dict[str, Any]) -> float:
         value += 14
     if _is_graduation_query(query) and metadata.get("source_authority") == "official_degree_requirements":
         value += 6
+    if _is_course_recommendation_query(query) and metadata.get("data_role") == "suggested_program":
+        value += 12
     if metadata.get("aggregate") and not course_ids:
         value += 1
     return value
@@ -148,6 +156,12 @@ def _candidate_filters(query: str) -> list[dict[str, Any]]:
     requirement_types = _extract_requirement_types(query)
     type_filter = _document_type_filter(query)
     source_filter = _source_collection_filter(query)
+
+    # For syllabus queries a subject token such as ECON or CS belongs to the
+    # course code, not to degree-program scope. Syllabus chunks intentionally
+    # have course identity but no `program` field.
+    if set(type_filter).issubset({"syllabus_page_chunk", "syllabus_attachment_chunk"}):
+        programs = []
 
     filters: list[dict[str, Any]] = []
 
@@ -185,6 +199,35 @@ def _candidate_filters(query: str) -> list[dict[str, Any]]:
 
 def _document_type_filter(query: str) -> list[str]:
     q = query.lower()
+    if _is_course_recommendation_query(query):
+        return [
+            "suggested_program_profile",
+            "suggested_program_semester",
+            "suggested_program_course",
+            "suggested_program_track",
+            "degree_requirement_profile",
+            "degree_requirement_category_pool",
+            "degree_requirement_pool_course",
+            "degree_requirement_rule",
+        ]
+    if _has_any(
+        q,
+        [
+            "syllabus",
+            "course outline",
+            "learning outcome",
+            "course objective",
+            "grading policy",
+            "attendance policy",
+            "academic integrity",
+            "ders izlencesi",
+            "ogrenme ciktilari",
+            "öğrenme çıktıları",
+            "notlandirma",
+            "notlandırma",
+        ],
+    ):
+        return ["syllabus_page_chunk", "syllabus_attachment_chunk"]
     if _has_any(q, ["minor", "yandal", "yan dal"]):
         return [
             "minor_requirement_profile",
@@ -286,6 +329,29 @@ def _is_graduation_query(query: str) -> bool:
             "dağılım",
             "dagilim",
             "requirement",
+        ],
+    )
+
+
+def _is_course_recommendation_query(query: str) -> bool:
+    q = query.lower()
+    return _has_any(
+        q,
+        [
+            "recommended course plan",
+            "suggested course plan",
+            "course recommendation",
+            "recommended program",
+            "which courses should i take",
+            "what courses should i take",
+            "önerilen ders programı",
+            "onerilen ders programi",
+            "ders önerisi",
+            "ders onerisi",
+            "hangi dersleri almalıyım",
+            "hangi dersleri almaliyim",
+            "bu dönem hangi dersleri",
+            "bu donem hangi dersleri",
         ],
     )
 

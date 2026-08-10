@@ -1,0 +1,33 @@
+{
+  "format_version": 1,
+  "crawler_version": "1.0.0",
+  "term": "202502",
+  "source_authority": "Sabanci University public syllabus systems",
+  "source_endpoints": [
+    "https://suis.sabanciuniv.edu/prod/bwckgens.p_proc_term_date",
+    "https://suis.sabanciuniv.edu/prod/bwckschd.p_get_crse_unsec",
+    "https://www.sabanciuniv.edu/syllabus/",
+    "https://apps.sabanciuniv.edu/courses/syllabus/view.php",
+    "https://sucourse.sabanciuniv.edu/plus/syllabusdownload.php"
+  ],
+  "scraped_at": "2026-08-10T12:20:44Z",
+  "schedule_crn_count": 1630,
+  "ledger_record_count": 1630,
+  "publication_states": {
+    "not_published_confirmed": 1086,
+    "published": 544
+  },
+  "capture_states": {
+    "not_applicable": 1086,
+    "complete": 544
+  },
+  "attachment_link_count": 0,
+  "attachment_downloaded_count": 0,
+  "attachment_parsed_count": 0,
+  "rag_chunk_count": 661,
+  "ledger_file": "202502.jsonl",
+  "ledger_sha256": "90ffbabb638c1b01b0c0ec5a25bbdaa00983eb6b1e2449611fd26f1c5bc30388",
+  "chunks_file": "202502.chunks.jsonl",
+  "chunks_sha256": "df018a96ab83334b10bd9923591455715b76c9983123d898690c2e3b9501759c",
+  "schedule_file": "schedule/202502.jsonl"
+}

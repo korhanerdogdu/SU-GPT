@@ -10,8 +10,11 @@ model may explain verified results but must not invent academic facts.
 ## Current capabilities
 
 - Program- and admission-term-specific degree audits
+- Official PSIR and Management degree requirements for the 2022-2025 fall admission cohorts
 - Deterministic course recommendations with prerequisite and academic-year checks
+- Non-binding, semester-by-semester suggested programs for 10 majors, including four CS paths
 - Conflict-free weekly schedules using official section and CRN data
+- Official term/section syllabus retrieval with instructor, policy, outcome, and attachment provenance
 - Course-history and academic-profile updates through UI or chat
 - Turkish and English interface and answer routing
 - Conversation history with bounded working memory
@@ -96,6 +99,9 @@ closed; it never silently falls back to process-local counters.
 | Turkish language routing | 100/100 |
 | English language routing | 100/100 |
 | Mixed-language routing | 20/20 |
+| Suggested-program evidence hit rate at 5 | 98.33% (59/60) |
+| Suggested-program-only evidence hit rate at 5 | 100% (52/52) |
+| Frozen retrieval regression, metadata BM25F Recall@10 | 91.18% |
 
 The endpoint benchmark uses synthetic in-memory provider responses and production middleware
 ordering. It is a bounded regression suite, not a comprehensive penetration test or live-model
@@ -113,9 +119,11 @@ server/modules/                   planners, retrieval, providers, safety, persis
 server/evaluation/                deterministic and provider evaluation tools
 server/tests/                     unit, integration, endpoint, and security tests
 data/degree_requirements/         official program/term requirement corpus
+data/suggested_programs/          official-advisory sample plans, source PDFs, and manifest
 data/minors/                      official minor requirement corpus
 data/course_catalog/              course catalogue
 data/schedule/                    official schedule snapshots
+data/syllabi/                     official syllabus ledgers, RAG chunks, raw pages, and attachments
 data/benchmark/                   frozen evaluation corpora and manifests
 outputs/                          redacted, checksummed evaluation artifacts
 docs/                             architecture, privacy, evaluation, and operations notes
@@ -201,6 +209,34 @@ cd ..
 .venv/bin/python server/evaluation/content_safety_benchmark.py
 .venv/bin/python -c 'import json,sys; sys.path.insert(0,"server"); from evaluation.security_benchmark import evaluate; print(json.dumps(evaluate("data/benchmark/security_adversarial_v2.jsonl"), indent=2))'
 ```
+
+Build and validate the official syllabus corpus (every schedule CRN is accounted for):
+
+```bash
+.venv/bin/python server/scripts/scrape_syllabi.py --terms 202601 202502 --resume
+.venv/bin/python server/scripts/validate_syllabus_corpus.py --terms 202601 202502 --strict
+.venv/bin/python server/scripts/ingest_syllabi.py --terms 202601 202502 --reset
+```
+
+The validator requires both a score of at least 90/100 and zero hard-gate failures. Network,
+identity, attachment, parse, or OCR failures remain explicit and cannot be counted as an
+unpublished syllabus.
+
+Rebuild and validate the suggested-program corpus, then reproduce its retrieval benchmark:
+
+```bash
+.venv/bin/pip install pdfplumber  # only needed to regenerate JSONL from the checked-in PDFs
+.venv/bin/python server/scripts/ingest_suggested_programs.py
+.venv/bin/python server/scripts/validate_suggested_programs.py
+.venv/bin/python server/evaluation/benchmark_suggested_programs.py --build-dataset --run --assert-target 0.90
+```
+
+Suggested programs are stored as `official_advisory` and
+`non_binding_recommended_plan`. They improve semester-sequence and concentration-suggestion
+answers, but never replace the binding rules in `data/degree_requirements/`. Every row preserves
+the source PDF, page, SHA-256, plan/track, term kind, course, credits, and prerequisites when the
+source states them. Summer placements use `semester: null` so they cannot be mistaken for a ninth
+or tenth regular semester.
 
 Create a new append-only endpoint artifact only from a clean, committed implementation:
 

@@ -1,0 +1,66 @@
+{
+  "program": "MAN",
+  "degree_code": "BAMAN",
+  "p_program": "BAMAN",
+  "program_name": "Management Undergraduate Program",
+  "terms": ["202201", "202301", "202401", "202501"],
+  "university_anchor": "UC_FASS",
+  "hum_min_courses": 2,
+  "profile_categories": [
+    {"category": "university_courses", "official_labels": ["University Courses"], "min_courses_override": 17},
+    {"category": "required_courses", "official_labels": ["Required Courses"]},
+    {"category": "core_electives", "official_labels": ["Core Electives"]},
+    {"category": "area_electives", "official_labels": ["Area Electives"]},
+    {"category": "free_electives", "official_labels": ["Free Electives"]},
+    {"category": "faculty_courses", "official_labels": ["Faculty Courses"]}
+  ],
+  "pools": [
+    {"anchor": "BAMAN_REQ", "official_name": "Required Courses", "category": "required_courses"},
+    {"anchor": "BAMAN_COR", "official_name": "Core Electives", "category": "core_electives", "overflow_to": "area_electives"},
+    {"anchor": "BAMAN_ARE", "official_name": "Area Electives", "category": "area_electives", "external_area": "BAMAN_ARE", "overflow_to": "free_electives"},
+    {"anchor": "BAMAN_FRE", "official_name": "Free Electives", "category": "free_electives", "external_area": "BAMAN_FRE"}
+  ],
+  "faculty_anchor": "FC_SOM",
+  "faculty_pools": [
+    {"category": "faculty_courses_fens", "area": "FC_FENS", "fac": "E", "name": "FENS Faculty Courses"},
+    {"category": "faculty_courses_fass", "area": "FC_FASS", "fac": "S", "name": "FASS Faculty Courses"},
+    {"category": "faculty_courses_sbs", "area": "FC_SOM", "fac": "M", "name": "SBS Faculty Courses"}
+  ],
+  "rules": [
+    {
+      "rule_id": "core_business_area_distribution",
+      "requirement_category": "core_electives",
+      "text": "Choose at least one course from each of the ACC, FIN, MGMT, MKTG, OPIM and ORG areas.",
+      "min_per_area": 1,
+      "areas": ["ACC", "FIN", "MGMT", "MKTG", "OPIM", "ORG"]
+    },
+    {
+      "rule_id": "area_business_area_distribution",
+      "requirement_category": "area_electives",
+      "text": "Within the Area Elective requirement, choose at least one course from each of ACC, FIN, MKTG, OPIM and ORG.",
+      "min_per_area": 1,
+      "areas": ["ACC", "FIN", "MKTG", "OPIM", "ORG"]
+    },
+    {
+      "rule_id": "free_elective_fass_fens_minimum",
+      "requirement_category": "free_electives",
+      "text": "At least 9 of the 26 Free Elective SU credits must come from courses offered by FASS or FENS.",
+      "min_su_credits": 9,
+      "faculties": ["FASS", "FENS"]
+    },
+    {
+      "rule_id": "free_elective_language_limit",
+      "requirement_category": "free_electives",
+      "text": "At most two beginning/basic-level language courses may be used for the Free Elective requirement.",
+      "max_beginning_language_courses": 2
+    },
+    {
+      "rule_id": "faculty_courses_sbs_minimum",
+      "requirement_category": "faculty_courses",
+      "text": "Complete at least five Faculty Courses in total; at least two must be from the SBS (official page label SOM) Faculty Courses pool.",
+      "min_courses": 5,
+      "min_sbs_courses": 2,
+      "official_faculty_alias": "SOM"
+    }
+  ]
+}

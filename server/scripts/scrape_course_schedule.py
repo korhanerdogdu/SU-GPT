@@ -176,7 +176,10 @@ def parse_course_header(value: str) -> CourseHeader:
     if not crn.isdigit():
         raise ValueError(f"Unexpected CRN in SUIS course heading: {raw!r}")
 
-    code_match = re.fullmatch(r"([A-Z]+)\s+(\d+[A-Z]?)", source_course_code)
+    # SUIS uses multi-letter numeric suffixes for some research/thesis courses
+    # (for example ``POLS 700FT``), in addition to the one-letter component
+    # suffixes such as ``CS 201R``.
+    code_match = re.fullmatch(r"([A-Z]+)\s+(\d+[A-Z]*)", source_course_code)
     if not code_match:
         raise ValueError(f"Unexpected course code in SUIS course heading: {raw!r}")
     subject, source_number = code_match.groups()

@@ -43,7 +43,24 @@ def _course_credit_catalog(data_dir: str) -> dict:
 # Highest-priority first. A completed course is allocated to the most specific category
 # whose pool contains it and still needs credits; leftovers overflow down the elective chain.
 _UNIVERSITY_CATS = ("university_courses_mandatory", "university_courses_hum_pool")
-_ELECTIVE_CHAIN = ("core_electives", "area_electives", "free_electives")
+_BASE_ELECTIVE_CHAIN = ("core_electives", "area_electives", "free_electives")
+
+
+def _elective_chain(model: dict) -> tuple[str, ...]:
+    """Return every independently enforced core pool before area/free overflow.
+
+    Most programs publish a single ``core_electives`` minimum. PSIR publishes two
+    independent minima (Political Science and International Relations); collapsing them
+    into one 24-SU bucket would incorrectly let one subject area satisfy the other. Keep
+    every ``core_electives_*`` category separate, then apply the documented overflow into
+    area and free electives.
+    """
+    categories = set(model.get("category_min", {})) | set(model.get("pools", {}))
+    split_core = sorted(
+        category for category in categories if category.startswith("core_electives_")
+    )
+    core = ["core_electives"] if "core_electives" in categories else []
+    return tuple([*core, *split_core, "area_electives", "free_electives"])
 
 
 def _norm(code: str) -> str:
@@ -142,7 +159,7 @@ def audit(program: str, curriculum_term: str, completed_codes: list[str],
     university_pool = set().union(*(pool_set(c) for c in _UNIVERSITY_CATS)) if any(
         c in pools for c in _UNIVERSITY_CATS) else set()
     required_pool = pool_set("required_courses")
-    core_pool, area_pool, free_pool = (pool_set(c) for c in _ELECTIVE_CHAIN)
+    elective_chain = _elective_chain(model)
 
     catalog = _course_credit_catalog(str(data_dir or DEGREE_DATA_DIR))
 
@@ -205,18 +222,18 @@ def audit(program: str, curriculum_term: str, completed_codes: list[str],
 
     # ---- Electives with greedy overflow (core -> area -> free) ---------------------
     elective_result = {}
-    for cat in _ELECTIVE_CHAIN:
+    for cat in elective_chain:
         elective_result[cat] = {
             "category": cat,
             "required_su_credits": (model["category_min"].get(cat) or {}).get("min_su"),
             "completed_su_credits": 0,
             "completed_courses": [],
         }
-    chain_pools = {"core_electives": core_pool, "area_electives": area_pool, "free_electives": free_pool}
+    chain_pools = {cat: pool_set(cat) for cat in elective_chain}
     for c in completed:
         if c in used:
             continue
-        for cat in _ELECTIVE_CHAIN:
+        for cat in elective_chain:
             need = elective_result[cat]["required_su_credits"]
             # Free electives are the true catch-all: any completed course not claimed by a more
             # specific category counts here, not just ones the scraped free-electives pool happens
@@ -229,13 +246,13 @@ def audit(program: str, curriculum_term: str, completed_codes: list[str],
                 elective_result[cat]["completed_courses"].append(c)
                 used.add(c)
                 break
-    for cat in _ELECTIVE_CHAIN:
+    for cat in elective_chain:
         need = elective_result[cat]["required_su_credits"]
         elective_result[cat]["remaining_su_credits"] = (
             max((need or 0) - elective_result[cat]["completed_su_credits"], 0) if need is not None else None
         )
 
-    categories = [uni, required, *(elective_result[c] for c in _ELECTIVE_CHAIN)]
+    categories = [uni, required, *(elective_result[c] for c in elective_chain)]
     total_completed = sum(su(c) for c in completed)
     total_min = model["total_min_su_credits"]
     unused = [c for c in completed if c not in used]

@@ -1,0 +1,21 @@
+{
+  "split": "test",
+  "methods": [
+    "metadata_bm25f"
+  ],
+  "n_items": 505,
+  "n_scorable": 499,
+  "corpus_fingerprint": "3bbefbdaaa867454",
+  "corpus_chunks": 37400,
+  "git_commit": "bf590c4b9ab0df5bca2d5e804c11b0afacfe50e4",
+  "hardware": {
+    "platform": "Windows-11-10.0.26200-SP0",
+    "python": "3.12.13",
+    "machine": "AMD64",
+    "torch": "2.13.0+cpu",
+    "device": "cpu"
+  },
+  "top_k_max": 100,
+  "latency_sample": 20,
+  "timestamp_utc": "2026-08-10T10:49:51Z"
+}

@@ -10,7 +10,7 @@
     "https://suis.sabanciuniv.edu/prod/bwckgens.p_proc_term_date",
     "https://suis.sabanciuniv.edu/prod/bwckschd.p_get_crse_unsec"
   ],
-  "scraped_at": "2026-07-28T19:17:07Z",
+  "scraped_at": "2026-08-10T10:49:36Z",
   "subject_count": 54,
   "subjects": [
     "ACC",
@@ -69,10 +69,10 @@
     "VA"
   ],
   "distinct_course_count": 471,
-  "section_count": 1280,
-  "meeting_count": 1534,
-  "scheduled_meeting_count": 1163,
+  "section_count": 1276,
+  "meeting_count": 1526,
+  "scheduled_meeting_count": 1155,
   "tba_meeting_count": 371,
   "jsonl_file": "202601.jsonl",
-  "jsonl_sha256": "b455ef4aaeb008183a6b7d30456ee25d2c584aeca21eac845dd3497fd8fbd9c9"
+  "jsonl_sha256": "132fd495f8f98e8004bc10c13c08b143c128129afdef765c77345080938b501c"
 }

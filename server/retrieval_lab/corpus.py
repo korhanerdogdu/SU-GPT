@@ -3,7 +3,8 @@ from __future__ import annotations
 """
 Loads the adviSU curriculum corpus once, into a form every retriever in the lab shares.
 
-The corpus on disk (data/degree_requirements/**, data/minors/**) is already one chunk per
+The corpus on disk (data/degree_requirements/**, data/minors/**,
+data/suggested_programs/**) is already one chunk per
 JSONL line, with a stable `chunk_id` and flat metadata. That is exactly what
 server/scripts/ingest_degree_requirements.py pushes into Chroma, so loading the same files
 here means the benchmark ranks the same units the production index stores - no re-chunking,
@@ -49,11 +50,11 @@ class Chunk:
 
     @property
     def curriculum_term(self) -> str:
-        return str(self.meta.get("curriculum_term") or "")
+        return str(self.meta.get("curriculum_term") or self.meta.get("term_code") or self.meta.get("term") or "")
 
     @property
     def course_id(self) -> str:
-        return str(self.meta.get("course_id") or "")
+        return str(self.meta.get("course_id") or self.meta.get("course_code") or "")
 
     @property
     def course_title(self) -> str:
@@ -131,8 +132,13 @@ class Corpus:
 def load_corpus(data_dir: Path | str | None = None) -> Corpus:
     """Read every degree-requirement / minor chunk, in a deterministic (sorted) order."""
     root = Path(data_dir) if data_dir else DATA_DIR
-    roots = [root / "degree_requirements", root / "minors"]
+    roots = [root / "degree_requirements", root / "minors", root / "suggested_programs"]
     files = sorted(p for r in roots if r.is_dir() for p in r.rglob("*.jsonl"))
+    # Syllabus ledgers contain one accounting row per CRN, while *.chunks.jsonl
+    # contains the actual retrievable units.  Index only the latter.
+    syllabus_root = root / "syllabi"
+    if syllabus_root.is_dir():
+        files.extend(sorted(syllabus_root.glob("*.chunks.jsonl")))
     chunks: list[Chunk] = []
     seen: set[str] = set()
     for path in files:
@@ -159,6 +165,8 @@ def load_corpus(data_dir: Path | str | None = None) -> Corpus:
 _DOCUMENT_TYPE_ALIAS = {
     "curriculum_requirement": "course",
     "minor_requirement": "minor",
+    "suggested_program": "course",
+    "course_syllabus": "course",
 }
 
 
@@ -174,5 +182,9 @@ def _add_chroma_aliases(meta: dict[str, Any]) -> None:
     """
     role = str(meta.get("data_role") or "")
     meta.setdefault("documentType", _DOCUMENT_TYPE_ALIAS.get(role, "course"))
-    if meta.get("curriculum_term"):
-        meta.setdefault("term_code", meta["curriculum_term"])
+    if meta.get("course_code") and not meta.get("course_id"):
+        meta["course_id"] = meta["course_code"]
+    term = meta.get("curriculum_term") or meta.get("term_code") or meta.get("term")
+    if term:
+        meta.setdefault("curriculum_term", term)
+        meta.setdefault("term_code", term)

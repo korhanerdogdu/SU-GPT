@@ -42,6 +42,15 @@ COURSE_RECOMMENDATION_RE = re.compile(
     re.IGNORECASE,
 )
 
+SYLLABUS_RE = re.compile(
+    r"\b(syllabus|course outline|learning outcomes?|course objectives?|grading policy|"
+    r"assessment weights?|attendance policy|academic integrity|weekly topics?|course resources?|"
+    r"ders izlencesi|dersin izlencesi|öğrenme çıktıları|ogrenme ciktilari|ders çıktıları|"
+    r"ders ciktilari|notlandırma|notlandirma|devam zorunluluğu|devam zorunlulugu|"
+    r"değerlendirme yüzdeleri|degerlendirme yuzdeleri)\b",
+    re.IGNORECASE,
+)
+
 
 @dataclass(frozen=True)
 class RagRoute:
@@ -64,6 +73,14 @@ def route_query(question: str, resolved_intent: str | None = None) -> RagRoute:
     base_intent, confidence = get_intent_with_confidence(question)
     intent = resolved_intent or base_intent or intents.OTHER
     q = question or ""
+
+    if SYLLABUS_RE.search(q):
+        return RagRoute(
+            intent="syllabus",
+            base_intent=base_intent,
+            confidence=confidence,
+            document_types=["course"],
+        )
 
     if INSTRUCTOR_REVIEW_RE.search(q):
         return RagRoute(

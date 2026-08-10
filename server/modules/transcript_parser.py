@@ -50,6 +50,7 @@ _ROW_RE = re.compile(
 )
 _STOP_RE = re.compile(r"^(\*\s*The Term GPA calculation|SABANCI UNIVERSITY ACADEMIC RECORDS GUIDE)")
 _NORMALIZE_CODE_RE = re.compile(r"\s+")
+_PROGRAM_LINE_RE = re.compile(r"^Program\s*:\s*(?P<name>.+?)\s*$")
 
 
 def _normalize_code(code: str) -> str:
@@ -98,6 +99,12 @@ class ParsedTranscript:
     total_su_credits: float | None = None
     total_ects: float | None = None
     warnings: list[str] = field(default_factory=list)
+    # Raw text of the most recent "Program : X (FACULTY)" line in the document, e.g.
+    # "Computer Science and Engineering (FENS)". None if no term block was recognised.
+    # This is the student's CURRENT major (an internal transfer's earlier terms show the old
+    # major first; the transcript's own chronological order makes "last seen" the right pick),
+    # not a validated program code -- resolving it to one of our known codes is the caller's job.
+    program_hint: str | None = None
 
 
 def _extract_pages_text(data: bytes) -> list[str]:
@@ -148,6 +155,34 @@ def _term_blocks(pages_text: list[str]) -> list[tuple[str, str]]:
             buffer.append(line)
     flush()
     return blocks
+
+
+def _latest_program_hint(pages_text: list[str]) -> str | None:
+    """Raw text of the most recent "Program : X (FACULTY)" line in the document, e.g.
+    "Computer Science and Engineering (FENS)".
+
+    Each term block repeats its own "Program :" line, and terms are printed in chronological
+    order, so keeping only the LAST one seen naturally captures the student's current major even
+    after an internal transfer (an earlier "Program :" line is a past major, not the current one).
+    Scanning stops at the same boilerplate boundary as ``_term_blocks`` so the grading-guide pages
+    (which never contain a "Program :" line anyway) are never considered.
+    """
+    latest: str | None = None
+    for page_text in pages_text:
+        stopped = False
+        for raw_line in page_text.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            if _STOP_RE.match(line):
+                stopped = True
+                break
+            program_match = _PROGRAM_LINE_RE.match(line)
+            if program_match:
+                latest = program_match.group("name")
+        if stopped:
+            break
+    return latest
 
 
 def _parse_attempts(blocks: list[tuple[str, str]]) -> list[TranscriptAttempt]:
@@ -238,6 +273,7 @@ def parse_transcript_text(pages_text: list[str]) -> ParsedTranscript:
     to construct or store a PDF file."""
     attempts = _parse_attempts(_term_blocks(pages_text))
     result = _build_result(attempts)
+    result.program_hint = _latest_program_hint(pages_text)
     result.total_su_credits, result.total_ects = _totals_from_summary(pages_text)
     reported_gpa = _cumulative_gpa_from_summary(pages_text)
     if reported_gpa is not None and result.gpa is not None and abs(reported_gpa - result.gpa) > 0.02:
