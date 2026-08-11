@@ -70,7 +70,7 @@ _SELF_HARM_RE = re.compile(
     r"\b(?:"
     r"kill\s+myself|killing\s+myself|end\s+(?:my|it)\s+(?:life|all)|take\s+my\s+own\s+life|"
     r"commit\s+suicide|suicidal|self[\s-]harm|hurt(?:ing)?\s+myself|cut(?:ting)?\s+myself|"
-    r"want\s+to\s+die|don'?t\s+want\s+to\s+live|no\s+reason\s+to\s+live|"
+    r"want\s+to\s+die|(?:don'?t|do\s+not)\s+want\s+to\s+live|no\s+reason\s+to\s+live|"
     r"intihar|kendimi\s+öldür\w*|kendimi\s+oldur\w*|canıma\s+kıy\w*|canima\s+kiy\w*|"
     r"yaşamak\s+istemiyorum|yasamak\s+istemiyorum|ölmek\s+istiyorum|olmek\s+istiyorum|"
     r"kendime\s+zarar\s+ver\w*|hayatıma\s+son\s+ver\w*|hayatima\s+son\s+ver\w*"

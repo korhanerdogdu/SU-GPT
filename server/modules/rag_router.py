@@ -90,6 +90,14 @@ def route_query(question: str, resolved_intent: str | None = None) -> RagRoute:
             document_types=["review"],
         )
 
+    if resolved_intent == intents.STUDY_PLAN:
+        return RagRoute(
+            intent=intents.STUDY_PLAN,
+            base_intent=base_intent,
+            confidence=confidence,
+            document_types=["course"],
+        )
+
     if EXAM_RE.search(q):
         return RagRoute(
             intent=intents.EXAM,

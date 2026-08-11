@@ -125,6 +125,7 @@ from modules import curriculum_registry
 from modules import degree_audit
 from modules import course_planner
 from modules import major_advisor
+from modules import requirement_lookup
 from modules import schedule_planner
 from modules import conversation_memory
 from modules.retrieval_policy import build_metadata_filter, check_profile
@@ -268,7 +269,7 @@ GRADUATION_INTENT_RE = re.compile(
 RECOMMENDATION_INTENT_RE = re.compile(
     r"\b("
     r"hangi dersleri alayım|hangi dersleri alayim|hangi dersi alayım|hangi dersi alayim|"
-    r"ders öner|ders oner|öner|oner|recommend|recommendation|"
+    r"ders öner|ders oner|recommend|recommendation|"
     r"gelecek dönem|gelecek donem|next semester|ders programı|ders programi|"
     r"program öner|program oner|program oluştur|program olustur|schedule|"
     r"kolay|rahat|zor|ağır|agir|yoğun|yogun|"
@@ -283,7 +284,7 @@ RECOMMENDATION_INTENT_RE = re.compile(
 EXPLICIT_RECOMMENDATION_RE = re.compile(
     r"\b("
     r"hangi dersleri alayım|hangi dersleri alayim|hangi dersi alayım|hangi dersi alayim|"
-    r"ders öner|ders oner|öner|oner|recommend|recommendation|"
+    r"ders öner|ders oner|recommend|recommendation|"
     r"gelecek dönem|gelecek donem|next semester|ders programı|ders programi|"
     r"program öner|program oner|program oluştur|program olustur|schedule"
     r")",
@@ -308,7 +309,7 @@ SCHEDULE_INTENT_RE = re.compile(
 # keywords: "this term" opens the CRN-bearing timetable, while "until I graduate" keeps the
 # existing prerequisite-aware course-plan flow.
 CURRENT_TERM_SCHEDULE_RE = re.compile(
-    r"\b(?:bu|içinde bulunduğum|icinde bulundugum)\s+dönem\s+hangi\s+dersleri?\s+"
+    r"\b(?:bu|içinde bulunduğum|icinde bulundugum)\s+(?:dönem|donem)\s+hangi\s+dersleri?\s+"
     r"(?:alayım|alayim|almalıyım|almaliyim)\b|"
     r"\b(?:what|which)\s+courses?\s+should\s+i\s+take\s+this\s+term\b",
     re.IGNORECASE,
@@ -519,7 +520,12 @@ INTEREST_AREAS = {
     for alias in aliases
 }
 
-COURSE_CODE_RE = re.compile(r"\b[A-Z]{2,5}\s*\d{3,5}\b", re.IGNORECASE)
+COURSE_SUBJECT_PATTERN = (
+    r"ACC|ACCA|ANTH|BIO|CHEM|CIP|CONF|CS|CULT|DSA|ECON|EE|ENS|ENT|ENRG|FILM|FIN|"
+    r"FRE|GEN|GER|HART|HIST|HUM|IE|IF|IR|LAW|LIT|MATH|MAT|ME|MGMT|MKTG|NS|OPIM|"
+    r"ORG|PHIL|PHYS|POLS|PROJ|PSIR|PSY|SOC|SPA|SPS|TLL|TS|TUR|VA|VIS|XM"
+)
+COURSE_CODE_RE = re.compile(rf"\b(?:{COURSE_SUBJECT_PATTERN})\s*\d{{3,5}}\b", re.IGNORECASE)
 RECOMMENDATION_TERM = "202601"
 
 INTEREST_COURSE_HINTS = {
@@ -534,6 +540,23 @@ INTEREST_COURSE_HINTS = {
 NON_ACADEMIC_FALLBACK = (
     "Bu konuda size yardımcı olamıyorum, akademik konularda sorular sorabilirsiniz."
 )
+
+ACADEMIC_TOPIC_RE = re.compile(
+    rf"\b("
+    rf"(?:{COURSE_SUBJECT_PATTERN})\s*-?\s*\d{{3,5}}|course|courses?|curriculum|admit|admission|degree|"
+    r"graduat|credit|ects|gpa|major|minor|schedule|syllabus|prereq|requirement|"
+    r"ders|mufredat|müfredat|mezun|kredi|bolum|bölüm|yandal|program|onkosul|önkoşul|"
+    r"zorunlu|gereklilik|kategori|universite|üniversite"
+    r")\b",
+    re.IGNORECASE,
+)
+
+def _should_redirect_without_retrieval(question: str, intent: str) -> bool:
+    """Keep clearly non-academic chatter/frustration out of the evidence-bound RAG path."""
+    if intent != intents.OTHER:
+        return False
+    text = question or ""
+    return not ACADEMIC_TOPIC_RE.search(text)
 
 
 def _is_graduation_intent(question: str) -> bool:
@@ -584,7 +607,8 @@ def _is_short_interest_phrase(question: str) -> bool:
         return False
     non_recommendation_terms = re.compile(
         r"\b(nedir|ne demek|açıkla|acikla|kim veriyor|hoca|nasıl çalış|nasil calis|"
-        r"çalışmalıyım|calismaliyim|syllabus|içeriği|icerigi)\b",
+        r"çalışmalıyım|calismaliyim|syllabus|içeriği|icerigi|"
+        r"sinir|kızgın|kizgin|angry|annoyed|frustrated|stupid)\b",
         re.IGNORECASE,
     )
     return not non_recommendation_terms.search(normalized)
@@ -649,10 +673,10 @@ def _resolve_intent(
         return intents.COURSE_RECOMMENDATION
     if _is_graduation_intent(question) and not _is_course_detail_like(question):
         return intents.GRADUATION_STATUS
-    if _is_course_detail_like(question):
-        return intents.COURSE_DETAIL
     if STUDY_PLAN_INTENT_RE.search(question or ""):
         return intents.STUDY_PLAN
+    if _is_course_detail_like(question):
+        return intents.COURSE_DETAIL
     if MAJOR_SELECTION_INTENT_RE.search(question or ""):
         return intents.MAJOR_SELECTION
     if SPECIALIZATION_INTENT_RE.search(question or ""):
@@ -2267,6 +2291,82 @@ async def ask_question(
         # Student academic profile (roadmap section 8) drives profile-scoped retrieval.
         profile = await get_academic_profile(username) if username else {}
         program = (profile.get("major") or "").strip().upper()
+
+        if requirement_lookup.is_lookup_question(question):
+            course_code = requirement_lookup.extract_course_code(question)
+            if not (username and program and profile.get("curriculum_term")):
+                return _stamp({
+                    "response": localized_message("confidence.profile_required", language),
+                    "sources": [],
+                    "source_chunk_ids": [],
+                    "intent": requirement_lookup.COURSE_REQUIREMENT_LOOKUP,
+                    "profile_required": True,
+                    "confidence": _confidence_public("profile_required"),
+                })
+            lookup = requirement_lookup.lookup(
+                program=program,
+                curriculum_term=profile["curriculum_term"],
+                course_code=course_code or "",
+                language=language,
+            )
+            if lookup is None:
+                return _stamp({
+                    "response": _confidence_abstention_message("curriculum_unavailable", language),
+                    "sources": [],
+                    "source_chunk_ids": [],
+                    "intent": requirement_lookup.COURSE_REQUIREMENT_LOOKUP,
+                    "curriculum_unavailable": True,
+                    "confidence": _confidence_public("curriculum_unavailable"),
+                })
+            rendered = requirement_lookup.render_answer(
+                lookup,
+                program=program,
+                curriculum_term=profile["curriculum_term"],
+                language=language,
+            )
+            await conversation_memory.append_turn(
+                session_id,
+                username=username,
+                question=original_question,
+                answer=rendered.body,
+                intent=requirement_lookup.COURSE_REQUIREMENT_LOOKUP,
+                course_id=lookup.course_code,
+                term_code=profile.get("curriculum_term"),
+                sources=rendered.sources,
+                working_context_updates={
+                    "active_topic": "course_requirement_lookup",
+                    "last_course_id": lookup.course_code,
+                },
+            )
+            return _stamp({
+                "response": rendered.body,
+                "summary": rendered.summary,
+                "sources": rendered.sources,
+                "source_chunk_ids": rendered.source_chunk_ids,
+                "intent": requirement_lookup.COURSE_REQUIREMENT_LOOKUP,
+                "confidence": _confidence_public(lookup.confidence_status),
+            })
+
+        if _should_redirect_without_retrieval(question, intent):
+            answer, summary = ensure_summary_section(
+                localized_message("fallback.non_academic", language),
+                language=language,
+            )
+            await conversation_memory.append_turn(
+                session_id,
+                username=username,
+                question=original_question,
+                answer=answer,
+                intent=intents.OTHER,
+            )
+            return _stamp({
+                "response": answer,
+                "summary": summary,
+                "sources": [],
+                "source_chunk_ids": [],
+                "intent": intents.OTHER,
+                "confidence": _confidence_public("safe_abstention"),
+            })
 
         # ---- Major-selection mini-test (deterministic; never mixes RAG or graduation audit) ----
         # "Which major should I choose?" runs a bounded questionnaire and returns ONE definitive

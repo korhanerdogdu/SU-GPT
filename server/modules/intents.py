@@ -36,6 +36,7 @@ GRADUATION_PLAN = "graduation_plan"
 WEEKLY_SCHEDULE = "weekly_schedule"
 UNIVERSITY_COURSES = "university_courses"
 GPA_PROJECTION = "gpa_projection"
+COURSE_REQUIREMENT_LOOKUP = "course_requirement_lookup"
 
 # --- Intents that describe a handled request rather than a classified question ----------
 COURSE_HISTORY_UPDATE = "course_history_update"
