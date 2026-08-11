@@ -99,6 +99,11 @@ def revise_saved_schedule(
 
     added = [code for code in placed_codes if code not in retained]
     schedule_payload = schedule_planner.timetable_payload(timetable, language=language)
+    schedule_payload["removed_codes"] = removed
+    schedule_payload["added_codes"] = added
+    schedule_payload["excluded_codes"] = [
+        course_planner.display_code(code) for code in sorted(excluded_normalized)
+    ]
     base_body, base_summary = schedule_planner.render_timetable(timetable, language=language)
 
     if language == "en":

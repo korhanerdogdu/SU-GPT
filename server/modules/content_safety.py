@@ -120,6 +120,20 @@ _HATE_STEREOTYPE_RE = re.compile(
     rf")\b[^.?!]{{0,70}}\b{_HATE_TARGET}\b",
     re.IGNORECASE,
 )
+_HATE_REQUEST_RE = re.compile(
+    r"\b(?:make|write|generate|create|produce|give|state|claim)\b[^.?!\n]{0,80}\b"
+    r"(?:discriminatory|racist|hostile\s+stereotype|stereotype|hateful)\b[^.?!\n]{0,80}\b"
+    r"(?:protected\s+(?:student\s+)?group|ethnic(?:ity)?|nationalit(?:y|ies)|race|religion|gender|"
+    r"student\s+group|classroom|students?)\b|"
+    r"\b(?:evaluate|judge|rank|assess|değerlendir|degerlendir|yargıla|yargila|sırala|sirala)\b"
+    r"[^.?!\n]{0,90}\b(?:based\s+on|according\s+to|üzerinden|uzerinden|göre|gore)\b"
+    r"[^.?!\n]{0,70}\b(?:ethnic(?:ity)?|nationalit(?:y|ies)|race|religion|gender|"
+    r"etnik\s+k[öo]ken|milliyet|ırk|irk|din|cinsiyet)\b|"
+    r"\b(?:protected\s+(?:student\s+)?group|ethnic(?:ity)?|nationalit(?:y|ies)|race|religion|gender|"
+    r"etnik\s+k[öo]ken|milliyet|ırk|irk|din|cinsiyet)\b[^.?!\n]{0,90}\b"
+    r"(?:discriminatory|racist|hostile\s+stereotype|stereotype|ayrımcı|ayrimci|ırkçı|irkci)\b",
+    re.IGNORECASE,
+)
 
 # --- Violence: directed threats only ----------------------------------------------------
 _VIOLENCE_RE = re.compile(
@@ -173,6 +187,7 @@ _ORDERED_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     (HATE, _HATE_SLUR_RE),
     (HATE, _HATE_CONSTRUCTION_RE),
     (HATE, _HATE_STEREOTYPE_RE),
+    (HATE, _HATE_REQUEST_RE),
     (VIOLENCE, _VIOLENCE_RE),
     (SEXUAL_HARASSMENT, _SEXUAL_RE),
     (PROFANITY, _PROFANITY_RE),

@@ -53,6 +53,8 @@ def _actual(row: dict) -> tuple[str, str | None]:
     intent = _route_intent_without_statistical_classifier(prompt, resolved)
     if requirement_lookup.is_lookup_question(prompt):
         intent = requirement_lookup.COURSE_REQUIREMENT_LOOKUP
+    elif intent != "syllabus" and official_lookup.instructor_profile_lookup(prompt, language=row["language"]) is not None:
+        intent = intents.INSTRUCTOR_PROFILE_LOOKUP
     elif intent != "syllabus" and official_lookup.instructor_teaching_lookup(prompt, language=row["language"]) is not None:
         intent = intents.INSTRUCTOR_TEACHING_LOOKUP
     elif intent != "syllabus" and official_lookup.course_overview(prompt, language=row["language"]) is not None:
@@ -146,10 +148,14 @@ def _stateless_memory(monkeypatch, captured: list[str]) -> None:
         captured.append(str(kwargs.get("answer") or ""))
         return None
 
+    async def no_preferences(*_args, **_kwargs):
+        return {"excluded_courses": [], "preferred_topics": [], "schedule_preferences": {}}
+
     monkeypatch.setattr(main_module.conversation_memory, "get_working_context", no_context)
     monkeypatch.setattr(main_module.conversation_memory, "recent_turns", no_turns)
     monkeypatch.setattr(main_module.conversation_memory, "conversation_owner", no_owner)
     monkeypatch.setattr(main_module.conversation_memory, "append_turn", capture_turn)
+    monkeypatch.setattr(main_module, "get_user_preferences", no_preferences)
     monkeypatch.setattr(main_module, "get_intent", lambda _question: intents.OTHER)
     monkeypatch.setattr(
         main_module,
@@ -254,7 +260,7 @@ def test_instructor_teaching_question_is_academic_schedule_lookup(monkeypatch):
     assert "Dersler, müfredat" not in body["response"]
 
 
-def test_instructor_biography_question_stays_out_of_schedule_lookup(monkeypatch):
+def test_instructor_biography_question_uses_official_profile_sources(monkeypatch):
     captured: list[str] = []
     _stateless_memory(monkeypatch, captured)
     main_module.resource_controller.reset_for_tests()
@@ -265,10 +271,11 @@ def test_instructor_biography_question_stays_out_of_schedule_lookup(monkeypatch)
     )
     assert response.status_code == 200
     body = response.json()
-    assert body["intent"] == intents.OTHER
-    assert body["confidence"]["status"] == "safe_abstention"
-    assert "DSA 201" not in body["response"]
-    assert "IF 100" not in body["response"]
+    assert body["intent"] == intents.INSTRUCTOR_PROFILE_LOOKUP
+    assert body["confidence"]["status"] == "verified"
+    assert "İnanç Arın" in body["response"]
+    assert "faculty_profiles/current.jsonl" in body["sources"]
+    assert "Natural Language Processing" in body["response"] or "Doğal Dil" in body["response"]
 
 
 def test_hate_with_academic_course_code_is_blocked_before_rag(monkeypatch):

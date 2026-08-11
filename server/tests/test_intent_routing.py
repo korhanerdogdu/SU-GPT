@@ -114,6 +114,19 @@ def test_schedule_edit_followup_stays_in_context_instead_of_becoming_graduation_
     ) == intents.GRADUATION_STATUS
 
 
+def test_interest_prioritization_after_weekly_schedule_keeps_timetable_context():
+    resolved = main_module._resolve_intent(
+        "I am interested in AI and NLP. Can you prioritize electives around that?",
+        "other",
+        working_context={"last_intent": intents.WEEKLY_SCHEDULE, "active_topic": "weekly_schedule"},
+    )
+    assert resolved == intents.WEEKLY_SCHEDULE
+    assert main_module._resolve_interest_keys(
+        "I am interested in AI and NLP. Can you prioritize electives around that?",
+        {},
+    ) == ["ai", "nlp"]
+
+
 def test_minor_intent_matches_turkish_possessive_inflection():
     # Regression: MINOR_INTENT_RE's trailing \b required an immediate word boundary right after
     # "yandal", which a Turkish possessive suffix never leaves -- "yandalımı seçmek istiyorum"

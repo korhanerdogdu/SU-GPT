@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import main as main_module
 from modules import retrieval_modes
 from modules.auth import issue_token
+from modules.llm_providers import ProviderRateLimitError
 
 
 def _stateless_memory(monkeypatch, captured: list[str]) -> None:
@@ -56,10 +57,31 @@ def test_llm_only_raw_secret_output_is_filtered_before_persistence(monkeypatch):
     assert captured and all(synthetic_secret not in answer for answer in captured)
 
 
-def test_admin_account_is_exempt_from_the_daily_provider_quota(monkeypatch):
-    # The operator (ADMIN_USERNAME) account is used for testing/demoing the product itself, not
-    # by a caller the daily quota exists to protect against -- it must never be blocked by it,
-    # even once a regular account has exhausted the exact same shared quota.
+def test_provider_429_returns_graceful_rate_limit_without_persisting_failed_turn(monkeypatch):
+    captured: list[str] = []
+    _stateless_memory(monkeypatch, captured)
+    main_module.resource_controller.reset_for_tests()
+
+    def rate_limited(_question):
+        raise ProviderRateLimitError("groq", "rate_limited", retryable=True, status_code=429)
+
+    monkeypatch.setattr(main_module, "answer_without_context_with_telemetry", rate_limited)
+    response = TestClient(main_module.app).post(
+        "/ask/",
+        data={"question": "Explain prerequisites in general.", "mode": "llm_only"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["intent"] == "rate_limited"
+    assert body["provider_error_code"] == "rate_limited"
+    assert body["confidence"]["status"] == "provider_unavailable"
+    assert "temporarily rate limited" in body["response"]
+    assert captured == []
+
+
+def test_demo_accounts_are_exempt_from_the_daily_provider_quota(monkeypatch):
+    # The built-in student/admin accounts are used for live product demos; local quota controls
+    # must never block either account even after an ordinary account exhausts its allowance.
     main_module.resource_controller.reset_for_tests()
     monkeypatch.setattr(main_module, "answer_without_context_with_telemetry", lambda _q: ("ok", None))
 
@@ -68,10 +90,10 @@ def test_admin_account_is_exempt_from_the_daily_provider_quota(monkeypatch):
     for _ in range(500):
         try:
             main_module.resource_controller.begin(
-                username="student",
-                client_address="test-client",
-                provider_requests=1,
-            )
+                    username="ordinary-student",
+                    client_address="test-client",
+                    provider_requests=1,
+                )
         except main_module.ResourceLimitError:
             exhausted = True
             break
@@ -81,19 +103,19 @@ def test_admin_account_is_exempt_from_the_daily_provider_quota(monkeypatch):
     student_token, _ = issue_token("student", "student")
     admin_token, _ = issue_token(main_module.ADMIN_USERNAME, "admin")
 
-    blocked = client.post(
+    student_allowed = client.post(
         "/ask/",
         data={"question": "What is CS 201?", "mode": "llm_only", "username": "student"},
         headers={"Authorization": f"Bearer {student_token}"},
     )
-    assert blocked.status_code == 429
+    assert student_allowed.status_code == 200
 
-    allowed = client.post(
+    admin_allowed = client.post(
         "/ask/",
         data={"question": "What is CS 201?", "mode": "llm_only", "username": main_module.ADMIN_USERNAME},
         headers={"Authorization": f"Bearer {admin_token}"},
     )
-    assert allowed.status_code == 200
+    assert admin_allowed.status_code == 200
 
 
 def test_crisis_gate_runs_before_prompt_guardrail_and_provider(monkeypatch):

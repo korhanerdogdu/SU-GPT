@@ -35,10 +35,22 @@ _COURSE_CODE_RE = re.compile(
 _COURSE_DETAIL_CUE_RE = re.compile(
     r"\b("
     r"neyi\s+anlat|ne\s+anlat|ne\s+öğret|ne\s+ogret|nedir|hakkında|hakkinda|"
-    r"içeriği|icerigi|ders\s+içeri|ders\s+iceri|course\s+content|what\s+is|"
-    r"what\s+does\s+.+\s+cover|about|kim\s+veriyor|hangi\s+hoca|"
+    r"içeriği|icerigi|ders\s+içeri|ders\s+iceri|course\s+content|learning\s+outcomes?|"
+    r"course\s+outcomes?|öğrenme\s+çıktı|ogrenme\s+cikti|kısa\s+özet|kisa\s+ozet|"
+    r"short\s+summary|summary|summari[sz]e|özet|ozet|what\s+is|what\s+are|"
+    r"what\s+does\s+.+\s+cover|understand|explain|about|kim\s+veriyor|hangi\s+hoca|"
     r"instructor|who\s+teaches"
     r")",
+    re.IGNORECASE,
+)
+_PREREQUISITE_CUE_RE = re.compile(
+    r"\b(prereq(?:uisite)?s?|pre-?reqs?|ön\s*koşul|onkosul|önkoşul|"
+    r"before\s+taking|almak\s+için\s+ne\s+gerek|almak\s+icin\s+ne\s+gerek)\b",
+    re.IGNORECASE,
+)
+_OFFERING_CUE_RE = re.compile(
+    r"\b(offered|open|available|this\s+(?:fall|semester|term)|fall\s+\d{4}|"
+    r"açılıyor|aciliyor|açılır|acilir|bu\s+dönem|bu\s+donem|güz|guz|take)\b",
     re.IGNORECASE,
 )
 _TEACHING_CUE_RE = re.compile(
@@ -57,6 +69,14 @@ _TEACHING_QUESTION_RE = re.compile(
     r"which\s+courses?\s+does\s+.+\s+teach|"
     r"what\s+courses?\s+does\s+.+\s+teach|"
     r".+\s+teaches\s+which\s+courses?"
+    r")\b",
+    re.IGNORECASE,
+)
+_PROFILE_QUESTION_RE = re.compile(
+    r"\b(?:"
+    r"kim(?:dir)?|who\s+is|biograph\w*|bio\b|profile|research|research\s+areas?|"
+    r"araştırma\s+alan\w*|arastirma\s+alan\w*|ne\s+çalışır|ne\s+calisir|"
+    r"hakkında\s+bilgi|hakkinda\s+bilgi"
     r")\b",
     re.IGNORECASE,
 )
@@ -100,7 +120,10 @@ def extract_course_code(question: str) -> str | None:
 
 
 def is_course_overview_question(question: str) -> bool:
-    return bool(extract_course_code(question) and _COURSE_DETAIL_CUE_RE.search(question or ""))
+    text = question or ""
+    if re.search(r"\bwhat\s+are\s+the\s+details\s+of\b", text, re.IGNORECASE):
+        return False
+    return bool(extract_course_code(text) and _COURSE_DETAIL_CUE_RE.search(text))
 
 
 def is_instructor_teaching_question(question: str) -> bool:
@@ -111,13 +134,27 @@ def is_instructor_teaching_question(question: str) -> bool:
 
 
 def is_instructor_fact_question(question: str) -> bool:
-    # Deliberately narrow: "X kim?" is a biography/person question and stays out of scope.
-    # "X hangi dersleri veriyor?" is an official academic schedule lookup.
     return is_instructor_teaching_question(question)
+
+
+def is_instructor_profile_question(question: str) -> bool:
+    text = question or ""
+    if _INSTRUCTOR_OPINION_RE.search(text):
+        return False
+    return bool(_PROFILE_QUESTION_RE.search(text) and _extract_instructor_name(text))
 
 
 def is_course_fact_question(question: str) -> bool:
     return is_course_overview_question(question)
+
+
+def is_prerequisite_question(question: str) -> bool:
+    return bool(extract_course_code(question) and _PREREQUISITE_CUE_RE.search(question or ""))
+
+
+def is_offering_question(question: str) -> bool:
+    text = question or ""
+    return bool(extract_course_code(text) and _OFFERING_CUE_RE.search(text))
 
 
 def _jsonl(path: Path) -> tuple[dict[str, Any], ...]:
@@ -189,6 +226,44 @@ def _course_schedule_rows(course_code: str, term: str) -> list[dict[str, Any]]:
 def _course_syllabus_rows(course_code: str, term: str) -> list[dict[str, Any]]:
     normalized = normalize_course_code(course_code)
     return [row for row in _syllabus_rows(term) if row.get("course_id") == normalized]
+
+
+def _requested_or_latest_term(question: str) -> str | None:
+    """Resolve the small set of demo/user-facing term phrasings to the local schedule term.
+
+    The schedule snapshot's ``latest.json`` is authoritative for "this term" and for the
+    Fall 2026-2027 demo corpus.  If a future snapshot is loaded, the latest pointer keeps this
+    helper from hard-coding a stale term into the product path.
+    """
+    latest = _latest_term("schedule")
+    text = question or ""
+    if re.search(r"\bfall\s+2026(?:\s*[-/]\s*2027)?\b|2026\s*[-/]\s*2027|\bgüz\b|\bguz\b", text, re.I):
+        return latest
+    return latest
+
+
+def _prerequisite_text(course_code: str) -> str | None:
+    """Return deterministic prerequisite text from the local academic rules layer."""
+    try:
+        from modules import course_planner
+    except Exception:
+        return None
+    code = normalize_course_code(course_code)
+    normalized = course_planner.normalize_code(code)
+    minimum = getattr(course_planner, "MINIMUM_CREDIT_PREREQS", {}).get(normalized)
+    if minimum is not None:
+        return f"minimum {minimum} completed SU credits"
+    alternatives = getattr(course_planner, "ALTERNATIVE_PREREQUISITE_PATHS", {}).get(normalized)
+    if alternatives:
+        paths = [
+            " + ".join(course_planner.display_code(item) for item in path)
+            for path in alternatives
+        ]
+        return " OR ".join(paths)
+    direct = getattr(course_planner, "PREREQS", {}).get(normalized)
+    if direct:
+        return " + ".join(course_planner.display_code(item) for item in direct)
+    return None
 
 
 def _latest_published_syllabus_row(course_code: str) -> dict[str, Any] | None:
@@ -379,9 +454,105 @@ def course_overview(question: str, *, language: str = "tr") -> OfficialAnswer | 
     )
 
 
+def prerequisite_lookup(question: str, *, language: str = "tr") -> OfficialAnswer | None:
+    if not is_prerequisite_question(question):
+        return None
+    code = extract_course_code(question)
+    if not code:
+        return None
+    catalog = _catalog_by_code(code)
+    title = str((catalog or {}).get("title") or "").strip()
+    prereq = _prerequisite_text(code)
+    if not prereq:
+        body = (
+            f"I could not verify official prerequisite data for **{code}** in the local academic rules."
+            if language == "en"
+            else f"Yerel akademik kurallarda **{code}** için resmi önkoşul verisini doğrulayamadım."
+        )
+        return OfficialAnswer(
+            body=body,
+            summary=body,
+            sources=["Deterministic prerequisite rules"],
+            source_chunk_ids=[],
+            intent=intents.COURSE_PREREQUISITE_LOOKUP,
+            course_id=code,
+            confidence_status="cannot_verify",
+        )
+    display = f"{code} — {title}" if title else code
+    if language == "en":
+        body = f"**{display}** prerequisite: **{prereq}**.\n\nSource: Deterministic prerequisite rules"
+        summary = f"{code} requires {prereq}."
+    else:
+        body = f"**{display}** önkoşulu: **{prereq}**.\n\nKaynak: Deterministic prerequisite rules"
+        summary = f"{code} için önkoşul: {prereq}."
+    return OfficialAnswer(
+        body=body,
+        summary=summary,
+        sources=["Deterministic prerequisite rules", "course_catalog/current.jsonl"],
+        source_chunk_ids=[],
+        intent=intents.COURSE_PREREQUISITE_LOOKUP,
+        course_id=code,
+    )
+
+
+def offering_lookup(question: str, *, language: str = "tr") -> OfficialAnswer | None:
+    if not is_offering_question(question):
+        return None
+    code = extract_course_code(question)
+    term = _requested_or_latest_term(question)
+    if not code or not term:
+        return None
+    rows = _course_schedule_rows(code, term)
+    catalog = _catalog_by_code(code)
+    title = str((catalog or {}).get("title") or "").strip()
+    term_label = str((rows[0] if rows else {}).get("term_label") or term)
+    primary = [row for row in rows if str(row.get("component") or "") == "Primary"]
+    crns = _unique([str(row.get("crn") or "") for row in (primary or rows)])
+    display = f"{code} — {title}" if title else code
+    if rows:
+        if language == "en":
+            body = (
+                f"Yes — **{display}** is offered in **{term_label}**."
+                + (f" Primary CRN(s): {', '.join(crns)}." if crns else "")
+                + f"\n\nSource: schedule/{term}.jsonl"
+            )
+            summary = f"{code} is offered in {term_label}."
+        else:
+            body = (
+                f"Evet — **{display}**, **{term_label}** döneminde açılıyor."
+                + (f" Ana CRN(ler): {', '.join(crns)}." if crns else "")
+                + f"\n\nKaynak: schedule/{term}.jsonl"
+            )
+            summary = f"{code}, {term_label} döneminde açılıyor."
+        status = "verified"
+    else:
+        if language == "en":
+            body = f"No offered section for **{display}** appears in **{term_label}**.\n\nSource: schedule/{term}.jsonl"
+            summary = f"{code} is not offered in {term_label}."
+        else:
+            body = f"**{display}** için **{term_label}** döneminde açılan section görünmüyor.\n\nKaynak: schedule/{term}.jsonl"
+            summary = f"{code}, {term_label} döneminde açılıyor görünmüyor."
+        status = "verified"
+    return OfficialAnswer(
+        body=body,
+        summary=summary,
+        sources=[f"schedule/{term}.jsonl"],
+        source_chunk_ids=_unique([str(row.get("chunk_id") or "") for row in rows[:4]]),
+        intent=intents.COURSE_OFFERING_LOOKUP,
+        course_id=code,
+        confidence_status=status,
+    )
+
+
 @lru_cache(maxsize=1)
 def _known_instructor_names() -> dict[str, str]:
     names: dict[str, str] = {}
+    for row in _faculty_profile_rows():
+        cleaned = str(row.get("name") or "").strip()
+        if len(cleaned.split()) >= 2:
+            key = _norm(cleaned)
+            if key and key not in names:
+                names[key] = cleaned
     for term in filter(None, {_latest_term("schedule"), _latest_term("syllabi"), "202502"}):
         for row in (*_schedule_rows(str(term)), *_syllabus_rows(str(term))):
             raw_values: list[str] = []
@@ -412,23 +583,29 @@ def _extract_instructor_name(question: str) -> str | None:
     return max(matches, key=lambda item: len(item[0]))[1]
 
 
-def instructor_teaching_lookup(question: str, *, language: str = "tr") -> OfficialAnswer | None:
-    if not is_instructor_fact_question(question):
-        return None
-    instructor = _extract_instructor_name(question)
-    if not instructor:
-        return None
-    term = _latest_term("schedule")
-    if not term:
-        return None
+@lru_cache(maxsize=1)
+def _faculty_profile_rows() -> tuple[dict[str, Any], ...]:
+    return _jsonl(_data_root() / "faculty_profiles" / "current.jsonl")
+
+
+def _faculty_profile_by_name(instructor: str) -> dict[str, Any] | None:
+    key = _norm(instructor)
+    for row in _faculty_profile_rows():
+        candidates = [str(row.get("name") or ""), *[str(alias) for alias in (row.get("aliases") or [])]]
+        if any(_norm(candidate) == key for candidate in candidates):
+            return row
+    return None
+
+
+def _instructor_rows(instructor: str, term: str) -> list[dict[str, Any]]:
     instructor_key = _norm(instructor)
-    rows = [
+    return [
         row for row in _schedule_rows(term)
         if instructor_key in _norm(str(row.get("instructors") or ""))
     ]
-    if not rows:
-        return None
 
+
+def _group_teaching_rows(rows: list[dict[str, Any]], *, language: str) -> dict[str, dict[str, Any]]:
     grouped: dict[str, dict[str, Any]] = {}
     for row in rows:
         course_id = str(row.get("course_id") or "").strip()
@@ -447,6 +624,161 @@ def instructor_teaching_lookup(question: str, *, language: str = "tr") -> Offici
         chunk_id = str(row.get("chunk_id") or "")
         if chunk_id:
             item["chunk_ids"].append(chunk_id)
+    return grouped
+
+
+def instructor_profile_lookup(question: str, *, language: str = "tr") -> OfficialAnswer | None:
+    if not is_instructor_profile_question(question):
+        return None
+    instructor = _extract_instructor_name(question)
+    if not instructor:
+        return None
+    term = _latest_term("schedule")
+    schedule_rows = _instructor_rows(instructor, term) if term else []
+    profile = _faculty_profile_by_name(instructor)
+    syllabus_hits = [
+        row for row in _all_syllabus_rows()
+        if _norm(instructor) in " ".join(_norm(str(name)) for name in (row.get("instructor_names") or []))
+    ][:4]
+    if not profile and not schedule_rows and not syllabus_hits:
+        return None
+
+    sources: list[str] = []
+    if profile:
+        sources.append("faculty_profiles/current.jsonl")
+        sources.extend(
+            str(url)
+            for url in (profile.get("source_urls") or profile.get("sources") or [])
+            if str(url).strip()
+        )
+    if term and schedule_rows:
+        sources.append(f"schedule/{term}.jsonl")
+    for row in syllabus_hits:
+        source_path = row.get("_source_path") or f"syllabi/{row.get('term_code') or row.get('term')}.jsonl"
+        if source_path:
+            sources.append(str(source_path))
+    sources = _unique(sources)
+
+    grouped = _group_teaching_rows(schedule_rows, language=language)
+    term_label = str((schedule_rows[0] if schedule_rows else {}).get("term_label") or term or "")
+    chunk_ids = _unique(
+        [str(row.get("chunk_id") or "") for row in schedule_rows[:4]]
+        + [str(row.get("chunk_id") or "") for row in syllabus_hits]
+    )
+
+    if language == "en":
+        lines = [f"Here is what I can verify from official Sabancı University data for **{instructor}**:"]
+        if profile:
+            role_bits = [
+                str(profile.get("role") or profile.get("display_title_en") or "").strip(),
+                str(profile.get("unit") or "").strip(),
+            ]
+            role = " — ".join(bit for bit in role_bits if bit)
+            if role:
+                lines.append(f"- Role: {role}.")
+            programs = [str(item) for item in profile.get("programs") or [] if str(item).strip()]
+            if programs:
+                lines.append(f"- Programs/teaching context: {', '.join(programs)}.")
+            areas = [
+                str(item)
+                for item in (profile.get("research_areas_en") or profile.get("research_areas") or [])
+                if str(item).strip()
+            ]
+            if areas:
+                lines.append(f"- Research areas: {', '.join(areas)}.")
+            education = [str(item) for item in profile.get("education") or [] if str(item).strip()]
+            if education:
+                lines.append(f"- Education: {'; '.join(education)}.")
+            publications = [
+                str(item)
+                for item in (profile.get("selected_publications") or profile.get("publications") or [])
+                if str(item).strip()
+            ]
+            if publications:
+                lines.append("- Selected verified publications/projects:")
+                lines.extend(f"  - {item}" for item in publications[:5])
+            if profile.get("email"):
+                lines.append(f"- Official email: {profile['email']}.")
+        else:
+            lines.append("- I found this person in official course data, but I do not have a local official personnel biography record.")
+        if grouped:
+            lines.append(f"- Current official teaching records ({term_label}):")
+            for course_id, item in sorted(grouped.items()):
+                title = item["title"]
+                lines.append(f"  - **{course_id} — {title}**" if title else f"  - **{course_id}**")
+        lines.append("")
+        lines.append("I am not adding unsourced biography details beyond these official records.")
+        lines.append("Sources: " + ", ".join(sources))
+        summary = f"{instructor} is matched in official Sabancı data; profile details are source-limited."
+    else:
+        lines = [f"**{instructor}** için resmi Sabancı verilerinden doğrulayabildiklerim:"]
+        if profile:
+            role_bits = [
+                str(profile.get("display_title_tr") or profile.get("role") or "").strip(),
+                str(profile.get("unit") or "").strip(),
+            ]
+            role = " — ".join(bit for bit in role_bits if bit)
+            if role:
+                lines.append(f"- Görev: {role}.")
+            programs = [str(item) for item in profile.get("programs") or [] if str(item).strip()]
+            if programs:
+                lines.append(f"- Program/ders bağlamı: {', '.join(programs)}.")
+            areas = [
+                str(item)
+                for item in (profile.get("research_areas_tr") or profile.get("research_areas") or [])
+                if str(item).strip()
+            ]
+            if areas:
+                lines.append(f"- Araştırma alanları: {', '.join(areas)}.")
+            education = [str(item) for item in profile.get("education") or [] if str(item).strip()]
+            if education:
+                lines.append(f"- Eğitim: {'; '.join(education)}.")
+            publications = [
+                str(item)
+                for item in (profile.get("selected_publications") or profile.get("publications") or [])
+                if str(item).strip()
+            ]
+            if publications:
+                lines.append("- Kaynaklarda doğrulanan seçilmiş yayın/projeler:")
+                lines.extend(f"  - {item}" for item in publications[:5])
+            if profile.get("email"):
+                lines.append(f"- Resmi e-posta: {profile['email']}.")
+        else:
+            lines.append("- Kişiyi resmi ders verisinde buldum; ancak yerel veride resmi personel biyografisi yok.")
+        if grouped:
+            lines.append(f"- Güncel resmi ders programı kayıtları ({term_label}):")
+            for course_id, item in sorted(grouped.items()):
+                title = item["title"]
+                lines.append(f"  - **{course_id} — {title}**" if title else f"  - **{course_id}**")
+        lines.append("")
+        lines.append("Bu resmi kayıtların dışına çıkıp kaynaklanmamış biyografi detayı eklemiyorum.")
+        lines.append("Kaynaklar: " + ", ".join(sources))
+        summary = f"{instructor}, resmi Sabancı verilerinde eşleşiyor; profil bilgisi kaynaklarla sınırlı verildi."
+
+    return OfficialAnswer(
+        body="\n".join(lines).strip(),
+        summary=summary,
+        sources=sources,
+        source_chunk_ids=chunk_ids,
+        intent=intents.INSTRUCTOR_PROFILE_LOOKUP,
+        confidence_status="verified" if profile else "insufficient_evidence",
+    )
+
+
+def instructor_teaching_lookup(question: str, *, language: str = "tr") -> OfficialAnswer | None:
+    if not is_instructor_teaching_question(question):
+        return None
+    instructor = _extract_instructor_name(question)
+    if not instructor:
+        return None
+    term = _latest_term("schedule")
+    if not term:
+        return None
+    rows = _instructor_rows(instructor, term)
+    if not rows:
+        return None
+
+    grouped = _group_teaching_rows(rows, language=language)
 
     term_label = str(rows[0].get("term_label") or term)
     source = f"schedule/{term}.jsonl"
@@ -491,14 +823,23 @@ def instructor_teaching_lookup(question: str, *, language: str = "tr") -> Offici
 
 
 def answer(question: str, *, language: str = "tr") -> OfficialAnswer | None:
-    return instructor_teaching_lookup(question, language=language) or course_overview(
+    return (
+        prerequisite_lookup(question, language=language)
+        or offering_lookup(question, language=language)
+        or instructor_teaching_lookup(question, language=language)
+        or instructor_profile_lookup(question, language=language)
+        or course_overview(
         question,
         language=language,
+        )
     )
 
 
 def render_instructor_fact_answer(question: str, *, language: str = "tr") -> OfficialAnswer | None:
-    return instructor_teaching_lookup(question, language=language)
+    return instructor_teaching_lookup(question, language=language) or instructor_profile_lookup(
+        question,
+        language=language,
+    )
 
 
 def render_course_fact_answer(question: str, *, language: str = "tr") -> OfficialAnswer | None:

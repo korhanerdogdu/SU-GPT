@@ -28,7 +28,8 @@ _COURSE_CODE_RE = re.compile(
 )
 _LOOKUP_CUE_RE = re.compile(
     r"\b("
-    r"required|requirement|requirements|requirement\s+(?:group|category)|category|heading|pool|"
+    r"required|mandatory|elective|requirement|requirements|requirement\s+(?:group|category)|category|heading|pool|"
+    r"mandatory|elective|core|area|free|optional|compulsory|"
     r"count(?:s|ed)?\s+(?:toward|towards|as|for|in)|fit(?:s)?\s+(?:in|into)|"
     r"based\s+on\s+my\s+(?:admit|admission|curriculum)\s+term|for\s+my\s+curriculum|"
     r"zorunlu|gereklilik|gereklilik\s+grubu|kategori|başlık|baslik|havuz|"
@@ -198,8 +199,9 @@ def render_answer(
         else:
             body = (
                 f"No. For {program.upper()} curriculum/admit term {curriculum_term}, "
-                f"{code_title} is not listed under required courses; it is listed under "
-                f"{result.category_label}.\n\nSource: {source}"
+                f"{code_title} is not listed under required courses; it is not in the "
+                f"mandatory-course category. It is listed under {result.category_label}."
+                f"\n\nSource: {source}"
             )
             summary = (
                 f"{result.course_code} is {result.category_label}, not required, "

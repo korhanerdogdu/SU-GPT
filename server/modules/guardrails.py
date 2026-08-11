@@ -148,17 +148,28 @@ _GENERATION_REQUEST = re.compile(
 )
 _HARMFUL_TERMS = re.compile(
     r"\b(?:racist|racial slur|hate speech|harass(?:ment)?|dehumaniz\w*|degrad\w*|"
-    r"humiliat\w*|insult\w*|nefret(?: soylemi)?|irkci|asagila\w*|hakaret|"
+    r"humiliat\w*|insult\w*|discriminat\w*|stereotyp\w*|hostile\s+stereotype|"
+    r"nefret(?: soylemi)?|irkci|ayrimci|ayrimcilik|asagila\w*|hakaret|"
     r"insanliktan cikar\w*)\b",
     re.IGNORECASE,
 )
 _PROTECTED_CLASS = re.compile(
     r"\b(?:muslims?|christians?|jews?|religious groups?|women|men|gay|lesbian|"
     r"trans(?:gender)?|disabled|disab(?:led|ility)|ethnic groups?|immigrants?|refugees?|"
-    r"nationalit(?:y|ies)|race|religion|gender|sexual orientation|"
+    r"nationalit(?:y|ies)|race|religion|gender|sexual orientation|ethnicity|"
+    r"protected(?: student)? group|"
     r"musluman\w*|hristiyan\w*|yahudi\w*|kadin\w*|erkek\w*|escinsel\w*|"
     r"engelli\w*|suriyeli\w*|multeci\w*|gocmen\w*|etnik|milliyet|din|mezhep|cinsiyet)\b",
     re.IGNORECASE,
+)
+_PROTECTED_ATTRIBUTE_EVALUATION = re.compile(
+    r"\b(?:evaluate|judge|rank|rate|assess|classify|compare|degerlendir|siniflandir|sirala)\w*\b"
+    r".{0,80}\b(?:ethnicity|nationality|race|religion|gender|sexual orientation|"
+    r"etnik|milliyet|irk|din|mezhep|cinsiyet)\b|"
+    r"\b(?:ethnicity|nationality|race|religion|gender|sexual orientation|"
+    r"etnik|milliyet|irk|din|mezhep|cinsiyet)\b"
+    r".{0,80}\b(?:evaluate|judge|rank|rate|assess|classify|compare|degerlendir|siniflandir|sirala)\w*\b",
+    re.IGNORECASE | re.DOTALL,
 )
 _DEHUMANIZATION_OR_EXCLUSION = re.compile(
     r"\b(?:subhuman|inferior|vermin|animals?|do not belong|does not belong|should be expelled|"
@@ -254,6 +265,8 @@ def _harmful_request(value: str) -> bool:
     )
     generated_harm = bool(_GENERATION_REQUEST.search(value) and _HARMFUL_TERMS.search(value))
     if _HARASSMENT_REQUEST.search(value) or _RETALIATION.search(value):
+        return True
+    if _PROTECTED_ATTRIBUTE_EVALUATION.search(value) and not _is_benign_harm_discussion(value):
         return True
     if protected_dehumanization and not _PROTECTIVE_NEGATION.search(value):
         return True

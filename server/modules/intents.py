@@ -38,6 +38,11 @@ UNIVERSITY_COURSES = "university_courses"
 GPA_PROJECTION = "gpa_projection"
 COURSE_REQUIREMENT_LOOKUP = "course_requirement_lookup"
 INSTRUCTOR_TEACHING_LOOKUP = "instructor_teaching_lookup"
+INSTRUCTOR_PROFILE_LOOKUP = "instructor_profile_lookup"
+COURSE_PREREQUISITE_LOOKUP = "course_prerequisite_lookup"
+COURSE_OFFERING_LOOKUP = "course_offering_lookup"
+SCHEDULE_CRN_LOOKUP = "schedule_crn_lookup"
+SCHEDULE_CONFLICT_LOOKUP = "schedule_conflict_lookup"
 
 # --- Intents that describe a handled request rather than a classified question ----------
 COURSE_HISTORY_UPDATE = "course_history_update"

@@ -474,6 +474,12 @@ DEFAULT_ACADEMIC_PROFILE = {
 }
 
 
+def _display_course_code(value: str) -> str:
+    raw = re.sub(r"[^A-Za-z0-9]", "", str(value or "")).upper()
+    match = re.fullmatch(r"([A-Z]{2,5})(\d{3,5}[A-Z]?)", raw)
+    return f"{match.group(1)} {match.group(2)}" if match else ""
+
+
 async def get_academic_profile(username: str) -> dict[str, Any]:
     """Return the student's academic profile (roadmap section 8). Never raises.
 
@@ -500,6 +506,43 @@ async def set_academic_profile(username: str, profile: dict[str, Any]) -> dict[s
         {"$set": {f"academic_profile.{k}": v for k, v in clean.items()}},
     )
     return await get_academic_profile(username)
+
+
+async def get_user_preferences(username: str) -> dict[str, Any]:
+    """Return persistent advising preferences, separate from transcript and generated schedules."""
+    user = await ensure_user(username)
+    stored = user.get("academic_preferences") or {}
+    excluded = []
+    for code in stored.get("excluded_courses") or []:
+        display = _display_course_code(str(code))
+        if display and display not in excluded:
+            excluded.append(display)
+    return {
+        "excluded_courses": excluded,
+        "preferred_topics": [
+            str(topic).strip()
+            for topic in stored.get("preferred_topics") or []
+            if str(topic).strip()
+        ],
+        "schedule_preferences": stored.get("schedule_preferences") or {},
+    }
+
+
+async def add_user_excluded_courses(username: str, course_codes: list[str] | tuple[str, ...] | set[str]) -> dict[str, Any]:
+    """Persist negative course preferences without mutating completed/enrolled history."""
+    clean_codes = [
+        display
+        for display in (_display_course_code(str(code)) for code in course_codes or [])
+        if display
+    ]
+    clean_codes = list(dict.fromkeys(clean_codes))
+    await ensure_user(username)
+    if clean_codes:
+        await users.update_one(
+            {"username": username.strip()},
+            {"$addToSet": {"academic_preferences.excluded_courses": {"$each": clean_codes}}},
+        )
+    return await get_user_preferences(username)
 
 
 def _empty_user_schedule() -> dict[str, Any]:

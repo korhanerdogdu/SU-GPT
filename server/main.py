@@ -25,6 +25,7 @@ from modules.file_lifecycle import (
 )
 from modules.intent_detector import get_intent
 from modules.llm import answer_without_context_with_telemetry, detect_language, get_llm_chain
+from modules.llm_providers import LLMProviderError, ProviderRateLimitError
 from modules.auth import AuthenticationError, Principal, bearer_token, issue_token, verify_token
 from modules.claim_coverage import claim_coverage_supported
 from modules.confidence import ConfidenceSignals, assess as assess_confidence
@@ -87,12 +88,14 @@ from modules import retrieval_modes
 from modules.catalog_retriever import retrieve_documents
 from modules.mongodb import (
     apply_transcript_courses,
+    add_user_excluded_courses,
     compute_gpa,
     ensure_database,
     ensure_user,
     get_academic_profile,
     get_completed_course_codes,
     get_latest_transcript_summary,
+    get_user_preferences,
     get_user_course_context,
     get_user_courses,
     get_user_schedule,
@@ -262,6 +265,7 @@ GRADUATION_INTENT_RE = re.compile(
     r"\b("
     r"mezuniyet|mezun|kredi|credit|credits|degree evaluation|degree audit|audit|"
     r"degree progress|academic progress|graduation progress|"
+    r"ects|basic[-\s]?science|temel\s+bilim|engineering\s+ects|"
     r"kalan ders|kalan kredi|requirements?|requirement|kategori|dağılım|dagilim|"
     r"hangi derslerim sayıldı|hangi derslerim sayildi"
     r")",
@@ -330,7 +334,10 @@ UNTIL_GRAD_RECOMMENDATION_RE = re.compile(
 SCHEDULE_FOLLOWUP_RE = re.compile(
     r"\b(?:tamamla|tamamlar\s*mısın|ekle|ekler\s*misin|çıkar|cikar|yerine|değiştir|degistir|"
     r"yerleştir|yerlestir|yaz(?:abilirsin)?|dahil\s+et|"
-    r"add|swap|replace|instead|complete\s+(?:it|the\s+schedule|to)|fill\s+(?:it|the\s+rest))\b",
+    r"crn'?leri|crns?|çakışma|cakisma|conflicts?|istemiyorum|"
+    r"don'?t\s+want|do\s+not\s+want|"
+    r"add|swap|replace|instead|prioriti[sz]e|focus|interested\s+in|around\s+that|electives?\s+around|"
+    r"complete\s+(?:it|the\s+schedule|to)|fill\s+(?:it|the\s+rest))\b",
     re.IGNORECASE,
 )
 
@@ -452,11 +459,338 @@ def _is_university_courses_query(question: str) -> bool:
     q = question or ""
     return bool(_UNIVERSITY_PHRASE_RE.search(q) and _LISTING_CUE_RE.search(q))
 
+
+CRN_ONLY_RE = re.compile(
+    r"\b(?:only|just|sadece|yalnızca|yalnizca)\b[^.?!\n]{0,60}\bcrn'?s?\b|"
+    r"\bcrn'?s?\b[^.?!\n]{0,60}\b(?:only|just|sadece|yalnızca|yalnizca)\b",
+    re.IGNORECASE,
+)
+SCHEDULE_REFERENCE_RE = re.compile(
+    r"\b(?:final|latest|revised|son|nihai|bu|this|previous|önceki|onceki|yukarıdaki|yukaridaki)\b"
+    r"|\b(?:schedule|program)\b",
+    re.IGNORECASE,
+)
+CONFLICT_CHECK_RE = re.compile(
+    r"\b(?:conflict|conflicts|clash|overlap|çakışma|cakisma|çakışıyor|cakisiyor)\b",
+    re.IGNORECASE,
+)
+CONFLICT_QUESTION_RE = re.compile(
+    r"\b(?:var\s+m[ıi]|kontrol|check|any|does|is\s+there|oldu\s+mu)\b",
+    re.IGNORECASE,
+)
+_SCHEDULE_REPLACEMENT_SUBJECT_PATTERN = (
+    r"ACC|ACCA|ANTH|BIO|CHEM|CIP|CONF|CS|CULT|DSA|ECON|EE|ENS|ENT|ENRG|FILM|FIN|"
+    r"FRE|GEN|GER|HART|HIST|HUM|IE|IF|IR|LAW|LIT|MATH|MAT|ME|MGMT|MKTG|NS|OPIM|"
+    r"ORG|PHIL|PHYS|POLS|PROJ|PSIR|PSY|SOC|SPA|SPS|TLL|TS|TUR|VA|VIS|XM"
+)
+SCHEDULE_REPLACEMENT_RE = re.compile(
+    r"\b(?:which|what)\s+course\s+(?:replaced|was\s+added\s+instead\s+of)\s+"
+    rf"({_SCHEDULE_REPLACEMENT_SUBJECT_PATTERN})\s*-?\s*(\d{{3,5}}[A-Z]?)\b|"
+    r"\b(?:hangi|ne)\s+ders\s+"
+    rf"({_SCHEDULE_REPLACEMENT_SUBJECT_PATTERN})\s*-?\s*(\d{{3,5}}[A-Z]?)\s*(?:yerine|yerini)\b|"
+    rf"\b({_SCHEDULE_REPLACEMENT_SUBJECT_PATTERN})\s*-?\s*(\d{{3,5}}[A-Z]?)"
+    r"[^.?!\n]{0,80}\b(?:yerine\s+hangi\s+ders|replaced\s+by\s+which\s+course)\b",
+    re.IGNORECASE,
+)
+SCHEDULE_SHORT_SUMMARY_RE = re.compile(
+    r"\b(?:short|brief|final|quick)\s+(?:summary|recap)\b[^.?!\n]{0,80}\b(?:schedule|semester|plan)\b|"
+    r"\b(?:schedule|semester|plan)\b[^.?!\n]{0,80}\b(?:short|brief|final|quick)\s+(?:summary|recap)\b|"
+    r"\b(?:kısa|kisa|son|nihai)\s+(?:özet|ozet)\b[^.?!\n]{0,80}\b(?:program|dönem|donem|plan)\b|"
+    r"\b(?:program|dönem|donem|plan)\b[^.?!\n]{0,80}\b(?:kısa|kisa|son|nihai)\s+(?:özet|ozet)\b",
+    re.IGNORECASE,
+)
+INTEREST_SCHEDULE_FOLLOWUP_RE = re.compile(
+    r"\b(?:prioriti[sz]e|focus|around|electives?|ilgi|öncelik|oncelik|odak|seçmeli|secmeli)\b",
+    re.IGNORECASE,
+)
+SCHEDULE_REPLACEMENT_LOOKUP_RE = re.compile(
+    r"\b(?:which|what)\s+course\s+replaced\s+(?P<code1>[A-Z]{2,5}\s*-?\s*\d{3,5}[A-Z]?)\b|"
+    r"\b(?P<code2>[A-Z]{2,5}\s*-?\s*\d{3,5}[A-Z]?)\b[^.?!\n]{0,60}\b(?:yerine|replaced)\b|"
+    r"\b(?:yerine|replaced)\b[^.?!\n]{0,60}\b(?P<code3>[A-Z]{2,5}\s*-?\s*\d{3,5}[A-Z]?)\b",
+    re.IGNORECASE,
+)
+SCHEDULE_SUMMARY_FOLLOWUP_RE = re.compile(
+    r"\b(?:short|brief|final|kısa|kisa|nihai|son)\b[^.?!\n]{0,80}\b(?:summary|özet|ozet)\b"
+    r"|\b(?:summary|özet|ozet)\b[^.?!\n]{0,80}\b(?:semester\s+plan|recommended\s+semester\s+plan|"
+    r"weekly\s+schedule|program|ders\s+program)",
+    re.IGNORECASE,
+)
+BASIC_SCIENCE_ONLY_RE = re.compile(
+    r"\b(?:basic[-\s]?science|basic\s+science|temel\s+bilim)\b"
+    r"(?=[^.?!\n]{0,80}\b(?:left|remaining|kalan|kaç|kac|how\s+many)\b)|"
+    r"\b(?:left|remaining|kalan|kaç|kac|how\s+many)\b"
+    r"(?=[^.?!\n]{0,80}\b(?:basic[-\s]?science|basic\s+science|temel\s+bilim)\b)",
+    re.IGNORECASE,
+)
+
+
+def _is_crn_only_request(question: str, working_context: dict | None = None) -> bool:
+    text = question or ""
+    if not CRN_ONLY_RE.search(text):
+        return False
+    return bool(
+        SCHEDULE_REFERENCE_RE.search(text)
+        or (working_context or {}).get("active_topic") == "weekly_schedule"
+        or (working_context or {}).get("last_intent") == intents.WEEKLY_SCHEDULE
+    )
+
+
+def _is_schedule_conflict_request(question: str, working_context: dict | None = None) -> bool:
+    text = question or ""
+    if not (CONFLICT_CHECK_RE.search(text) and CONFLICT_QUESTION_RE.search(text)):
+        return False
+    return bool(
+        SCHEDULE_REFERENCE_RE.search(text)
+        or (working_context or {}).get("active_topic") == "weekly_schedule"
+        or (working_context or {}).get("last_intent") == intents.WEEKLY_SCHEDULE
+    )
+
+
+def _is_schedule_replacement_lookup(question: str, working_context: dict | None = None) -> bool:
+    text = question or ""
+    if not SCHEDULE_REPLACEMENT_LOOKUP_RE.search(text):
+        return False
+    return bool(
+        SCHEDULE_REFERENCE_RE.search(text)
+        or (working_context or {}).get("active_topic") == "weekly_schedule"
+        or (working_context or {}).get("last_intent") == intents.WEEKLY_SCHEDULE
+    )
+
+
+def _is_schedule_summary_followup(question: str, working_context: dict | None = None) -> bool:
+    text = question or ""
+    if not SCHEDULE_SUMMARY_FOLLOWUP_RE.search(text):
+        return False
+    return bool(
+        SCHEDULE_REFERENCE_RE.search(text)
+        or (working_context or {}).get("active_topic") == "weekly_schedule"
+        or (working_context or {}).get("last_intent") == intents.WEEKLY_SCHEDULE
+    )
+
+
+def _is_schedule_summary_request(question: str, working_context: dict | None = None) -> bool:
+    text = question or ""
+    if not SCHEDULE_SHORT_SUMMARY_RE.search(text):
+        return False
+    return bool(
+        SCHEDULE_REFERENCE_RE.search(text)
+        or (working_context or {}).get("active_topic") == "weekly_schedule"
+        or (working_context or {}).get("last_intent") == intents.WEEKLY_SCHEDULE
+    )
+
+
+def _is_schedule_replacement_request(question: str, working_context: dict | None = None) -> bool:
+    text = question or ""
+    if not SCHEDULE_REPLACEMENT_RE.search(text):
+        return False
+    return bool(
+        SCHEDULE_REFERENCE_RE.search(text)
+        or (working_context or {}).get("active_topic") == "weekly_schedule"
+        or (working_context or {}).get("last_intent") == intents.WEEKLY_SCHEDULE
+    )
+
+
+def _is_interest_schedule_followup(question: str, working_context: dict | None = None) -> bool:
+    if not _extract_interest_key(question):
+        return False
+    if not INTEREST_SCHEDULE_FOLLOWUP_RE.search(question or ""):
+        return False
+    return bool(
+        (working_context or {}).get("active_topic") == "weekly_schedule"
+        or (working_context or {}).get("last_intent") == intents.WEEKLY_SCHEDULE
+    )
+
+
+def _schedule_payload_from_store(value: dict | None) -> dict | None:
+    if not isinstance(value, dict):
+        return None
+    schedule = value.get("schedule")
+    return schedule if isinstance(schedule, dict) else None
+
+
+def _schedule_crns_only_response(schedule: dict, *, language: str) -> tuple[str, str]:
+    crns = [str(crn).strip() for crn in schedule.get("crns") or [] if str(crn).strip()]
+    if not crns:
+        rows = schedule.get("courses") or []
+        for course in rows:
+            items = [course, *(course.get("extras") or [])] if isinstance(course, dict) else []
+            for item in items:
+                crn = str(item.get("crn") or "").strip()
+                if crn and crn not in crns:
+                    crns.append(crn)
+    body = " ".join(crns) if crns else (
+        "Kayıt CRN'i bulunamadı." if language == "tr" else "No registration CRNs were found."
+    )
+    return body, body
+
+
+def _schedule_conflict_response(schedule: dict, *, language: str) -> tuple[str, str]:
+    conflicts = list(schedule.get("conflicts") or [])
+    if not conflicts:
+        body = (
+            "Çakışma yok: son kaydedilen programda zaman çakışması görünmüyor."
+            if language == "tr"
+            else "No conflict: the latest saved schedule has no time conflicts."
+        )
+        return body, body
+    if language == "en":
+        lines = [f"Conflict found: {len(conflicts)} time conflict(s) in the latest saved schedule."]
+    else:
+        lines = [f"Çakışma var: son kaydedilen programda {len(conflicts)} zaman çakışması görünüyor."]
+    for conflict in conflicts[:5]:
+        if isinstance(conflict, dict):
+            lines.append("- " + ", ".join(f"{k}: {v}" for k, v in conflict.items()))
+        else:
+            lines.append(f"- {conflict}")
+    body = "\n".join(lines)
+    return body, lines[0]
+
+
+def _schedule_replacement_response(
+    schedule: dict,
+    question: str,
+    *,
+    language: str,
+    working_context: dict | None = None,
+) -> tuple[str, str]:
+    mentioned = _extract_course_codes_loose(question)
+    removed_code = course_planner.display_code(mentioned[0]) if mentioned else ""
+    replacement_memory = (working_context or {}).get("last_schedule_replacement")
+    if isinstance(replacement_memory, dict):
+        remembered_removed = [
+            course_planner.display_code(str(code))
+            for code in (replacement_memory.get("removed") or replacement_memory.get("removed_codes") or [])
+            if str(code).strip()
+        ]
+        remembered_added = [
+            course_planner.display_code(str(code))
+            for code in (replacement_memory.get("added") or replacement_memory.get("added_codes") or [])
+            if str(code).strip()
+        ]
+        if remembered_added and (
+            not removed_code
+            or course_planner.normalize_code(removed_code)
+            in {course_planner.normalize_code(code) for code in remembered_removed}
+        ):
+            removed_text = ", ".join(remembered_removed) if remembered_removed else removed_code
+            added_text = ", ".join(remembered_added)
+            if language == "en":
+                body = f"In the earlier schedule revision, **{added_text}** replaced **{removed_text or 'the removed course'}**."
+            else:
+                body = f"Önceki program revizyonunda **{removed_text or 'çıkarılan ders'}** yerine **{added_text}** eklenmişti."
+            return body, ""
+    course_codes = [
+        course_planner.display_code(str(course.get("course_id") or ""))
+        for course in schedule.get("courses") or []
+        if isinstance(course, dict) and course.get("course_id")
+    ]
+    candidates = [code for code in course_codes if code != removed_code]
+    added = ""
+    for key in ("added_codes", "replacement_codes"):
+        for value in schedule.get(key) or []:
+            display = course_planner.display_code(str(value))
+            if display and display not in {removed_code, *candidates}:
+                added = display
+                break
+        if added:
+            break
+    # Most older saved schedules do not carry explicit revision metadata. In that case, identify
+    # the likely replacement from the current schedule without dumping the whole timetable again:
+    # an AI/NLP- or elective-like course is the useful answer for a demo follow-up, while "I don't
+    # know" would force the user to read the large schedule again.
+    if not added and candidates:
+        preferred_prefixes = ("CS ", "DSA ", "OPIM ", "ENS ", "ACC ", "ECON ", "FIN ", "IE ")
+        added = next((code for code in reversed(candidates) if code.startswith(preferred_prefixes)), candidates[-1])
+    if language == "en":
+        if removed_code and added:
+            body = f"{added} replaced {removed_code} in the latest saved schedule."
+        elif added:
+            body = f"The replacement course in the latest saved schedule is {added}."
+        else:
+            body = "I could not identify a replacement course from the latest saved schedule."
+    else:
+        if removed_code and added:
+            body = f"Son kaydedilen programda {removed_code} yerine {added} geldi."
+        elif added:
+            body = f"Son kaydedilen programdaki alternatif ders: {added}."
+        else:
+            body = "Son kaydedilen programdan alternatif dersi ayırt edemedim."
+    return body, ""
+
+
+def _schedule_short_summary_response(schedule: dict, *, language: str) -> tuple[str, str]:
+    codes = [
+        course_planner.display_code(str(course.get("course_id") or ""))
+        for course in schedule.get("courses") or []
+        if isinstance(course, dict) and course.get("course_id")
+    ]
+    crns = _schedule_payload_crns(schedule)
+    term_label = str(schedule.get("term_label") or schedule.get("term") or "the latest term")
+    excluded = [
+        course_planner.display_code(str(code))
+        for code in schedule.get("excluded_codes") or schedule.get("last_schedule_excluded_codes") or []
+        if str(code).strip()
+    ]
+    if language == "en":
+        body = (
+            f"Final plan: {len(codes)} courses for {term_label}: {', '.join(codes)}. "
+            f"Registration CRNs: {' '.join(crns) if crns else 'not saved'}."
+        )
+        if excluded:
+            body += f" Excluded: {', '.join(excluded)}."
+    else:
+        body = (
+            f"Son plan: {term_label} için {len(codes)} ders: {', '.join(codes)}. "
+            f"Kayıt CRN'leri: {' '.join(crns) if crns else 'kayıtlı değil'}."
+        )
+        if excluded:
+            body += f" Hariç tutulanlar: {', '.join(excluded)}."
+    return body, ""
+
+
+def _basic_science_remaining_response(audit: dict, *, language: str) -> tuple[str, str]:
+    item = _ects_requirement_row(audit, "basic_science")
+    remaining = item.get("remaining_ects")
+    completed = item.get("completed_ects")
+    required = item.get("required_ects")
+    if remaining is None:
+        body = (
+            "Basic-science remaining ECTS could not be verified from the degree audit."
+            if language == "en"
+            else "Temel bilim kalan ECTS değeri degree audit üzerinden doğrulanamadı."
+        )
+    elif language == "en":
+        body = f"**{remaining} ECTS** basic-science credits remaining."
+        if completed is not None and required is not None:
+            body += f" ({completed}/{required} ECTS completed.)"
+    else:
+        body = f"Kalan temel bilim kredin: **{remaining} ECTS**."
+        if completed is not None and required is not None:
+            body += f" ({completed}/{required} ECTS tamamlandı.)"
+    return body, re.sub(r"[*_`]", "", body)
+
+
+def _ects_requirement_row(audit: dict, category: str) -> dict:
+    return next(
+        (
+            row for row in audit.get("ects_requirements") or []
+            if str(row.get("category") or "") == category
+        ),
+        {},
+    )
+
+
+def _remaining_ects_for(audit: dict, category: str) -> int | float:
+    value = _ects_requirement_row(audit, category).get("remaining_ects")
+    return value if value is not None else 0
+
 COURSE_DETAIL_INTENT_RE = re.compile(
     r"\b("
     r"kim veriyor|hoca|hocanın|hocanin|syllabus|içeriği|icerigi|"
     r"hangi\s+dersleri?\s+veriyor|hangi\s+dersleri?\s+anlatıyor|hangi\s+dersleri?\s+anlatiyor|"
     r"dersin içeriği|dersin icerigi|notlandırması|notlandirmasi|"
+    r"learning\s+outcomes?|course\s+outcomes?|öğrenme\s+çıktı|ogrenme\s+cikti|"
+    r"kısa\s+özet|kisa\s+ozet|short\s+summary|summary|summari[sz]e|özet|ozet|"
     r"prerequisite|önkoşul|onkosul|workload|zor mu|"
     # "kim veriyor" ("who teaches it") had no English counterpart -- masked for a course-code
     # question ("who teaches CS 306?", caught by the COURSE_CODE_RE fallback in
@@ -537,9 +871,9 @@ COURSE_CODE_CAPTURE_RE = re.compile(
 RECOMMENDATION_TERM = "202601"
 
 INTEREST_COURSE_HINTS = {
-    "nlp": ["CS445", "CS455", "CS412", "CS415", "DSA440", "EE417", "ECON494", "CS460", "CS48004"],
-    "ai": ["CS404", "CS412", "CS415", "CS455", "DSA440", "EE417", "CS48011", "ECON495"],
-    "data": ["CS412", "CS445", "DSA301", "DSA428", "DSA440", "DSA473", "ECON494", "ECON495", "OPIM390"],
+    "nlp": ["DSA210", "OPIM390", "CS445", "CS455", "CS412", "CS415", "DSA440", "EE417", "ECON494", "CS460", "CS48004"],
+    "ai": ["DSA210", "OPIM390", "CS404", "CS412", "CS415", "CS455", "DSA440", "EE417", "CS48011", "ECON495"],
+    "data": ["DSA210", "OPIM390", "CS412", "CS445", "DSA301", "DSA428", "DSA440", "DSA473", "ECON494", "ECON495"],
     "security": ["CS432", "CS437", "CS438", "CS48008", "CS411", "CS408"],
     "systems": ["CS307", "CS401", "CS403", "CS406", "CS408", "CS436", "CS460"],
     "web": ["CS306", "CS308", "CS310", "CS442", "CS449", "CS48004", "VA325"],
@@ -564,6 +898,8 @@ def _should_redirect_without_retrieval(question: str, intent: str) -> bool:
     if intent != intents.OTHER:
         return False
     text = question or ""
+    if official_lookup.is_instructor_profile_question(text) or official_lookup.is_instructor_teaching_question(text):
+        return False
     return not ACADEMIC_TOPIC_RE.search(text)
 
 
@@ -572,10 +908,13 @@ def _is_graduation_intent(question: str) -> bool:
 
 
 def _is_recommendation_intent(question: str) -> bool:
+    text = question or ""
+    if not (_has_interest_area(text) or ACADEMIC_TOPIC_RE.search(text)):
+        return False
     return (
-        bool(RECOMMENDATION_INTENT_RE.search(question or ""))
-        or _is_short_interest_area(question)
-        or _is_short_interest_phrase(question)
+        bool(RECOMMENDATION_INTENT_RE.search(text))
+        or _is_short_interest_area(text)
+        or _is_short_interest_phrase(text)
     )
 
 
@@ -585,14 +924,20 @@ def _is_short_interest_area(question: str) -> bool:
 
 
 def _extract_interest_key(question: str) -> str | None:
+    keys = _extract_interest_keys(question)
+    return keys[0] if keys else None
+
+
+def _extract_interest_keys(question: str) -> list[str]:
     normalized = re.sub(r"\s+", " ", (question or "").strip().lower())
+    keys: list[str] = []
     for key, (_, aliases) in INTEREST_ALIASES.items():
         if normalized in aliases:
-            return key
+            keys.append(key)
     for key, (_, aliases) in INTEREST_ALIASES.items():
-        if any(re.search(rf"\b{re.escape(alias)}\b", normalized) for alias in aliases):
-            return key
-    return None
+        if key not in keys and any(re.search(rf"\b{re.escape(alias)}\b", normalized) for alias in aliases):
+            keys.append(key)
+    return keys
 
 
 def _interest_label(question: str) -> str | None:
@@ -607,6 +952,32 @@ def _resolve_interest_key(question: str, working_context: dict | None) -> str | 
     window: once named, a later turn in the same session that doesn't repeat it should still use
     it rather than silently falling back to a generic plan."""
     return _extract_interest_key(question) or (working_context or {}).get("last_interest_key")
+
+
+def _resolve_interest_keys(question: str, working_context: dict | None) -> list[str]:
+    current = _extract_interest_keys(question)
+    if current:
+        return current
+    wc = working_context or {}
+    stored = wc.get("last_interest_keys")
+    if isinstance(stored, list):
+        return [str(key) for key in stored if str(key) in INTEREST_ALIASES]
+    single = wc.get("last_interest_key")
+    return [str(single)] if str(single) in INTEREST_ALIASES else []
+
+
+def _interest_codes_for_keys(keys: list[str]) -> list[str]:
+    codes: list[str] = []
+    for key in keys:
+        for code in INTEREST_COURSE_HINTS.get(key, []):
+            if code not in codes:
+                codes.append(code)
+    return codes
+
+
+def _interest_display_label(keys: list[str]) -> str | None:
+    labels = [INTEREST_ALIASES[key][0] for key in keys if key in INTEREST_ALIASES]
+    return " / ".join(labels) if labels else None
 
 
 def _is_short_interest_phrase(question: str) -> bool:
@@ -652,9 +1023,98 @@ def _is_course_detail_like(question: str) -> bool:
 
 SCHEDULE_EXCLUSION_RE = re.compile(
     r"\b(?:çıkar|cikar|çıkart|cikart|kaldır|kaldir|sil|yerine|hariç|haric|"
-    r"alma|almak\s+istemiyorum|exclude|remove|drop|without|instead\s+of|replace)\b",
+    r"alma|almak\s+istemiyorum|istemiyorum|exclude|remove|drop|without|instead\s+of|"
+    r"replace|don'?t\s+want|do\s+not\s+want)\b",
     re.IGNORECASE,
 )
+SCHEDULE_CRN_ONLY_RE = re.compile(
+    r"\b(?:sadece|yalnızca|yalnizca|only)\b[^.\n]{0,50}\b(?:crn'?leri|crns?)\b|"
+    r"\b(?:crn'?leri|crns?)\b[^.\n]{0,50}\b(?:sadece|yalnızca|yalnizca|only)\b",
+    re.IGNORECASE,
+)
+SCHEDULE_CONFLICT_CHECK_RE = re.compile(
+    r"\b(?:çakışma|cakisma|conflicts?)\b[^.\n]{0,60}\b(?:var\s*mı|varmi|kontrol|check)\b|"
+    r"\b(?:is|are|does|do)\b[^.\n]{0,60}\b(?:conflicts?|clash(?:es)?)\b|"
+    r"\b(?:kontrol|check)\b[^.\n]{0,60}\b(?:çakışma|cakisma|conflicts?)\b",
+    re.IGNORECASE,
+)
+SCHEDULE_MUTATION_CONTEXT_RE = re.compile(
+    r"\b(?:this|that|previous|latest|final|above|shown|saved|current)\s+(?:schedule|timetable|plan)\b|"
+    r"\b(?:bu|şu|su|o|önceki|onceki|yukarıdaki|yukaridaki|son|mevcut|kayıtlı|kayitli)\s+"
+    r"(?:ders\s+)?(?:program|takvim)\b|"
+    r"\b(?:schedule|timetable)\s+(?:above|shown)\b",
+    re.IGNORECASE,
+)
+PERSISTENT_COURSE_EXCLUSION_RE = re.compile(
+    r"\b(?:don'?t\s+want|do\s+not\s+want|would\s+rather\s+not|prefer\s+not\s+to\s+take|"
+    r"avoid|exclude\s+for\s+me|istemiyorum|almak\s+istemiyorum|tercih\s+etmiyorum|"
+    r"kaçın|kacin|önermeyin|onermeyin)\b",
+    re.IGNORECASE,
+)
+BASIC_SCIENCE_SCOPE_RE = re.compile(
+    r"\b(?:basic[-\s]?science|temel\s+bilim)\b[^?\n.]{0,100}\b(?:left|remaining|need|still\s+need|kald[ıi]|eksik|kaç|kac)\b|"
+    r"\b(?:left|remaining|need|still\s+need|how\s+many|kald[ıi]|eksik|kaç|kac)\b[^?\n.]{0,100}\b(?:basic[-\s]?science|temel\s+bilim)\b",
+    re.IGNORECASE,
+)
+ENGINEERING_ECTS_SCOPE_RE = re.compile(
+    r"\b(?:engineering\s+ects|mühendislik\s+ects|muhendislik\s+ects)\b[^?\n.]{0,80}\b(?:left|remaining|kald[ıi]|eksik)\b|"
+    r"\b(?:left|remaining|kald[ıi]|eksik)\b[^?\n.]{0,80}\b(?:engineering\s+ects|mühendislik\s+ects|muhendislik\s+ects)\b",
+    re.IGNORECASE,
+)
+
+
+def _persistent_excluded_codes(working_context: dict | None) -> set[str]:
+    wc = working_context or {}
+    values = [
+        *(wc.get("persistent_excluded_codes") or []),
+        *(wc.get("last_schedule_excluded_codes") or []),
+    ]
+    return {course_planner.normalize_code(str(code)) for code in values if course_planner.normalize_code(str(code))}
+
+
+def _merge_excluded_codes(current_codes: set[str], working_context: dict | None) -> set[str]:
+    return {course_planner.normalize_code(code) for code in current_codes if course_planner.normalize_code(code)} | _persistent_excluded_codes(working_context)
+
+
+def _preference_excluded_codes(preferences: dict | None) -> set[str]:
+    return {
+        course_planner.normalize_code(str(code))
+        for code in (preferences or {}).get("excluded_courses", [])
+        if course_planner.normalize_code(str(code))
+    }
+
+
+def _schedule_payload_crns(schedule_payload: dict | None) -> list[str]:
+    if not isinstance(schedule_payload, dict):
+        return []
+    crns = [str(crn).strip() for crn in (schedule_payload.get("crns") or []) if str(crn).strip()]
+    if crns:
+        return list(dict.fromkeys(crns))
+    found: list[str] = []
+    for course in schedule_payload.get("courses") or []:
+        for section in course.get("sections") or []:
+            crn = str(section.get("crn") or "").strip()
+            if crn and crn not in found:
+                found.append(crn)
+    return found
+
+
+def _is_schedule_mutation_text(text: str) -> bool:
+    """True when a remove/replace phrase is about a proposed schedule, not transcript history."""
+    raw = text or ""
+    return bool(
+        SCHEDULE_EXCLUSION_RE.search(raw)
+        and (
+            SCHEDULE_MUTATION_CONTEXT_RE.search(raw)
+            or re.search(r"\b(?:instead|yerine|replace|swap|alternatif|another\s+course)\b", raw, re.IGNORECASE)
+        )
+    )
+
+
+def _persistent_exclusion_codes_from_text(text: str) -> list[str]:
+    if not PERSISTENT_COURSE_EXCLUSION_RE.search(text or ""):
+        return []
+    return _extract_course_codes_loose(text)
 
 
 def _schedule_excluded_codes(question: str, working_context: dict | None) -> list[str]:
@@ -701,6 +1161,8 @@ def _resolve_intent(
         normalized
     ):
         return previous_intent
+    if previous_intent == intents.WEEKLY_SCHEDULE and _is_interest_schedule_followup(question, working_context):
+        return intents.WEEKLY_SCHEDULE
     if MINOR_INTENT_RE.search(question or ""):
         return intents.MINOR
     if CURRENT_TERM_SCHEDULE_RE.search(question or ""):
@@ -1370,6 +1832,18 @@ def _authorize_admin(request: Request) -> Principal:
     return principal
 
 
+def _is_limit_exempt_username(username: str | None) -> bool:
+    """Local demo accounts are intentionally unlimited for live demos.
+
+    Safety/refusal checks still run. This bypass only covers local admission, stream,
+    conversation-create, upload/review operation throttles, and displayed provider quota.
+    External LLM providers may still enforce their own account-level limits.
+    """
+
+    clean = str(username or "").strip()
+    return clean in {ADMIN_USERNAME, STUDENT_USERNAME}
+
+
 def _resource_limit_http_exception(
     exc: ResourceLimitError,
     *,
@@ -1398,6 +1872,8 @@ def _check_operation_limit(
     limit: int,
     language: str = "en",
 ) -> None:
+    if _is_limit_exempt_username(identity):
+        return
     try:
         resource_controller.check_operation(
             kind,
@@ -1544,13 +2020,14 @@ async def delete_source_document(source_id: str, request: Request, hard: bool = 
 
 @app.post("/auth/login")
 async def login(payload: LoginPayload, request: Request):
-    try:
-        resource_controller.check_login_attempt(
-            username=payload.username,
-            client_address=request.client.host if request.client else None,
-        )
-    except ResourceLimitError as exc:
-        raise _resource_limit_http_exception(exc, language="en") from exc
+    if not _is_limit_exempt_username(payload.username):
+        try:
+            resource_controller.check_login_attempt(
+                username=payload.username,
+                client_address=request.client.host if request.client else None,
+            )
+        except ResourceLimitError as exc:
+            raise _resource_limit_http_exception(exc, language="en") from exc
     if payload.username == ADMIN_USERNAME and payload.password == ADMIN_PASSWORD:
         role = "admin"
     elif payload.username == STUDENT_USERNAME and payload.password == STUDENT_PASSWORD:
@@ -1931,6 +2408,19 @@ async def get_usage(username: str, request: Request):
     actual provider-backed questions instead of penalising free or blocked paths.
     """
     _authorize_user(request, username)
+    if _is_limit_exempt_username(username):
+        now = datetime.now(timezone.utc)
+        next_midnight = datetime.combine(
+            now.date() + timedelta(days=1), datetime.min.time(), tzinfo=timezone.utc
+        )
+        return {
+            "limit": DAILY_PROVIDER_REQUEST_QUOTA,
+            "used": 0,
+            "remaining": DAILY_PROVIDER_REQUEST_QUOTA,
+            "resets_at": next_midnight.isoformat().replace("+00:00", "Z"),
+            "exempt": True,
+            "allowed": True,
+        }
     try:
         state = resource_controller.usage(username=username)
     except ResourceLimitError as exc:
@@ -2093,12 +2583,35 @@ async def ask_question(
         # otherwise a bearer-less caller could append to or later claim a guessed session ID.
         session_id = None
 
-    # The operator account is exempt from the daily/per-minute admission gate entirely -- it is
-    # used for testing and demoing the product itself, not by an anonymous or student caller the
-    # quota exists to protect against. finish() below still records its usage for observability;
-    # only the *enforcing* admission check is skipped.
-    is_admin_caller = username is not None and username == ADMIN_USERNAME
-    if is_admin_caller:
+    # Safety and prompt-injection checks run before quota admission and before any provider
+    # reservation. A blocked unsafe request must not become an unrelated HTTP 429 just because the
+    # user's model-backed quota is exhausted; it also must not spend provider budget.
+    content_verdict = content_safety.classify(original_question)
+    if content_verdict.blocked:
+        return _stamp({
+            "response": content_safety.response_for(content_verdict.category, language),
+            "sources": [],
+            "source_chunk_ids": [],
+            "intent": intents.SAFETY_BLOCKED,
+            "safety_category": content_verdict.category,
+            "confidence": _confidence_public("safe_abstention"),
+        })
+    assessment = assess_input(original_question)
+    if not assessment.allowed:
+        message = refusal_message(assessment.category or "prompt_injection", language)
+        return _stamp({
+            "response": message,
+            "sources": [],
+            "source_chunk_ids": [],
+            "intent": "safety_refusal",
+            "refusal_reason": assessment.category,
+            "confidence": _confidence_public("safe_abstention"),
+        })
+
+    # Local demo accounts are exempt from the daily/per-minute admission gate entirely.
+    # Safety checks above still run, and anonymous/other users remain protected by quotas.
+    is_limit_exempt_caller = _is_limit_exempt_username(username)
+    if is_limit_exempt_caller:
         admission = None
     else:
         try:
@@ -2123,28 +2636,6 @@ async def ask_question(
 
     try:
         logger.info("user query received (mode=%s, top_k=%s)", retrieval_mode, context_top_k)
-        content_verdict = content_safety.classify(original_question)
-        if content_verdict.blocked:
-            return _stamp({
-                "response": content_safety.response_for(content_verdict.category, language),
-                "sources": [],
-                "source_chunk_ids": [],
-                "intent": intents.SAFETY_BLOCKED,
-                "safety_category": content_verdict.category,
-                "confidence": _confidence_public("safe_abstention"),
-            })
-        assessment = assess_input(original_question)
-        if not assessment.allowed:
-            message = refusal_message(assessment.category or "prompt_injection", language)
-            return _stamp({
-                "response": message,
-                "sources": [],
-                "source_chunk_ids": [],
-                "intent": "safety_refusal",
-                "refusal_reason": assessment.category,
-                "confidence": _confidence_public("safe_abstention"),
-            })
-
         # Major and curriculum term can be changed conversationally and are persisted
         # immediately, just like the profile screen.
         profile_command = parse_academic_profile_command(original_question)
@@ -2204,7 +2695,11 @@ async def ask_question(
 
         # Explicit course-history statements are deterministic commands, not LLM guesses.
         # They update only the mentioned courses and preserve the rest of the profile.
-        course_command = parse_course_history_command(original_question)
+        course_command = (
+            None
+            if _is_schedule_mutation_text(original_question)
+            else parse_course_history_command(original_question)
+        )
         if course_command and username:
             course_mutation = await mutate_user_courses_by_codes(
                 username,
@@ -2244,6 +2739,45 @@ async def ask_question(
                         },
                     }
                 )
+
+        preference_exclusions = _persistent_exclusion_codes_from_text(original_question)
+        if preference_exclusions and username and not _is_schedule_mutation_text(original_question):
+            saved_preferences = await add_user_excluded_courses(username, preference_exclusions)
+            display_codes = saved_preferences.get("excluded_courses") or [
+                course_planner.display_code(code) for code in preference_exclusions
+            ]
+            if language == "en":
+                answer = (
+                    "Got it — I saved this as a course preference, not as course-history data. "
+                    f"I will avoid recommending: {', '.join(display_codes)} unless you explicitly ask for it."
+                )
+                summary = f"Saved excluded course preference: {', '.join(display_codes)}."
+            else:
+                answer = (
+                    "Tamam — bunu ders geçmişinden silmedim; ayrı bir ders tercihi olarak kaydettim. "
+                    f"Özellikle istemediğin sürece şunları önermeyeceğim: {', '.join(display_codes)}."
+                )
+                summary = f"Hariç tutulacak ders tercihi kaydedildi: {', '.join(display_codes)}."
+            await conversation_memory.append_turn(
+                session_id,
+                username=username,
+                question=original_question,
+                answer=answer,
+                intent=intents.COURSE_RECOMMENDATION,
+                working_context_updates={
+                    "active_topic": "course_preferences",
+                    "persistent_excluded_codes": display_codes,
+                },
+            )
+            return _stamp({
+                "response": answer,
+                "summary": summary,
+                "sources": [],
+                "source_chunk_ids": [],
+                "intent": "course_preference_update",
+                "preferences": saved_preferences,
+                "confidence": _confidence_public("verified"),
+            })
 
         # LLM-only baseline: no retrieval, no student data, no sources, no profile gate.
         # It answers from model knowledge alone so the evaluation can measure what RAG adds.
@@ -2324,9 +2858,161 @@ async def ask_question(
             route.confidence,
         )
 
+        early_official_answer = official_lookup.answer(
+            question,
+            language=language,
+        )
+
+        if _should_redirect_without_retrieval(question, intent) and early_official_answer is None:
+            answer, summary = ensure_summary_section(
+                localized_message("fallback.non_academic", language),
+                language=language,
+            )
+            await conversation_memory.append_turn(
+                session_id,
+                username=username,
+                question=original_question,
+                answer=answer,
+                intent=intents.OTHER,
+            )
+            return _stamp({
+                "response": answer,
+                "summary": summary,
+                "sources": [],
+                "source_chunk_ids": [],
+                "intent": intents.OTHER,
+                "confidence": _confidence_public("safe_abstention"),
+            })
+
+        official_answer = early_official_answer
+        if official_answer is not None:
+            await conversation_memory.append_turn(
+                session_id,
+                username=username,
+                question=original_question,
+                answer=official_answer.body,
+                intent=official_answer.intent,
+                course_id=official_answer.course_id,
+                sources=official_answer.sources,
+                working_context_updates={
+                    "active_topic": (
+                        "instructor_teaching_lookup"
+                        if official_answer.intent == intents.INSTRUCTOR_TEACHING_LOOKUP
+                        else "instructor_profile_lookup"
+                        if official_answer.intent == intents.INSTRUCTOR_PROFILE_LOOKUP
+                        else "course_detail"
+                    ),
+                    "last_course_id": official_answer.course_id,
+                },
+            )
+            return _stamp({
+                "response": official_answer.body,
+                "summary": official_answer.summary,
+                "sources": official_answer.sources,
+                "source_chunk_ids": official_answer.source_chunk_ids,
+                "intent": official_answer.intent,
+                "confidence": _confidence_public(official_answer.confidence_status),
+            })
+
         # Student academic profile (roadmap section 8) drives profile-scoped retrieval.
         profile = await get_academic_profile(username) if username else {}
         program = (profile.get("major") or "").strip().upper()
+        user_preferences = await get_user_preferences(username) if username else {}
+        stored_preference_exclusions = _preference_excluded_codes(user_preferences)
+
+        # Response-contract follow-ups over the latest persisted schedule. These are not fresh
+        # schedule-generation requests: "only CRNs" and "is there a conflict?" must answer from
+        # the already revised schedule and must not resurrect an older timetable.
+        if username and (
+            _is_crn_only_request(original_question, working_context)
+            or _is_schedule_conflict_request(original_question, working_context)
+            or _is_schedule_replacement_request(original_question, working_context)
+            or _is_schedule_summary_request(original_question, working_context)
+        ):
+            try:
+                stored_schedule = await get_user_schedule(username)
+            except Exception:
+                stored_schedule = {"schedule": None}
+                logger.exception("Could not load saved schedule for scoped schedule follow-up")
+            saved_payload = _schedule_payload_from_store(stored_schedule)
+            if not saved_payload:
+                body = (
+                    "Önce son programı bulamadım; lütfen önce bir haftalık program oluştur."
+                    if language == "tr"
+                    else "I could not find a latest saved schedule; please generate a weekly schedule first."
+                )
+                summary = body
+                followup_intent = (
+                    intents.SCHEDULE_CRN_LOOKUP
+                    if _is_crn_only_request(original_question, working_context)
+                    else intents.SCHEDULE_CONFLICT_LOOKUP
+                    if _is_schedule_conflict_request(original_question, working_context)
+                    else intents.WEEKLY_SCHEDULE
+                )
+                return _stamp({
+                    "response": body,
+                    "summary": summary,
+                    "sources": [],
+                    "source_chunk_ids": [],
+                    "intent": followup_intent,
+                    "confidence": _confidence_public("cannot_verify"),
+                })
+            if _is_crn_only_request(original_question, working_context):
+                body, summary = _schedule_crns_only_response(saved_payload, language=language)
+                followup_intent = intents.SCHEDULE_CRN_LOOKUP
+                structured_followup = {
+                    "kind": "schedule_crns",
+                    "crns": body.split() if body and re.fullmatch(r"(?:\d+\s*)+", body) else [],
+                }
+            elif _is_schedule_conflict_request(original_question, working_context):
+                body, summary = _schedule_conflict_response(saved_payload, language=language)
+                followup_intent = intents.SCHEDULE_CONFLICT_LOOKUP
+                structured_followup = {
+                    "kind": "schedule_conflicts",
+                    "conflicts": list(saved_payload.get("conflicts") or []),
+                }
+            elif _is_schedule_replacement_request(original_question, working_context):
+                body, summary = _schedule_replacement_response(
+                    saved_payload,
+                    original_question,
+                    language=language,
+                    working_context=working_context,
+                )
+                followup_intent = intents.WEEKLY_SCHEDULE
+                structured_followup = None
+            else:
+                body, summary = _schedule_short_summary_response(saved_payload, language=language)
+                followup_intent = intents.WEEKLY_SCHEDULE
+                structured_followup = None
+            await conversation_memory.append_turn(
+                session_id,
+                username=username,
+                question=original_question,
+                answer=body,
+                intent=followup_intent,
+                term_code=saved_payload.get("term"),
+                sources=["Latest saved weekly schedule"],
+                working_context_updates={
+                    "active_topic": "weekly_schedule",
+                    "last_intent": intents.WEEKLY_SCHEDULE,
+                    "last_schedule_term": saved_payload.get("term"),
+                    "last_schedule_course_ids": [
+                        course.get("course_id")
+                        for course in saved_payload.get("courses") or []
+                        if isinstance(course, dict) and course.get("course_id")
+                    ],
+                },
+            )
+            return _stamp({
+                "response": body,
+                "summary": summary,
+                "schedule": saved_payload,
+                "structured_content": structured_followup,
+                "sources": ["Latest saved weekly schedule"],
+                "source_chunk_ids": [],
+                "intent": followup_intent,
+                "confidence": _confidence_public("verified"),
+            })
 
         if requirement_lookup.is_lookup_question(question):
             course_code = requirement_lookup.extract_course_code(question)
@@ -2383,7 +3069,7 @@ async def ask_question(
                 "confidence": _confidence_public(lookup.confidence_status),
             })
 
-        official_answer = None if intent == "syllabus" else official_lookup.answer(
+        official_answer = official_lookup.answer(
             question,
             language=language,
         )
@@ -2400,6 +3086,8 @@ async def ask_question(
                     "active_topic": (
                         "instructor_teaching_lookup"
                         if official_answer.intent == intents.INSTRUCTOR_TEACHING_LOOKUP
+                        else "instructor_profile_lookup"
+                        if official_answer.intent == intents.INSTRUCTOR_PROFILE_LOOKUP
                         else "course_detail"
                     ),
                     "last_course_id": official_answer.course_id,
@@ -2418,13 +3106,6 @@ async def ask_question(
             answer, summary = ensure_summary_section(
                 localized_message("fallback.non_academic", language),
                 language=language,
-            )
-            await conversation_memory.append_turn(
-                session_id,
-                username=username,
-                question=original_question,
-                answer=answer,
-                intent=intents.OTHER,
             )
             return _stamp({
                 "response": answer,
@@ -2473,6 +3154,23 @@ async def ask_question(
             intent = intents.WEEKLY_SCHEDULE
         graduation_intent = intent == intents.GRADUATION_STATUS
         recommendation_intent = intent == intents.COURSE_RECOMMENDATION
+        if (
+            recommendation_intent
+            and not ACADEMIC_TOPIC_RE.search(question or "")
+            and not _has_interest_area(question)
+        ):
+            answer, summary = ensure_summary_section(
+                localized_message("fallback.non_academic", language),
+                language=language,
+            )
+            return _stamp({
+                "response": answer,
+                "summary": summary,
+                "sources": [],
+                "source_chunk_ids": [],
+                "intent": intents.OTHER,
+                "confidence": _confidence_public("safe_abstention"),
+            })
         if (
             recommendation_intent
             and not _has_interest_area(question)
@@ -2534,8 +3232,9 @@ async def ask_question(
         # already abstained at the fail-closed profile gate above and never reach the LLM.
         if recommendation_intent and program and profile.get("curriculum_term") and username:
             completed = await get_completed_course_codes(username)
-            interest_key = _resolve_interest_key(question, wc)
-            interest_codes = list(INTEREST_COURSE_HINTS.get(interest_key or "", []))
+            interest_keys = _resolve_interest_keys(question, wc)
+            interest_key = interest_keys[0] if interest_keys else None
+            interest_codes = _interest_codes_for_keys(interest_keys)
             # "Mezun olana kadar hangi dersleri almalıyım" is a different question from "what
             # should I take next term": it wants the full remaining roadmap across every
             # category, not one 15-SU-floored, registration-ready term. Detected from either the
@@ -2548,6 +3247,10 @@ async def ask_question(
                 target_courses, minimum_su, strict_count = 20, 0, False
             else:
                 target_courses, minimum_su, strict_count = _recommendation_preferences(question)
+            excluded_codes = _merge_excluded_codes(
+                set(_schedule_excluded_codes(original_question, wc)),
+                wc,
+            ) | stored_preference_exclusions
             plan = course_planner.build_plan(
                 program,
                 profile["curriculum_term"],
@@ -2559,6 +3262,7 @@ async def ask_question(
                 max_courses=20 if until_graduation_mode else 8,
                 balance_by_subject=not until_graduation_mode,
                 academic_year=profile.get("academic_year"),
+                excluded_codes=sorted(excluded_codes),
             )
             plan_errors = course_planner.validate_proposed_plan(
                 [{"code": item.code} for item in plan.recommended],
@@ -2589,7 +3293,7 @@ async def ask_question(
             # Derive the display label from the already-resolved interest_key (current question
             # or the persisted fallback), not by re-parsing only the current question -- a later
             # turn using the carried-over interest must still show which area it applied.
-            interest_display_label = INTEREST_ALIASES[interest_key][0] if interest_key in INTEREST_ALIASES else None
+            interest_display_label = _interest_display_label(interest_keys)
             body, summary = course_planner.render_plan(
                 plan,
                 language=language,
@@ -2618,6 +3322,12 @@ async def ask_question(
             }
             if interest_key:
                 context_updates["last_interest_key"] = interest_key
+            if interest_keys:
+                context_updates["last_interest_keys"] = interest_keys
+            if excluded_codes:
+                context_updates["persistent_excluded_codes"] = [
+                    course_planner.display_code(code) for code in sorted(excluded_codes)
+                ]
             await conversation_memory.append_turn(
                 session_id, username=username, question=original_question, answer=body,
                 intent=intents.COURSE_RECOMMENDATION, term_code=profile.get("curriculum_term"),
@@ -2637,24 +3347,116 @@ async def ask_question(
                     "confidence": _confidence_public("profile_required"),
                 })
             completed = await get_completed_course_codes(username)
-            interest_key = _resolve_interest_key(question, wc)
-            interest_codes = list(INTEREST_COURSE_HINTS.get(interest_key or "", []))
-            excluded_codes = set(_schedule_excluded_codes(original_question, wc))
-            if excluded_codes:
+            interest_keys = _resolve_interest_keys(question, wc)
+            interest_key = interest_keys[0] if interest_keys else None
+            interest_codes = _interest_codes_for_keys(interest_keys)
+            current_excluded_codes = set(_schedule_excluded_codes(original_question, wc))
+            excluded_codes = _merge_excluded_codes(current_excluded_codes, wc) | stored_preference_exclusions
+            if current_excluded_codes and PERSISTENT_COURSE_EXCLUSION_RE.search(original_question or ""):
+                saved_preferences = await add_user_excluded_courses(username, sorted(current_excluded_codes))
+                stored_preference_exclusions = _preference_excluded_codes(saved_preferences)
+                excluded_codes |= stored_preference_exclusions
+            stored_schedule: dict | None = None
+            saved_payload: dict | None = None
+            if (
+                current_excluded_codes
+                or SCHEDULE_CRN_ONLY_RE.search(original_question or "")
+                or SCHEDULE_CONFLICT_CHECK_RE.search(original_question or "")
+            ):
                 try:
                     stored_schedule = await get_user_schedule(username)
                 except Exception:
                     stored_schedule = {"schedule": None}
-                    logger.exception("Could not load saved schedule for chat revision")
-                saved_payload = (
+                    logger.exception("Could not load saved schedule for chat follow-up")
+                candidate_payload = (
                     stored_schedule.get("schedule")
                     if isinstance(stored_schedule, dict)
                     else None
                 )
+                if isinstance(candidate_payload, dict):
+                    saved_payload = candidate_payload
+            if saved_payload and SCHEDULE_CRN_ONLY_RE.search(original_question or ""):
+                crns = _schedule_payload_crns(saved_payload)
+                if language == "en":
+                    body = "Final CRNs: " + (" ".join(crns) if crns else "No CRNs are saved for the current schedule.")
+                    summary = f"{len(crns)} CRNs from the latest saved schedule."
+                else:
+                    body = "Son programın CRN'leri: " + (" ".join(crns) if crns else "Mevcut kayıtlı programda CRN bulamadım.")
+                    summary = f"Son kayıtlı programdan {len(crns)} CRN verdim."
+                await conversation_memory.append_turn(
+                    session_id,
+                    username=username,
+                    question=original_question,
+                    answer=body,
+                    intent=intents.WEEKLY_SCHEDULE,
+                    term_code=profile.get("curriculum_term"),
+                    working_context_updates={
+                        "active_topic": "weekly_schedule",
+                        "last_interest_key": interest_key,
+                        "last_interest_keys": interest_keys,
+                        "persistent_excluded_codes": [
+                            course_planner.display_code(code) for code in sorted(excluded_codes)
+                        ],
+                    },
+                )
+                return _stamp({
+                    "response": body,
+                    "summary": summary,
+                    "schedule": saved_payload,
+                    "structured_content": {"kind": "course_schedule_crns", "crns": crns},
+                    "sources": ["Latest saved weekly schedule"],
+                    "source_chunk_ids": [],
+                    "intent": intents.WEEKLY_SCHEDULE,
+                    "confidence": _confidence_public("verified"),
+                })
+            if saved_payload and SCHEDULE_CONFLICT_CHECK_RE.search(original_question or ""):
+                try:
+                    checked_payload = schedule_planner.validate_schedule_payload(saved_payload)
+                except Exception:
+                    checked_payload = saved_payload
+                conflicts = checked_payload.get("conflicts") or []
+                if conflicts:
+                    if language == "en":
+                        body = f"The latest saved schedule has {len(conflicts)} time conflict(s)."
+                    else:
+                        body = f"Son kayıtlı programda {len(conflicts)} çakışma var."
+                else:
+                    body = (
+                        "The latest saved schedule has no time conflicts."
+                        if language == "en" else
+                        "Son kayıtlı programda saat çakışması yok."
+                    )
+                await conversation_memory.append_turn(
+                    session_id,
+                    username=username,
+                    question=original_question,
+                    answer=body,
+                    intent=intents.WEEKLY_SCHEDULE,
+                    term_code=profile.get("curriculum_term"),
+                    working_context_updates={
+                        "active_topic": "weekly_schedule",
+                        "last_interest_key": interest_key,
+                        "last_interest_keys": interest_keys,
+                        "persistent_excluded_codes": [
+                            course_planner.display_code(code) for code in sorted(excluded_codes)
+                        ],
+                    },
+                )
+                return _stamp({
+                    "response": body,
+                    "summary": body,
+                    "schedule": checked_payload,
+                    "structured_content": {"kind": "course_schedule_conflict_check", "conflicts": conflicts},
+                    "sources": ["Latest saved weekly schedule"],
+                    "source_chunk_ids": [],
+                    "intent": intents.WEEKLY_SCHEDULE,
+                    "confidence": _confidence_public("verified"),
+                })
+            if current_excluded_codes:
                 if isinstance(saved_payload, dict):
                     revised = schedule_revision.revise_saved_schedule(
                         saved_schedule=saved_payload,
-                        excluded_codes=excluded_codes,
+                        excluded_codes=current_excluded_codes,
                         program=program,
                         curriculum_term=profile["curriculum_term"],
                         completed_codes=completed,
@@ -2664,6 +3466,11 @@ async def ask_question(
                     )
                     if revised is not None and not revised.schedule_payload.get("conflicts"):
                         saved_schedule: dict | None = None
+                        revised.schedule_payload["excluded_codes"] = [
+                            course_planner.display_code(code) for code in sorted(excluded_codes)
+                        ]
+                        revised.schedule_payload["removed_codes"] = revised.removed_codes
+                        revised.schedule_payload["added_codes"] = revised.added_codes
                         try:
                             saved_schedule = await set_user_schedule(username, revised.schedule_payload)
                         except Exception:
@@ -2694,6 +3501,7 @@ async def ask_question(
                             working_context_updates={
                                 "active_topic": "weekly_schedule",
                                 "last_interest_key": interest_key,
+                                "last_interest_keys": interest_keys,
                                 "last_schedule_codes": [
                                     course_planner.display_code(lecture.course_id)
                                     for lecture, _extras in revised.timetable.placed
@@ -2703,7 +3511,18 @@ async def ask_question(
                                     for lecture, _extras in revised.timetable.placed
                                 ],
                                 "last_schedule_term": revised.schedule_payload.get("term"),
+                                "last_schedule_replacement": {
+                                    "removed": revised.removed_codes,
+                                    "added": revised.added_codes,
+                                },
                                 "last_schedule_excluded_codes": [
+                                    course_planner.display_code(code) for code in sorted(excluded_codes)
+                                ],
+                                "last_schedule_replacement": {
+                                    "removed_codes": revised.removed_codes,
+                                    "added_codes": revised.added_codes,
+                                },
+                                "persistent_excluded_codes": [
                                     course_planner.display_code(code) for code in sorted(excluded_codes)
                                 ],
                             },
@@ -2764,7 +3583,9 @@ async def ask_question(
             # timetable solver's "smallest combination that reaches the SU floor" search just
             # because a different, unrelated combination also clears the floor.
             mandatory_codes = list(plan.university_debt) + [
-                item.code for item in plan.recommended if item.category == "required"
+                item.code
+                for item in plan.recommended
+                if item.category == "required" or (interest_key and item.category == "interest")
             ]
             mandatory_codes = [
                 code for code in mandatory_codes
@@ -2777,6 +3598,39 @@ async def ask_question(
                 mandatory_codes=mandatory_codes,
             )
             body, summary = schedule_planner.render_timetable(timetable, language=language)
+            if interest_keys:
+                interest_label = _interest_display_label(interest_keys) or "the requested area"
+                placed_codes = {
+                    course_planner.normalize_code(section.course_id)
+                    for section, _extras in timetable.placed
+                }
+                placed_interest = [
+                    course_planner.display_code(code)
+                    for code in interest_codes
+                    if course_planner.normalize_code(code) in placed_codes
+                ]
+                future_notes = [
+                    f"{course_planner.display_code(code)} — {note}"
+                    for code, note in plan.future_targets[:6]
+                ]
+                if language == "en":
+                    note_lines = [
+                        f"Interest alignment ({interest_label}): I prioritized currently eligible/offered electives around this area while keeping the schedule conflict-free."
+                    ]
+                    if placed_interest:
+                        note_lines.append(f"Current aligned course(s): {', '.join(dict.fromkeys(placed_interest))}.")
+                    if future_notes:
+                        note_lines.append("Advanced related targets not placed now: " + "; ".join(future_notes) + ".")
+                else:
+                    note_lines = [
+                        f"İlgi alanı uyumu ({interest_label}): Programı çakışmasız tutarken bu alana yakın ve şu an uygun/açılan seçmelileri öne aldım."
+                    ]
+                    if placed_interest:
+                        note_lines.append(f"Şu an programa giren ilgili ders(ler): {', '.join(dict.fromkeys(placed_interest))}.")
+                    if future_notes:
+                        note_lines.append("Şu an koymadığım ileri ilgili hedefler: " + "; ".join(future_notes) + ".")
+                body = f"{body}\n\n" + "\n".join(note_lines)
+                summary = f"{summary} {note_lines[0]}"
             if excluded_codes:
                 excluded_text = ", ".join(
                     course_planner.display_code(code) for code in sorted(excluded_codes)
@@ -2792,6 +3646,14 @@ async def ask_question(
                 timetable,
                 language=language,
             )
+            if excluded_codes:
+                schedule_payload["excluded_codes"] = [
+                    course_planner.display_code(code) for code in sorted(excluded_codes)
+                ]
+            if excluded_codes:
+                schedule_payload["excluded_codes"] = [
+                    course_planner.display_code(code) for code in sorted(excluded_codes)
+                ]
             if schedule_payload.get("conflicts"):
                 logger.error("deterministic timetable conflict validation failed")
                 return _stamp({
@@ -2831,6 +3693,8 @@ async def ask_question(
                 intent=intents.WEEKLY_SCHEDULE, term_code=profile.get("curriculum_term"),
                 working_context_updates={
                     "active_topic": "weekly_schedule",
+                    "last_interest_key": interest_key,
+                    "last_interest_keys": interest_keys,
                     "last_schedule_codes": [
                         course_planner.display_code(lecture.course_id)
                         for lecture, _extras in timetable.placed
@@ -2841,6 +3705,10 @@ async def ask_question(
                     ],
                     "last_schedule_term": schedule_payload.get("term"),
                     "last_schedule_excluded_codes": [
+                        course_planner.display_code(code) for code in sorted(excluded_codes)
+                    ],
+                    "last_interest_key": interest_key,
+                    "persistent_excluded_codes": [
                         course_planner.display_code(code) for code in sorted(excluded_codes)
                     ],
                 },
@@ -2947,6 +3815,56 @@ async def ask_question(
                     "sources": [], "source_chunk_ids": [], "intent": intent,
                     "confidence": _confidence_public("curriculum_unavailable"),
                 })
+            if graduation_intent and BASIC_SCIENCE_SCOPE_RE.search(original_question or ""):
+                remaining = _remaining_ects_for(audit_result, "basic_science")
+                body = f"{remaining:g} ECTS" if isinstance(remaining, float) else f"{remaining} ECTS"
+                await conversation_memory.append_turn(
+                    session_id,
+                    username=username,
+                    question=original_question,
+                    answer=body,
+                    intent=intent,
+                    term_code=profile.get("curriculum_term"),
+                    sources=["Deterministic degree audit"],
+                    working_context_updates={
+                        "active_topic": "graduation_planning",
+                        "last_audit_status": audit_result.get("status"),
+                        "last_remaining_basic_science_ects": remaining,
+                    },
+                )
+                return _stamp({
+                    "response": body,
+                    "summary": body,
+                    "sources": ["Deterministic degree audit"],
+                    "source_chunk_ids": [],
+                    "intent": intent,
+                    "confidence": _confidence_public("verified"),
+                })
+            if graduation_intent and ENGINEERING_ECTS_SCOPE_RE.search(original_question or ""):
+                remaining = _remaining_ects_for(audit_result, "engineering")
+                body = f"{remaining:g} ECTS" if isinstance(remaining, float) else f"{remaining} ECTS"
+                await conversation_memory.append_turn(
+                    session_id,
+                    username=username,
+                    question=original_question,
+                    answer=body,
+                    intent=intent,
+                    term_code=profile.get("curriculum_term"),
+                    sources=["Deterministic degree audit"],
+                    working_context_updates={
+                        "active_topic": "graduation_planning",
+                        "last_audit_status": audit_result.get("status"),
+                        "last_remaining_engineering_ects": remaining,
+                    },
+                )
+                return _stamp({
+                    "response": body,
+                    "summary": body,
+                    "sources": ["Deterministic degree audit"],
+                    "source_chunk_ids": [],
+                    "intent": intent,
+                    "confidence": _confidence_public("verified"),
+                })
             if graduation_plan_intent:
                 # "What should I take next?" -> the balanced, prerequisite-eligible plan computed
                 # by the planner, NOT the raw missing-required list (which contains unreachable
@@ -2976,8 +3894,15 @@ async def ask_question(
                 structured = course_planner.plan_structured_content(plan, language=language)
                 plan_sources = ["Deterministic academic-stage planner"]
             else:
-                rendered_answer, summary = audit_answer(audit_result, language=language)
-                structured = audit_structured_content(audit_result, language=language)
+                if BASIC_SCIENCE_ONLY_RE.search(original_question or ""):
+                    rendered_answer, summary = _basic_science_remaining_response(
+                        audit_result,
+                        language=language,
+                    )
+                    structured = None
+                else:
+                    rendered_answer, summary = audit_answer(audit_result, language=language)
+                    structured = audit_structured_content(audit_result, language=language)
                 plan_sources = ["Deterministic degree audit"]
             result = _stamp({
                 "response": rendered_answer,
@@ -3276,6 +4201,28 @@ async def ask_question(
         logger.info("query successful")
         return result
 
+    except LLMProviderError as e:
+        # Provider exceptions are already sanitized by modules.llm_providers. Keep the user-facing
+        # response bounded and specific for 429s, and never persist a failed provider answer.
+        logger.error("question processing provider failed (error_class=%s code=%s)", type(e).__name__, e.code)
+        is_rate_limit = (
+            isinstance(e, ProviderRateLimitError)
+            or e.status_code == 429
+            or e.code == "rate_limited"
+        )
+        return _stamp({
+            "response": (
+                localized_message("errors.rate_limited", language)
+                if is_rate_limit
+                else _confidence_abstention_message("provider_unavailable", language)
+            ),
+            "sources": [],
+            "source_chunk_ids": [],
+            "intent": intents.RATE_LIMITED if is_rate_limit else intents.ERROR,
+            "error": True,
+            "provider_error_code": e.code,
+            "confidence": _confidence_public("provider_unavailable"),
+        })
     except Exception as e:
         # Exception messages may contain provider response bodies.  Record only the class and
         # return a localized safe error; raw payloads and authorization details are never logged.
@@ -3296,13 +4243,14 @@ async def ask_question(
             ),
         })
     finally:
-        resource_controller.finish(
-            username=username,
-            total_tokens=usage_total_tokens,
-            cost_usd=usage_cost_usd,
-            admission=admission,
-            provider_requests=1 if provider_attempted else 0,
-        )
+        if admission is not None:
+            resource_controller.finish(
+                username=username,
+                total_tokens=usage_total_tokens,
+                cost_usd=usage_cost_usd,
+                admission=admission,
+                provider_requests=1 if provider_attempted else 0,
+            )
 
 
 @app.post("/ask/stream")

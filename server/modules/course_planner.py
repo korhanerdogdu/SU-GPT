@@ -139,7 +139,10 @@ PREREQS: dict[str, list[str]] = {
     "CS201": ["IF100"], "CS204": ["CS201"], "CS300": ["CS204"], "CS301": ["CS300", "MATH204"],
     "CS302": ["CS300"], "CS303": ["CS204"], "CS307": ["CS204"],
     "CS308": ["CS204"], "CS310": ["CS204"], "CS412": ["MATH201", "MATH203"],
+    "CS415": ["CS412"],
+    "CS455": ["CS445"],
     "DSA210": ["MATH203", "IF100"], "DSA201": ["IF100"],
+    "ECON494": ["ECON204"],
     "ENS208": ["IF100", "MATH102"], "IE311": ["ENS208", "MATH201"],
     "ENS203": ["MATH102"], "ENS204": ["MATH102", "NS101"], "ENS206": ["MATH102"],
     "ENS211": ["MATH101"], "ENS201": ["MATH102", "NS101"], "ENS202": ["NS102"],
@@ -172,7 +175,7 @@ ALTERNATIVE_PREREQUISITE_PATHS: dict[str, list[list[str]]] = {
 # even though they are common, broadly-accessible electives real students take (see
 # POPULAR_LIGHT_ELECTIVES above).
 KNOWN_NO_PREREQUISITES = frozenset(
-    UNIVERSITY_SEM1 + ["AL102", "PROJ201", "ACC201", "ECON201", "FIN301", "IE303"]
+    UNIVERSITY_SEM1 + ["AL102", "PROJ201", "ACC201", "ECON201", "FIN301", "IE303", "DSA440"]
 )
 
 # Courses whose official SUIS restriction is a minimum-completed-credit threshold rather than
@@ -500,8 +503,15 @@ def build_plan(program: str, term: str | None, completed_codes: list[str],
         if n in excluded or n in completed or resolve(n) is None:
             continue
         if course_level(n) > cap or not _prereqs_met(n, completed):
-            note = ("önce önkoşulları gerekli" if _missing_prereqs(n, completed)
-                    else "ileri seviye — önce önkoşulları tamamla")
+            missing = _missing_prereqs(n, completed)
+            unavailable = any("unavailable" in str(item).lower() for item in missing)
+            note = (
+                "resmi önkoşul verisi eksik"
+                if unavailable
+                else "önce " + ", ".join(display_code(code) for code in missing) + " gerekli"
+                if missing
+                else "ileri seviye — önce önkoşulları tamamla"
+            )
             result.future_targets.append((n, note))
             continue
         interest_items.append(PlanItem(n, "interest", *_REASON["interest"]))

@@ -95,9 +95,9 @@ function MessageBubble({
             )}
             {/* Closing summary, written directly with no "Kısa Özet" heading. Export buttons live
                 on each table (top-right), never appended to the message. */}
-            {!message.pending && message.summary && (
+            {!message.pending && visibleSummary(message.content, message.summary) && (
               <section className="mt-5 border-t border-border pt-4">
-                <p className="leading-relaxed text-muted-foreground">{message.summary}</p>
+                <p className="leading-relaxed text-muted-foreground">{visibleSummary(message.content, message.summary)}</p>
               </section>
             )}
           </>
@@ -132,6 +132,31 @@ function withoutEmbeddedSummary(content: string, summary?: string) {
   if (!summary) return content;
   const match = content.match(/\n#{1,6}\s*(?:Kısa Özet|Kisa Ozet|Short Summary)\s*\n/i);
   return match?.index == null ? content : content.slice(0, match.index).trimEnd();
+}
+
+function plainText(value: string) {
+  return value
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/^\s*(?:#{1,6}|[-*+]|\d+\.)\s*/gm, "")
+    .replace(/\[(.*?)\]\([^)]*\)/g, "$1")
+    .replace(/[`*_>#.,:;!?()[\]{}"“”'’—–-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function visibleSummary(content: string, summary?: string) {
+  if (!summary) return "";
+  const summaryText = plainText(summary);
+  if (!summaryText) return "";
+  const bodyText = plainText(withoutEmbeddedSummary(content, summary));
+  if (bodyText === summaryText || bodyText.includes(summaryText) || bodyText.endsWith(summaryText)) return "";
+  const summaryTokens = summaryText.split(/\s+/).filter((token) => token.length >= 3 || /^\d{3,5}$/.test(token));
+  if (summaryTokens.length < 4) return "";
+  const bodyTokens = new Set(bodyText.split(/\s+/));
+  const overlap = summaryTokens.filter((token) => bodyTokens.has(token)).length / summaryTokens.length;
+  if (overlap >= 0.78) return "";
+  return summary;
 }
 
 function StructuredSections({ content }: { content: StructuredContent }) {
