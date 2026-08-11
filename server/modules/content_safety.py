@@ -83,7 +83,7 @@ _HATE_SLUR_RE = re.compile(
     r"\b(?:"
     r"n[i1]gg[e3]r|n[i1]gg[a4]|k[i1]ke|sp[i1]c\b|ch[i1]nk|g[o0]ok|w[e3]tback|towelhead|"
     r"f[a4]gg?[o0]t|tr[a4]nny|retard(?:ed)?|"
-    r"çingene|cingene|kıro|kiro|gavur|zenci|"
+    r"çingene\w*|cingene\w*|kıro\w*|kiro\w*|gavur\w*|zenci\w*|"
     r"ermeni\s+döl\w*|ermeni\s+dol\w*|kürt\s+döl\w*|kurt\s+dol\w*"
     r")\b",
     re.IGNORECASE,
@@ -91,9 +91,10 @@ _HATE_SLUR_RE = re.compile(
 
 # "<group> should be killed / deported / are subhuman" — hate independent of any slur word.
 _HATE_TARGET = (
-    r"(?:kürtler|kurtler|ermeniler|araplar|suriyeliler|mülteciler|multeciler|yahudiler|"
-    r"aleviler|müslümanlar|muslumanlar|hristiyanlar|siyahlar|çingeneler|cingeneler|kadınlar|"
-    r"kadinlar|eşcinseller|escinseller|jews|muslims|arabs|kurds|refugees|blacks|immigrants|gays)"
+    r"(?:kürt\w*|kurt\w*|ermeni\w*|arap\w*|suriyeli\w*|mülteci\w*|multeci\w*|yahudi\w*|"
+    r"alevi\w*|müslüman\w*|musluman\w*|hristiyan\w*|siyah\w*|zenci\w*|çingene\w*|"
+    r"cingene\w*|kadın\w*|kadin\w*|eşcinsel\w*|escinsel\w*|jews|muslims|arabs|kurds|"
+    r"refugees|blacks|immigrants|gays)"
 )
 _HATE_PREDICATE = (
     r"(?:ölmeli|olmeli|ölsün|olsun|gebersin|defolsun|defolup\s+gitsin|yok\s+edilmeli|"
@@ -104,6 +105,19 @@ _HATE_PREDICATE = (
 _HATE_CONSTRUCTION_RE = re.compile(
     rf"\b{_HATE_TARGET}\b[^.?!]{{0,40}}\b{_HATE_PREDICATE}\b|"
     rf"\b{_HATE_PREDICATE}\b[^.?!]{{0,40}}\b{_HATE_TARGET}\b",
+    re.IGNORECASE,
+)
+_HATE_STEREOTYPE_RE = re.compile(
+    rf"\b{_HATE_TARGET}\b[^.?!]{{0,70}}\b(?:"
+    r"su[çc]a\s+mey[iı]+l+\w*|su[çc]\s+işle\w*|suc\s+isle\w*|su[çc]lu\w*|"
+    r"hırsız\w*|hirsiz\w*|terörist\w*|terorist\w*|tehlikeli\w*|şiddete\s+yatk[ıi]n\w*|"
+    r"criminal\w*|crime[-\s]?prone|violent|dangerous|terrorist\w*|thieves|thief"
+    r")\b|"
+    rf"\b(?:"
+    r"su[çc]a\s+mey[iı]+l+\w*|su[çc]\s+işle\w*|suc\s+isle\w*|su[çc]lu\w*|"
+    r"hırsız\w*|hirsiz\w*|terörist\w*|terorist\w*|tehlikeli\w*|şiddete\s+yatk[ıi]n\w*|"
+    r"criminal\w*|crime[-\s]?prone|violent|dangerous|terrorist\w*|thieves|thief"
+    rf")\b[^.?!]{{0,70}}\b{_HATE_TARGET}\b",
     re.IGNORECASE,
 )
 
@@ -158,6 +172,7 @@ _ORDERED_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     (SELF_HARM, _SELF_HARM_RE),
     (HATE, _HATE_SLUR_RE),
     (HATE, _HATE_CONSTRUCTION_RE),
+    (HATE, _HATE_STEREOTYPE_RE),
     (VIOLENCE, _VIOLENCE_RE),
     (SEXUAL_HARASSMENT, _SEXUAL_RE),
     (PROFANITY, _PROFANITY_RE),

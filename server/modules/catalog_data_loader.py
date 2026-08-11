@@ -239,6 +239,7 @@ def _iter_course_catalog_file(path: Path, root: Path) -> Iterator[Document]:
             line_no=line_no,
             text=text,
             metadata={
+                "data_role": _clean_value(row.get("data_role")) or "course_catalog",
                 "course_id": course_id,
                 "course_subject": _clean_value(row.get("subj_code")) or _subject_from_course_id(course_id),
                 "course_number": _clean_value(row.get("crse_numb")) or _number_from_course_id(course_id),
@@ -717,6 +718,7 @@ def _iter_schedule_file(path: Path, root: Path) -> Iterator[Document]:
             line_no=line_no,
             text=text,
             metadata={
+                "data_role": _clean_value(row.get("data_role")) or "course_schedule",
                 "term_code": term_code,
                 "term_name": _term_name(term_code),
                 "course_id": course_id,
@@ -757,6 +759,7 @@ def _iter_schedule_file(path: Path, root: Path) -> Iterator[Document]:
                 line_no=0,
                 text=text,
                 metadata={
+                    "data_role": "course_schedule",
                     "term_code": term_code,
                     "term_name": _term_name(term_code),
                     "course_id": course_id,

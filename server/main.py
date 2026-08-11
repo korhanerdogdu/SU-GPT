@@ -125,8 +125,10 @@ from modules import curriculum_registry
 from modules import degree_audit
 from modules import course_planner
 from modules import major_advisor
+from modules import official_lookup
 from modules import requirement_lookup
 from modules import schedule_planner
+from modules import schedule_revision
 from modules import conversation_memory
 from modules.retrieval_policy import build_metadata_filter, check_profile
 from modules.source_indexer import ensure_sources_indexed
@@ -453,6 +455,7 @@ def _is_university_courses_query(question: str) -> bool:
 COURSE_DETAIL_INTENT_RE = re.compile(
     r"\b("
     r"kim veriyor|hoca|hocanın|hocanin|syllabus|içeriği|icerigi|"
+    r"hangi\s+dersleri?\s+veriyor|hangi\s+dersleri?\s+anlatıyor|hangi\s+dersleri?\s+anlatiyor|"
     r"dersin içeriği|dersin icerigi|notlandırması|notlandirmasi|"
     r"prerequisite|önkoşul|onkosul|workload|zor mu|"
     # "kim veriyor" ("who teaches it") had no English counterpart -- masked for a course-code
@@ -526,6 +529,11 @@ COURSE_SUBJECT_PATTERN = (
     r"ORG|PHIL|PHYS|POLS|PROJ|PSIR|PSY|SOC|SPA|SPS|TLL|TS|TUR|VA|VIS|XM"
 )
 COURSE_CODE_RE = re.compile(rf"\b(?:{COURSE_SUBJECT_PATTERN})\s*\d{{3,5}}\b", re.IGNORECASE)
+COURSE_CODE_CAPTURE_RE = re.compile(
+    rf"\b({COURSE_SUBJECT_PATTERN})\s*-?\s*(\d{{3,5}}[A-Z]?)"
+    r"(?:['’]?(?:i|ı|u|ü|yi|yı|yu|yü|e|a|ye|ya|de|da|te|ta|den|dan|ten|tan|nin|nın|nun|nün|in|ın|un|ün))?\b",
+    re.IGNORECASE,
+)
 RECOMMENDATION_TERM = "202601"
 
 INTEREST_COURSE_HINTS = {
@@ -618,6 +626,16 @@ def _has_interest_area(question: str) -> bool:
     return _extract_interest_key(question) is not None
 
 
+def _extract_course_codes_loose(question: str) -> list[str]:
+    """Extract course codes even when Turkish case suffixes are attached (ENS 208'i)."""
+    codes: list[str] = []
+    for subject, number in COURSE_CODE_CAPTURE_RE.findall(question or ""):
+        code = course_planner.normalize_code(f"{subject}{number}")
+        if code and code not in codes:
+            codes.append(code)
+    return codes
+
+
 def _is_course_detail_like(question: str) -> bool:
     if COURSE_DETAIL_INTENT_RE.search(question or ""):
         return True
@@ -630,6 +648,24 @@ def _is_course_detail_like(question: str) -> bool:
         re.IGNORECASE,
     )
     return not graduation_terms.search(question or "")
+
+
+SCHEDULE_EXCLUSION_RE = re.compile(
+    r"\b(?:çıkar|cikar|çıkart|cikart|kaldır|kaldir|sil|yerine|hariç|haric|"
+    r"alma|almak\s+istemiyorum|exclude|remove|drop|without|instead\s+of|replace)\b",
+    re.IGNORECASE,
+)
+
+
+def _schedule_excluded_codes(question: str, working_context: dict | None) -> list[str]:
+    """Codes the user asked to remove from an existing/generated weekly schedule."""
+    previous_intent = (working_context or {}).get("last_intent")
+    active_topic = (working_context or {}).get("active_topic")
+    if previous_intent != intents.WEEKLY_SCHEDULE and active_topic != "weekly_schedule":
+        return []
+    if not SCHEDULE_EXCLUSION_RE.search(question or ""):
+        return []
+    return _extract_course_codes_loose(question)
 
 
 def _resolve_intent(
@@ -2347,6 +2383,37 @@ async def ask_question(
                 "confidence": _confidence_public(lookup.confidence_status),
             })
 
+        official_answer = None if intent == "syllabus" else official_lookup.answer(
+            question,
+            language=language,
+        )
+        if official_answer is not None:
+            await conversation_memory.append_turn(
+                session_id,
+                username=username,
+                question=original_question,
+                answer=official_answer.body,
+                intent=official_answer.intent,
+                course_id=official_answer.course_id,
+                sources=official_answer.sources,
+                working_context_updates={
+                    "active_topic": (
+                        "instructor_teaching_lookup"
+                        if official_answer.intent == intents.INSTRUCTOR_TEACHING_LOOKUP
+                        else "course_detail"
+                    ),
+                    "last_course_id": official_answer.course_id,
+                },
+            )
+            return _stamp({
+                "response": official_answer.body,
+                "summary": official_answer.summary,
+                "sources": official_answer.sources,
+                "source_chunk_ids": official_answer.source_chunk_ids,
+                "intent": official_answer.intent,
+                "confidence": _confidence_public(official_answer.confidence_status),
+            })
+
         if _should_redirect_without_retrieval(question, intent):
             answer, summary = ensure_summary_section(
                 localized_message("fallback.non_academic", language),
@@ -2570,8 +2637,78 @@ async def ask_question(
                     "confidence": _confidence_public("profile_required"),
                 })
             completed = await get_completed_course_codes(username)
-            interest_key = _extract_interest_key(question)
+            interest_key = _resolve_interest_key(question, wc)
             interest_codes = list(INTEREST_COURSE_HINTS.get(interest_key or "", []))
+            excluded_codes = set(_schedule_excluded_codes(original_question, wc))
+            if excluded_codes:
+                try:
+                    stored_schedule = await get_user_schedule(username)
+                except Exception:
+                    stored_schedule = {"schedule": None}
+                    logger.exception("Could not load saved schedule for chat revision")
+                saved_payload = (
+                    stored_schedule.get("schedule")
+                    if isinstance(stored_schedule, dict)
+                    else None
+                )
+                if isinstance(saved_payload, dict):
+                    revised = schedule_revision.revise_saved_schedule(
+                        saved_schedule=saved_payload,
+                        excluded_codes=excluded_codes,
+                        program=program,
+                        curriculum_term=profile["curriculum_term"],
+                        completed_codes=completed,
+                        interest_codes=interest_codes,
+                        academic_year=profile.get("academic_year"),
+                        language=language,
+                    )
+                    if revised is not None and not revised.schedule_payload.get("conflicts"):
+                        saved_schedule: dict | None = None
+                        try:
+                            saved_schedule = await set_user_schedule(username, revised.schedule_payload)
+                        except Exception:
+                            logger.exception("Could not persist revised weekly schedule")
+                        sched_result = _stamp({
+                            "response": revised.body,
+                            "summary": revised.summary,
+                            "schedule": revised.schedule_payload,
+                            "structured_content": schedule_planner.timetable_structured_content(
+                                revised.timetable, language=language
+                            ),
+                            "sources": revised.sources,
+                            "source_chunk_ids": [],
+                            "intent": intents.WEEKLY_SCHEDULE,
+                            "confidence": _confidence_public("verified"),
+                        })
+                        if saved_schedule:
+                            sched_result["schedule_revision"] = saved_schedule["revision"]
+                            sched_result["schedule_updated_at"] = saved_schedule["updated_at"]
+                        await conversation_memory.append_turn(
+                            session_id,
+                            username=username,
+                            question=original_question,
+                            answer=revised.body,
+                            intent=intents.WEEKLY_SCHEDULE,
+                            term_code=profile.get("curriculum_term"),
+                            sources=revised.sources,
+                            working_context_updates={
+                                "active_topic": "weekly_schedule",
+                                "last_interest_key": interest_key,
+                                "last_schedule_codes": [
+                                    course_planner.display_code(lecture.course_id)
+                                    for lecture, _extras in revised.timetable.placed
+                                ],
+                                "last_schedule_course_ids": [
+                                    course_planner.display_code(lecture.course_id)
+                                    for lecture, _extras in revised.timetable.placed
+                                ],
+                                "last_schedule_term": revised.schedule_payload.get("term"),
+                                "last_schedule_excluded_codes": [
+                                    course_planner.display_code(code) for code in sorted(excluded_codes)
+                                ],
+                            },
+                        )
+                        return sched_result
             target_courses, minimum_su, strict_count = _recommendation_preferences(question)
             # Build a bounded candidate pool, then let the timetable solver choose the smallest
             # conflict-free subset that still satisfies the requested 15/18-SU load. This avoids
@@ -2592,9 +2729,14 @@ async def ask_question(
                 max_courses=20,
                 balance_by_subject=False,
                 academic_year=profile.get("academic_year"),
+                excluded_codes=sorted(excluded_codes),
             )
+            scheduled_candidates = [
+                item for item in plan.recommended
+                if course_planner.normalize_code(item.code) not in excluded_codes
+            ]
             plan_errors = course_planner.validate_proposed_plan(
-                [{"code": item.code} for item in plan.recommended],
+                [{"code": item.code} for item in scheduled_candidates],
                 completed_codes=completed,
                 stage=plan.stage,
                 # This validates the raw, deliberately-wide candidate *pool* the conflict solver
@@ -2624,13 +2766,28 @@ async def ask_question(
             mandatory_codes = list(plan.university_debt) + [
                 item.code for item in plan.recommended if item.category == "required"
             ]
+            mandatory_codes = [
+                code for code in mandatory_codes
+                if course_planner.normalize_code(code) not in excluded_codes
+            ]
             timetable = schedule_planner.build_timetable_for_load(
-                [i.code for i in plan.recommended],
+                [i.code for i in scheduled_candidates],
                 target_courses=target_courses,
                 minimum_su_credits=minimum_su,
                 mandatory_codes=mandatory_codes,
             )
             body, summary = schedule_planner.render_timetable(timetable, language=language)
+            if excluded_codes:
+                excluded_text = ", ".join(
+                    course_planner.display_code(code) for code in sorted(excluded_codes)
+                )
+                note = (
+                    f"İsteğin üzerine program dışı bıraktığım ders(ler): {excluded_text}."
+                    if language == "tr" else
+                    f"Excluded from the rebuilt schedule as requested: {excluded_text}."
+                )
+                body = f"{body}\n\n{note}"
+                summary = f"{summary} {note}"
             schedule_payload = schedule_planner.timetable_payload(
                 timetable,
                 language=language,
@@ -2672,7 +2829,21 @@ async def ask_question(
             await conversation_memory.append_turn(
                 session_id, username=username, question=original_question, answer=body,
                 intent=intents.WEEKLY_SCHEDULE, term_code=profile.get("curriculum_term"),
-                working_context_updates={"active_topic": "weekly_schedule"},
+                working_context_updates={
+                    "active_topic": "weekly_schedule",
+                    "last_schedule_codes": [
+                        course_planner.display_code(lecture.course_id)
+                        for lecture, _extras in timetable.placed
+                    ],
+                    "last_schedule_course_ids": [
+                        course_planner.display_code(lecture.course_id)
+                        for lecture, _extras in timetable.placed
+                    ],
+                    "last_schedule_term": schedule_payload.get("term"),
+                    "last_schedule_excluded_codes": [
+                        course_planner.display_code(code) for code in sorted(excluded_codes)
+                    ],
+                },
             )
             return sched_result
 

@@ -72,6 +72,7 @@ _INTENT_POLICIES = {
     "schedule_planning": IntentPolicy(True, True, True, True),
     intents.WEEKLY_SCHEDULE: IntentPolicy(True, True, True, True),
     intents.COURSE_REQUIREMENT_LOOKUP: IntentPolicy(True, True, True, True),
+    intents.INSTRUCTOR_TEACHING_LOOKUP: IntentPolicy(True, False, False, True),
     "profile_dependent": IntentPolicy(True, True, False, True),
     "security_sensitive": IntentPolicy(False),
     "llm_only": IntentPolicy(False),

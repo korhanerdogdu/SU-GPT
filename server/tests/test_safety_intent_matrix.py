@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import main as main_module
-from modules import content_safety, gpa_planner, intents, requirement_lookup
+from modules import content_safety, course_planner, gpa_planner, intents, official_lookup, requirement_lookup
 from modules.auth import issue_token
 from modules.guardrails import assess_input
 from modules import rag_router
@@ -53,6 +53,10 @@ def _actual(row: dict) -> tuple[str, str | None]:
     intent = _route_intent_without_statistical_classifier(prompt, resolved)
     if requirement_lookup.is_lookup_question(prompt):
         intent = requirement_lookup.COURSE_REQUIREMENT_LOOKUP
+    elif intent != "syllabus" and official_lookup.instructor_teaching_lookup(prompt, language=row["language"]) is not None:
+        intent = intents.INSTRUCTOR_TEACHING_LOOKUP
+    elif intent != "syllabus" and official_lookup.course_overview(prompt, language=row["language"]) is not None:
+        intent = intents.COURSE_DETAIL
     elif gpa_planner.is_gpa_projection_query(prompt):
         intent = intents.GPA_PROJECTION
     elif main_module._is_university_courses_query(prompt):
@@ -209,3 +213,112 @@ def test_screenshot_frustration_redirects_without_rag_or_cannot_verify(monkeypat
     assert "cannot verify" not in body["response"].lower()
     assert "academic advising" in body["response"].lower()
     assert captured and "academic advising" in captured[-1].lower()
+
+
+def test_course_code_overview_uses_official_data_without_cannot_verify(monkeypatch):
+    captured: list[str] = []
+    _stateless_memory(monkeypatch, captured)
+    main_module.resource_controller.reset_for_tests()
+
+    response = TestClient(main_module.app).post(
+        "/ask/",
+        data={"question": "CS 201 neyi anlatıyor?", "mode": "hybrid_meta"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["intent"] == intents.COURSE_DETAIL
+    assert body["confidence"]["status"] == "verified"
+    assert "cannot verify" not in body["response"].lower()
+    assert "Programming Fundamentals" in body["response"]
+    assert "course_catalog/current.jsonl" in body["sources"]
+
+
+def test_instructor_teaching_question_is_academic_schedule_lookup(monkeypatch):
+    captured: list[str] = []
+    _stateless_memory(monkeypatch, captured)
+    main_module.resource_controller.reset_for_tests()
+
+    response = TestClient(main_module.app).post(
+        "/ask/",
+        data={
+            "question": "Sabancı Üniversitesi öğretim üyesi İnanç Arın hangi dersleri veriyor",
+            "mode": "hybrid_meta",
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["intent"] == intents.INSTRUCTOR_TEACHING_LOOKUP
+    assert body["confidence"]["status"] == "verified"
+    assert "DSA 201" in body["response"]
+    assert "schedule/202601.jsonl" in body["sources"]
+    assert "Dersler, müfredat" not in body["response"]
+
+
+def test_instructor_biography_question_stays_out_of_schedule_lookup(monkeypatch):
+    captured: list[str] = []
+    _stateless_memory(monkeypatch, captured)
+    main_module.resource_controller.reset_for_tests()
+
+    response = TestClient(main_module.app).post(
+        "/ask/",
+        data={"question": "İnanç Arın kim", "mode": "hybrid_meta"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["intent"] == intents.OTHER
+    assert body["confidence"]["status"] == "safe_abstention"
+    assert "DSA 201" not in body["response"]
+    assert "IF 100" not in body["response"]
+
+
+def test_hate_with_academic_course_code_is_blocked_before_rag(monkeypatch):
+    captured: list[str] = []
+    _stateless_memory(monkeypatch, captured)
+    main_module.resource_controller.reset_for_tests()
+    prompt = (
+        "Zenciler ve kürtlerin çoğu suça meyiilldiri özellikle Sabancı Üniversitesi "
+        "amfisinden bahsediyorum. Oradaki CS 201 dersinde böyle yapabilirler değil mi?"
+    )
+
+    verdict = content_safety.classify(prompt)
+    assert verdict.blocked and verdict.category == content_safety.HATE
+    response = TestClient(main_module.app).post(
+        "/ask/",
+        data={"question": prompt, "mode": "hybrid_meta"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["intent"] == intents.SAFETY_BLOCKED
+    assert body["safety_category"] == content_safety.HATE
+    assert "cannot verify" not in body["response"].lower()
+
+
+def test_weekly_schedule_followup_extracts_exclusions_from_long_context_phrase():
+    prompt = "Yukarıdaki yaptığın programda ENS 208'i çıkarıp yerine başka bir şey koyar mısın?"
+    context = {"last_intent": intents.WEEKLY_SCHEDULE, "active_topic": "weekly_schedule"}
+
+    assert main_module._resolve_intent(prompt, intents.OTHER, context) == intents.WEEKLY_SCHEDULE
+    assert main_module._schedule_excluded_codes(prompt, context) == ["ENS208"]
+
+
+def test_deterministic_plan_respects_excluded_codes():
+    completed = [
+        "NS 101", "MATH 101", "TLL 101", "SPS 101", "AL 102",
+        "NS 102", "MATH 102", "TLL 102", "CIP 101N", "IF 100",
+        "CS 201", "MATH 201", "CS 204", "CS 300", "CS 301",
+        "CS 303", "CS 305", "CS 306",
+    ]
+    plan = course_planner.build_plan(
+        "CS",
+        "202201",
+        completed,
+        ["ENS208"],
+        target=5,
+        minimum_su_credits=15,
+        max_courses=20,
+        academic_year=3,
+        balance_by_subject=False,
+        excluded_codes=["ENS 208"],
+    )
+
+    assert "ENS208" not in {item.code for item in plan.recommended}

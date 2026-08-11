@@ -38,7 +38,13 @@ _POLICIES: dict[str, RetrievalPolicy] = {
         scope_program=True, scope_curriculum_term=True,
     ),
     intents.COURSE_DETAIL: RetrievalPolicy(
-        intents.COURSE_DETAIL, ("curriculum_requirement", "suggested_program"),
+        intents.COURSE_DETAIL, (
+            "course_catalog",
+            "course_schedule",
+            "course_syllabus",
+            "curriculum_requirement",
+            "suggested_program",
+        ),
     ),
     "syllabus": RetrievalPolicy("syllabus", ("course_syllabus",)),
     intents.STUDY_PLAN: RetrievalPolicy(

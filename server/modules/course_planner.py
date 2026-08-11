@@ -442,7 +442,8 @@ def build_plan(program: str, term: str | None, completed_codes: list[str],
                interest_codes: list[str] | None = None, target: int = 5,
                minimum_su_credits: int = 15, exact_course_count: bool = False,
                max_courses: int = 8, academic_year: int | None = None,
-               balance_by_subject: bool = True) -> PlanResult:
+               balance_by_subject: bool = True,
+               excluded_codes: list[str] | None = None) -> PlanResult:
     """The balanced, prerequisite-checked next-semester plan (deterministic).
 
     ``target`` is a soft course-count target unless the student explicitly supplied a hard
@@ -453,8 +454,14 @@ def build_plan(program: str, term: str | None, completed_codes: list[str],
     single term (three MATH courses in one term is an unrealistic schedule), but wrong for a
     full until-graduation roadmap, where most of what is left is legitimately in the student's
     own major prefix. Callers building a multi-term roadmap should pass ``False``.
+
+    ``excluded_codes`` is a user-directed negative constraint for schedule/recommendation
+    follow-ups ("remove ENS 208 and replace it"). Excluded courses are not treated as completed,
+    so they cannot accidentally satisfy prerequisites or choice groups; they are simply removed
+    from every candidate stream before selection.
     """
     program = (program or "").strip().upper()
+    excluded = {normalize_code(c) for c in (excluded_codes or []) if normalize_code(c)}
     a = analyze(program, completed_codes, term, academic_year)
     completed = a.completed
     cap = _STAGE_LEVEL_CAP.get(a.stage, 300)
@@ -462,8 +469,11 @@ def build_plan(program: str, term: str | None, completed_codes: list[str],
 
     result = PlanResult(
         program=program, term=term, stage=a.stage, completed=completed,
-        university_debt=[c for c in (a.missing_university_sem1 + a.missing_university_sem2)],
-        blocked_required=a.blocked_foundations,
+        university_debt=[
+            c for c in (a.missing_university_sem1 + a.missing_university_sem2)
+            if c not in excluded
+        ],
+        blocked_required=[item for item in a.blocked_foundations if item[0] not in excluded],
         has_official_data=model is not None,
         minimum_su_credits=max(0, int(minimum_su_credits)),
         requested_course_count=max(1, int(target)),
@@ -481,13 +491,13 @@ def build_plan(program: str, term: str | None, completed_codes: list[str],
                 result.blocked_required.append((code, missing))
 
     # 2) still-missing required foundations that are takeable now (already choice-deduped)
-    required_items = list(a.eligible_foundations)
+    required_items = [item for item in a.eligible_foundations if item.code not in excluded]
 
     # 3) interest-aligned electives that are takeable at this level
     interest_items: list[PlanItem] = []
     for code in (interest_codes or []):
         n = normalize_code(code)
-        if n in completed or resolve(n) is None:
+        if n in excluded or n in completed or resolve(n) is None:
             continue
         if course_level(n) > cap or not _prereqs_met(n, completed):
             note = ("önce önkoşulları gerekli" if _missing_prereqs(n, completed)
@@ -499,9 +509,11 @@ def build_plan(program: str, term: str | None, completed_codes: list[str],
     # 4) light University-category fillers (PROJ 201 / SPS 303 / a HUM) to balance difficulty
     filler_items: list[PlanItem] = []
     for code in a.missing_university_later:
+        if normalize_code(code) in excluded:
+            continue
         if code == "HUM2XX":
             hum = next((h for h in HUM_MAJOR_WORKS if h not in completed and resolve(h)), None)
-            if hum and _prereqs_met(hum, completed):
+            if hum and hum not in excluded and _prereqs_met(hum, completed):
                 filler_items.append(PlanItem(hum, "university", *_REASON["university"]))
             continue
         if not resolve(code):
@@ -540,6 +552,7 @@ def build_plan(program: str, term: str | None, completed_codes: list[str],
             if (
                 not code
                 or code == "PHYS113"
+                or code in excluded
                 or code in completed
                 or resolve(code) is None
                 or _su(code, 0) <= 0
@@ -571,7 +584,13 @@ def build_plan(program: str, term: str | None, completed_codes: list[str],
         return len(selected) >= target and sum(item.su for item in selected) >= minimum_su_credits
 
     def try_add(item: PlanItem, cap_subject: bool = True) -> bool:
-        if len(selected) >= hard_limit or target_reached() or item.code in seen or item.code in completed:
+        if (
+            len(selected) >= hard_limit
+            or target_reached()
+            or item.code in seen
+            or item.code in completed
+            or item.code in excluded
+        ):
             return False
         subj = subject(item.code)
         if cap_subject and balance_by_subject and subject_count.get(subj, 0) >= 2:
@@ -599,7 +618,7 @@ def build_plan(program: str, term: str | None, completed_codes: list[str],
 
     # required foundations that were takeable but dropped only to keep the term balanced
     result.deferred_required = [
-        it.code for it in required_items if it.code not in seen
+        it.code for it in required_items if it.code not in seen and it.code not in excluded
     ]
     result.recommended = selected
     result.credit_shortfall = max(0, minimum_su_credits - sum(item.su for item in selected))
