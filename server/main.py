@@ -1833,7 +1833,12 @@ def _authorize_admin(request: Request) -> Principal:
 
 
 def _is_limit_exempt_username(username: str | None) -> bool:
-    """Local demo accounts are intentionally unlimited for live demos.
+    """Only the operator account is unlimited; every student account carries the daily quota.
+
+    The student demo account used to be exempt alongside the admin, which meant the quota was
+    never enforced for the one role it exists to protect and `UsageMeter` — which renders
+    nothing when `exempt` is true — was permanently invisible. Keeping the admin exempt leaves
+    an operator escape hatch for warm-up and diagnostics without reopening that hole.
 
     Safety/refusal checks still run. This bypass only covers local admission, stream,
     conversation-create, upload/review operation throttles, and displayed provider quota.
@@ -1841,7 +1846,7 @@ def _is_limit_exempt_username(username: str | None) -> bool:
     """
 
     clean = str(username or "").strip()
-    return clean in {ADMIN_USERNAME, STUDENT_USERNAME}
+    return clean == ADMIN_USERNAME
 
 
 def _resource_limit_http_exception(
@@ -2401,11 +2406,14 @@ async def get_profile(username: str, request: Request):
 
 @app.get("/users/{username}/usage")
 async def get_usage(username: str, request: Request):
-    """Expose the privacy-preserving provider quota used by the chat header.
+    """Expose the privacy-preserving daily question allowance used by the chat header.
 
-    The underlying controller stores only versioned HMAC identifiers. Deterministic answers and
-    refused requests reconcile their reservation back to zero, so the displayed number measures
-    actual provider-backed questions instead of penalising free or blocked paths.
+    The underlying controller stores only versioned HMAC identifiers. The count measures answered
+    questions, including the deterministic ones, because that is what a student experiences as
+    "asking something" and a meter that ignored them sat at zero through most of a session.
+    Refused requests still cost nothing: content-safety and guardrail blocks return before the
+    reservation is taken, so abuse can never consume a student's allowance. Token and cost
+    reconciliation is unchanged, so a deterministic answer settles at zero tokens and zero spend.
     """
     _authorize_user(request, username)
     if _is_limit_exempt_username(username):
@@ -4249,8 +4257,38 @@ async def ask_question(
                 total_tokens=usage_total_tokens,
                 cost_usd=usage_cost_usd,
                 admission=admission,
-                provider_requests=1 if provider_attempted else 0,
+                # The daily allowance counts answered questions, not provider invoices. Billing an
+                # only-provider-backed count made the meter sit at zero through every deterministic
+                # answer -- degree audit, course planner, schedule -- which is most of what a
+                # student actually asks, so the visible limit never reflected their real usage.
+                # Refusals remain free without a branch here: content-safety and guardrail blocks
+                # return before `begin()`, so they hold no admission and never reach this line.
+                # Token and cost reconciliation is untouched, so a deterministic answer still
+                # settles at zero tokens and zero spend.
+                provider_requests=1,
             )
+
+
+#: Character-replay pacing for /ask/stream. The answer is already complete and validated by the
+#: time the first chunk leaves this process (output validation, citation authorization and
+#: confidence admission all run inside ask_question), so this is presentation pacing, not
+#: generation speed. Replay is per character rather than per word so the answer types itself out
+#: instead of arriving in visible word jumps. STREAM_CHUNK_DELAY_SECONDS sets the per-character
+#: rate (14ms ~= 71 chars/sec: 20ms read as sluggish and 8ms as a flash, so this sits between);
+#: STREAM_MAX_REPLAY_SECONDS caps the total so a long answer never crawls, and never pushes the
+#: generator into the REQUEST_TIMEOUT_SECONDS deadline that would emit `stream_deadline` and
+#: truncate the answer mid-sentence. Changing the delay alone does nothing once an answer is long
+#: enough for the cap to bind — move both together.
+STREAM_CHUNK_DELAY_SECONDS = float(os.getenv("STREAM_CHUNK_DELAY_SECONDS", "0.017"))
+STREAM_MAX_REPLAY_SECONDS = float(os.getenv("STREAM_MAX_REPLAY_SECONDS", "5.0"))
+
+
+def _stream_chunk_delay(chunk_count: int) -> float:
+    """Per-chunk sleep: the configured rate, compressed if the answer is long."""
+    if chunk_count <= 0:
+        return 0.0
+    budget = min(STREAM_MAX_REPLAY_SECONDS, REQUEST_TIMEOUT_SECONDS * 0.5)
+    return max(0.0, min(STREAM_CHUNK_DELAY_SECONDS, budget / chunk_count))
 
 
 @app.post("/ask/stream")
@@ -4288,15 +4326,17 @@ async def ask_question_stream(
     response_text = str(payload.get("response") or "")
     metadata = {key: value for key, value in payload.items() if key != "response"}
 
+    delay = _stream_chunk_delay(len(response_text))
+
     async def events():
         deadline = time.monotonic() + REQUEST_TIMEOUT_SECONDS
         yield json.dumps({"type": "metadata", "data": metadata}, ensure_ascii=False) + "\n"
-        for chunk in re.findall(r"\S+\s*", response_text):
+        for chunk in response_text:
             if time.monotonic() >= deadline:
                 yield json.dumps({"type": "error", "code": "stream_deadline"}) + "\n"
                 return
             yield json.dumps({"type": "token", "text": chunk}, ensure_ascii=False) + "\n"
-            await asyncio.sleep(0.012)
+            await asyncio.sleep(delay)
         yield json.dumps({"type": "done"}, ensure_ascii=False) + "\n"
 
     return StreamingResponse(

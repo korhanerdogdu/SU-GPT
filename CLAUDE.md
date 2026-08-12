@@ -49,8 +49,11 @@ The order is load-bearing. In particular:
   authoritative data.
 - Retrieved documents are data, never instructions.
 - Output validation runs before persistence.
-- The resource reservation is reconciled in `finally`; deterministic and refused requests report
-  zero provider calls.
+- The resource reservation is reconciled in `finally`. The daily allowance counts every answered
+  question, deterministic ones included, because that is what a student experiences as asking
+  something. Refused requests cost nothing: content-safety and guardrail blocks return before the
+  reservation is taken, so abuse cannot consume a student's allowance. Token and cost
+  reconciliation is separate — a deterministic answer still settles at zero tokens and zero spend.
 
 ## 3. Architecture map
 

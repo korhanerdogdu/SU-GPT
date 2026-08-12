@@ -104,7 +104,7 @@ function AskDemo() {
   );
 
   return (
-    <div className="mt-9 w-full max-w-xl">
+    <div className="mt-7 w-full max-w-xl [@media(max-height:900px)]:lg:mt-4">
       <p className="font-ledger text-[0.68rem] uppercase tracking-[0.18em] text-muted-foreground">
         {t("login.askLabel")}
       </p>
@@ -195,9 +195,12 @@ export default function LoginPage() {
   return (
     // Fits the viewport on desktop — no scrolling to reach the form. Mobile stacks and scrolls,
     // which is the only honest option for two panels on a phone.
-    <div className="flex min-h-screen w-full flex-col bg-background text-foreground lg:h-screen lg:min-h-0 lg:flex-row lg:overflow-hidden">
-      {/* ── Left: what students ask. */}
-      <section className="relative flex flex-1 flex-col overflow-hidden px-6 pb-12 pt-10 sm:px-12 lg:overflow-y-auto lg:px-14 lg:py-10 xl:px-20">
+    <div className="flex min-h-[100dvh] w-full flex-col bg-background text-foreground lg:h-[100dvh] lg:min-h-0 lg:flex-row lg:overflow-hidden">
+      {/* ── Left: what students ask.
+          `lg:overflow-hidden` rather than `overflow-y-auto`: on desktop this panel must never
+          own a scrollbar, so the spacing below is sized to fit instead of being allowed to
+          overflow into one. The short-viewport rules compress it further on laptop screens. */}
+      <section className="relative flex min-h-0 flex-1 flex-col overflow-hidden px-6 pb-12 pt-10 sm:px-12 lg:overflow-hidden lg:px-14 lg:py-8 xl:px-20 [@media(max-height:900px)]:lg:py-5">
         {/* Campus photograph across the outer half of the panel, cropped to its centre. It is
             masked to nothing at its inner edge so it reads as the panel receding into place
             rather than as a picture pasted next to the text. */}
@@ -238,7 +241,7 @@ export default function LoginPage() {
         <img
           src={logo}
           alt="adviSU — Sabancı University Academic Advisor"
-          className="relative w-[min(72vw,17rem)] shrink-0 lg:w-[min(40vw,19rem)] xl:w-[21rem]"
+          className="relative w-[min(72vw,17rem)] shrink-0 lg:w-[min(34vw,16rem)] xl:w-[18rem] [@media(max-height:900px)]:lg:w-[min(28vw,13rem)]"
         />
 
         {/* Takes the remaining height so the copy stays optically centred under the lockup. */}
@@ -248,13 +251,13 @@ export default function LoginPage() {
               {t("login.eyebrow")}
             </p>
 
-            <h1 className="mt-3 font-display text-[2.15rem] font-extrabold leading-[1.04] tracking-[-0.028em] sm:text-[2.9rem] lg:text-[3.25rem]">
+            <h1 className="mt-3 font-display text-[2.15rem] font-extrabold leading-[1.04] tracking-[-0.028em] sm:text-[2.9rem] lg:text-[2.85rem] xl:text-[3.1rem] [@media(max-height:900px)]:lg:text-[2.4rem]">
               {t("login.headlineTop")}
               <br />
               <span className="text-muted-foreground">{t("login.headlineBottom")}</span>
             </h1>
 
-            <p className="mt-4 max-w-lg text-[1rem] leading-relaxed text-muted-foreground">
+            <p className="mt-3 max-w-lg text-[1rem] leading-relaxed text-muted-foreground [@media(max-height:900px)]:lg:text-[0.92rem]">
               {t("login.lede")}
             </p>
 
@@ -264,7 +267,10 @@ export default function LoginPage() {
       </section>
 
       {/* ── Right: the form. Quiet, so the one action is obvious. */}
-      <section className="relative flex w-full flex-col justify-center border-t border-border bg-card px-6 py-12 sm:px-12 lg:w-[28rem] lg:shrink-0 lg:overflow-y-auto lg:border-l lg:border-t-0 lg:py-8 xl:w-[32rem] xl:px-14">
+      {/* Unlike the left panel this one keeps `overflow-y-auto`. The spacing below is sized so it
+          never triggers at normal desktop heights, but clipping the sign-in button on an unusually
+          short window would be a worse failure than a scrollbar, so the fallback stays. */}
+      <section className="relative flex w-full min-h-0 flex-col justify-center border-t border-border bg-card px-6 py-12 sm:px-12 lg:w-[28rem] lg:shrink-0 lg:overflow-y-auto lg:border-l lg:border-t-0 lg:py-6 lg:pb-12 xl:w-[32rem] xl:px-14">
         <div className="absolute right-5 top-5 flex items-center gap-2">
           <HelpButton />
           <LanguageToggle />
@@ -279,7 +285,7 @@ export default function LoginPage() {
             {t("login.subtitle")}
           </p>
 
-          <form onSubmit={handleSubmit} className="mt-8 space-y-4">
+          <form onSubmit={handleSubmit} className="mt-6 space-y-4">
             <div className="space-y-1.5">
               <Label
                 htmlFor="username"
@@ -343,7 +349,7 @@ export default function LoginPage() {
             </Button>
           </form>
 
-          <div className="mt-8 border-t border-border pt-5">
+          <div className="mt-6 border-t border-border pt-4">
             <p className="font-ledger text-[0.66rem] uppercase tracking-[0.14em] text-muted-foreground">
               {t("login.demoHeading")}
             </p>

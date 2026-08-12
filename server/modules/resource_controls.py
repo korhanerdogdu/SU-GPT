@@ -74,7 +74,7 @@ COURSE_REVIEW_REQUESTS_PER_MINUTE = _positive_int(
 CONVERSATION_CREATIONS_PER_MINUTE = _positive_int(
     "CONVERSATION_CREATIONS_PER_MINUTE", 10
 )
-DAILY_PROVIDER_REQUEST_QUOTA = _positive_int("DAILY_PROVIDER_REQUEST_QUOTA", 15)
+DAILY_PROVIDER_REQUEST_QUOTA = _positive_int("DAILY_PROVIDER_REQUEST_QUOTA", 20)
 DAILY_TOKEN_QUOTA = _positive_int("DAILY_TOKEN_QUOTA", 100_000)
 # No product cost budget exists in the repository. Zero means disabled until the owner sets one;
 # evaluation must report this acceptance gate as unresolved rather than inventing a dollar limit.
